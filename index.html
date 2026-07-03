@@ -1,0 +1,1471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GiddyUpBets — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{
+    --ink: #000000;
+    --panel: #141414;
+    --panel-2: #1e1e1e;
+    --panel-border: #2f2f2f;
+    --parchment: #ede6d3;
+    --parchment-dim: #a9a496;
+    --tote-amber: #f0b429;
+    --rail-green: #4caf7d;
+    --clay: #c07830;
+    --silk-red: #b3473b;
+    --sky: #6fa8c9;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, #191919 0%, transparent 60%),
+      radial-gradient(1000px 500px at 110% 10%, #151515 0%, transparent 55%),
+      var(--ink);
+    color: var(--parchment);
+    font-family: 'IBM Plex Sans', sans-serif;
+    min-height:100vh;
+    padding: 20px clamp(12px, 3vw, 40px) 40px;
+  }
+
+  a { color: inherit; }
+
+  /* ---------- Header ---------- */
+  header{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    flex-wrap:wrap;
+    gap:16px;
+    border-bottom: 2px solid var(--panel-border);
+    padding-bottom: 14px;
+    margin-bottom: 20px;
+  }
+
+  .brand{
+    display:flex;
+    align-items:center;
+    gap: 14px;
+  }
+
+  .brand-logo{
+    display: block;
+    height: 52px;
+    width: auto;
+    max-width: 320px;
+    object-fit: contain;
+  }
+
+  .brand .sub{
+    font-family:'Oswald', sans-serif;
+    font-weight:500;
+    font-size: 13px;
+    letter-spacing: 4px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    padding-left: 14px;
+    border-left: 2px solid var(--panel-border);
+  }
+
+  .status-cluster{
+    display:flex;
+    align-items:center;
+    gap: 18px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--parchment-dim);
+  }
+
+  .pill{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  .pill .dot{
+    width:8px; height:8px; border-radius:50%;
+    background: var(--rail-green);
+    box-shadow: 0 0 8px var(--rail-green);
+    animation: pulse 2s infinite;
+  }
+  .pill.err .dot{ background: var(--silk-red); box-shadow:0 0 8px var(--silk-red); animation:none; }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  #refreshBtn{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    cursor:pointer;
+    transition: border-color .15s;
+  }
+  #refreshBtn:hover{ border-color: var(--tote-amber); }
+  #refreshBtn:focus-visible, a:focus-visible, button:focus-visible{
+    outline: 2px solid var(--tote-amber);
+    outline-offset: 2px;
+  }
+
+  /* ---------- Layout ---------- */
+  .grid{
+    display:grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
+    gap: 18px;
+  }
+  @media (max-width: 900px){
+    .grid{ grid-template-columns: 1fr; }
+  }
+
+  .panel{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 18px;
+  }
+
+  .panel-title{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-size: 13px;
+    color: var(--parchment-dim);
+    margin: 0 0 14px 0;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .panel-title .tag{
+    font-family:'IBM Plex Mono', monospace;
+    letter-spacing:0;
+    font-size: 11px;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.1);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  /* ---------- Track / compass panel ---------- */
+  .track-wrap{
+    position: relative;
+    width: 100%;
+    aspect-ratio: 945 / 566;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0a0a0a;
+    border: 1px solid var(--panel-border);
+  }
+  .track-wrap img.track-photo{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit: cover;
+    opacity: 0.96;
+  }
+  #trackSvg{ position:absolute; inset:0; width:100%; height:100%; }
+
+  .compass-shell{
+    position:absolute;
+    right: 16px;
+    bottom: 16px;
+    width: clamp(120px, 24%, 190px);
+    aspect-ratio: 1;
+    background: rgba(15,23,18,0.82);
+    border: 1px solid var(--panel-border);
+    border-radius: 50%;
+    backdrop-filter: blur(2px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  #compassSvg{ width:88%; height:88%; }
+  .wind-arrow{
+    transform-origin: 50% 50%;
+    transition: transform 1.2s cubic-bezier(.4,0,.2,1);
+  }
+
+  /* ---------- Wind flow streaks on the track photo (Windy.com-style) ---------- */
+  .wind-flow-canvas{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    pointer-events:none;
+  }
+  .wind-readout{
+    position:absolute;
+    text-align:center;
+    font-family:'Oswald', sans-serif;
+  }
+  .wind-readout .spd{
+    font-size: clamp(20px, 4vw, 30px);
+    font-weight:700;
+    color: var(--tote-amber);
+    line-height:1;
+  }
+  .wind-readout .unit{
+    font-size: 10px;
+    letter-spacing:2px;
+    color: var(--parchment-dim);
+  }
+  .wind-readout .dir{
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--parchment);
+    margin-top:2px;
+  }
+
+  .track-caption{
+    position:absolute;
+    left: 14px;
+    top: 14px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    background: rgba(15,23,18,0.7);
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--panel-border);
+    max-width: 60%;
+  }
+
+  .track-condition-group{
+    position:absolute;
+    left: 14px;
+    bottom: 14px;
+    display:flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    max-width: 78%;
+  }
+  .track-condition{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 12.5px;
+    letter-spacing: 1px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    text-transform: uppercase;
+    min-width: 112px;
+  }
+  .track-condition .label{ color: var(--parchment-dim); font-size:9.5px; letter-spacing:1.5px; display:block; font-family:'IBM Plex Mono', monospace; font-weight:400; margin-bottom:3px;}
+  .track-condition .tc-value{ display:block; }
+  .track-condition .tc-trend{
+    display:block;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.5px;
+    text-transform:none;
+    margin-top: 3px;
+  }
+  .cond-fast{ color: var(--rail-green); }
+  .cond-good{ color: var(--sky); }
+  .cond-muddy{ color: var(--clay); }
+  .cond-sloppy{ color: var(--silk-red); }
+  .trend-dry{ color: var(--rail-green); }
+  .trend-wet{ color: var(--silk-red); }
+  .trend-hold{ color: var(--parchment-dim); }
+
+  /* ---------- Metric tiles ---------- */
+  .tile-stack{ display:flex; flex-direction:column; gap:14px; }
+  .tile{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap: 10px;
+  }
+  .tile .tlabel{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-size: 12px;
+    color: var(--parchment-dim);
+  }
+  .tile .tvalue{
+    font-family:'Oswald', sans-serif;
+    font-weight:700;
+    font-size: 28px;
+    color: var(--parchment);
+  }
+  .tile .tvalue .tunit{
+    font-size: 14px;
+    color: var(--parchment-dim);
+    font-weight:500;
+    margin-left: 3px;
+  }
+  .tile .tsub{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-top: 2px;
+  }
+  .tile.alert{ border-color: var(--silk-red); }
+  .tile.alert .tvalue{ color: var(--silk-red); }
+
+  /* ---------- Radar panel ---------- */
+  .radar-panel{
+    display: block;
+  }
+  #radarMap{
+    width: 100%;
+    height: 200px;
+    border-radius: 8px;
+    border: 1px solid var(--panel-border);
+    background: #0a0a0a;
+  }
+  .radar-readout{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-top: 8px;
+  }
+  /* Re-skin Leaflet's default light-theme chrome to match the dashboard */
+  .leaflet-container{ background: #0a0a0a; font-family: 'IBM Plex Sans', sans-serif; }
+  .leaflet-control-zoom a{
+    background: var(--panel-2) !important;
+    color: var(--parchment) !important;
+    border-color: var(--panel-border) !important;
+  }
+  .leaflet-control-zoom a:hover{ background: var(--panel-border) !important; }
+  .leaflet-control-attribution{
+    background: rgba(15,15,15,0.75) !important;
+    color: var(--parchment-dim) !important;
+  }
+  .leaflet-control-attribution a{ color: var(--sky) !important; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip{
+    background: var(--panel-2);
+    color: var(--parchment);
+  }
+
+  /* ---------- Futurecast (Windy.com embed) ---------- */
+  .futurecast-panel{ display: block; }
+  .futurecast-frame-wrap{
+    position: relative;
+    width: 100%;
+    padding-top: 68%;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--panel-border);
+    background: #0a0a0a;
+  }
+  .futurecast-frame-wrap iframe{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+  .futurecast-readout{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+
+  /* ---------- Wind forecast scrubber ---------- */
+  .forecast-panel{ margin-top: 18px; }
+  .forecast-readout{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--parchment-dim);
+    margin-bottom: 10px;
+  }
+  #forecastSlider{
+    width: 100%;
+    display: block;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--panel-border);
+    outline: none;
+  }
+  #forecastSlider::-webkit-slider-thumb{
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--tote-amber);
+    border: 2px solid var(--ink);
+    cursor: pointer;
+  }
+  #forecastSlider::-moz-range-thumb{
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--tote-amber);
+    border: 2px solid var(--ink);
+    cursor: pointer;
+  }
+  #forecastSlider::-moz-range-track{
+    height: 4px;
+    border-radius: 2px;
+    background: var(--panel-border);
+  }
+  .forecast-scale{
+    display: grid;
+    margin-top: 6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--parchment-dim);
+  }
+  .forecast-scale span{ text-align:center; }
+  .tag.projected{
+    color: var(--ink);
+    background: var(--tote-amber);
+  }
+
+  /* ---------- Track play analysis ---------- */
+  .analysis-panel{ margin-top: 18px; }
+  .analysis-context{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-bottom: 10px;
+  }
+  .analysis-body{
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--parchment);
+  }
+  .analysis-body p{ margin: 0 0 10px 0; }
+  .analysis-body p:last-child{ margin-bottom: 0; }
+  .analysis-body strong{ color: var(--tote-amber); }
+  .analysis-disclaimer{
+    margin-top: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+  }
+
+  /* ---------- Race card (post-time forecasts) ---------- */
+  .racecard-panel{ margin-top: 18px; }
+  .race-form{
+    display:flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items:center;
+    margin-bottom: 12px;
+  }
+  .race-form input{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    outline: none;
+  }
+  .race-form input:focus{ border-color: var(--tote-amber); }
+  .race-form input[type="number"]{ width: 78px; }
+  .race-form button{
+    background: var(--tote-amber);
+    border: none;
+    color: var(--ink);
+    font-family:'Oswald', sans-serif;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .race-form button:hover{ background: #ffc94d; }
+  .race-row{
+    display:flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .race-row::-webkit-scrollbar{ height:6px; }
+  .race-row::-webkit-scrollbar-thumb{ background: var(--panel-border); border-radius:4px; }
+  .race-empty{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--parchment-dim);
+    padding: 12px 4px;
+  }
+  .race-card{
+    flex: 0 0 auto;
+    min-width: 148px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    position: relative;
+  }
+  .race-card .rc-num{
+    font-family:'Oswald', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    color: var(--tote-amber);
+    text-transform: uppercase;
+    padding-right: 16px;
+  }
+  .race-card .rc-time{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin: 2px 0 8px;
+  }
+  .race-card .rc-row{
+    display:flex;
+    justify-content:space-between;
+    gap: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment);
+    margin-top: 4px;
+  }
+  .race-card .rc-row .rc-label{ color: var(--parchment-dim); }
+  .race-card .rc-remove{
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: none;
+    border: none;
+    color: var(--parchment-dim);
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px 4px;
+    cursor: pointer;
+  }
+  .race-card .rc-remove:hover{ color: var(--silk-red); }
+
+  /* ---------- Hourly ticker ---------- */
+  .ticker-panel{ margin-top: 18px; }
+  .ticker{
+    display:flex;
+    gap: 0;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .ticker::-webkit-scrollbar{ height:6px; }
+  .ticker::-webkit-scrollbar-thumb{ background: var(--panel-border); border-radius:4px; }
+
+  .tick{
+    flex: 0 0 auto;
+    min-width: 84px;
+    text-align:center;
+    padding: 10px 8px;
+    border-right: 1px solid var(--panel-border);
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .tick:first-child{ border-left: 1px solid var(--panel-border); }
+  .tick .t-time{ font-size: 11px; color: var(--parchment-dim); }
+  .tick .t-temp{ font-family:'Oswald', sans-serif; font-weight:600; font-size: 20px; margin: 4px 0 2px; color: var(--parchment); }
+  .tick .t-precip{ font-size: 11px; color: var(--sky); }
+  .tick .t-wind{ font-size: 10px; color: var(--parchment-dim); margin-top:2px; }
+
+  footer{
+    margin-top: 22px;
+    display:flex;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .wind-arrow{ transition: none; }
+    .pill .dot{ animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <img class="brand-logo" src="assets/GupB.png" alt="GiddyUpBets — Press Your Strongest Opinions &amp; Print Money">
+    <div class="sub">Command Center</div>
+  </div>
+  <div class="status-cluster">
+    <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting</span></span>
+    <span id="clock">--:--:--</span>
+    <span>Next refresh: <span id="countdown">--</span></span>
+    <button id="refreshBtn">↻ Refresh now</button>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- LEFT: Track + wind -->
+  <div class="panel">
+    <div class="panel-title">Saratoga Race Course <span class="tag" id="asOf">—</span></div>
+    <div class="track-wrap" id="trackWrap">
+      <img class="track-photo" src="assets/track.png" alt="Aerial view of Saratoga Race Course">
+      <div class="track-caption">Live aerial — Saratoga Race Course</div>
+
+      <canvas class="wind-flow-canvas" id="windFlowCanvas"></canvas>
+
+      <div class="track-condition-group">
+        <div class="track-condition">
+          <span class="label">Main Track (Dirt)</span>
+          <span class="tc-value" id="dirtConditionValue">—</span>
+          <span class="tc-trend" id="dirtTrend">—</span>
+        </div>
+        <div class="track-condition">
+          <span class="label">Turf Course</span>
+          <span class="tc-value" id="turfConditionValue">—</span>
+          <span class="tc-trend" id="turfTrend">—</span>
+        </div>
+      </div>
+
+      <div class="compass-shell">
+        <svg id="compassSvg" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="46" fill="none" stroke="#2f2f2f" stroke-width="1"/>
+          <circle cx="50" cy="50" r="34" fill="none" stroke="#2f2f2f" stroke-width="1"/>
+          <text x="50" y="12" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">N</text>
+          <text x="50" y="94" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">S</text>
+          <text x="10" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">W</text>
+          <text x="90" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">E</text>
+          <g id="windArrow" class="wind-arrow" transform="rotate(0 50 50)">
+            <line x1="50" y1="50" x2="50" y2="16" stroke="#f0b429" stroke-width="3" stroke-linecap="round"/>
+            <polygon points="50,8 44,20 56,20" fill="#f0b429"/>
+            <circle cx="50" cy="50" r="3.5" fill="#ede6d3"/>
+          </g>
+        </svg>
+        <div class="wind-readout" style="position:absolute;">
+          <div class="spd" id="windSpeed">—</div>
+          <div class="unit">MPH</div>
+          <div class="dir" id="windDir">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="forecast-panel">
+      <div class="panel-title">
+        Wind Forecast Scrubber
+        <span class="tag" id="forecastTag">LIVE</span>
+      </div>
+      <div class="forecast-readout" id="forecastReadout">Showing current live conditions</div>
+      <input type="range" id="forecastSlider" min="0" max="0" step="1" value="0">
+      <div class="forecast-scale" id="forecastScale"></div>
+    </div>
+
+    <div class="analysis-panel">
+      <div class="panel-title">
+        Track Play Analysis
+        <span class="tag">HEURISTIC</span>
+      </div>
+      <div class="analysis-context" id="analysisContext">Based on live current conditions.</div>
+      <div class="analysis-body" id="analysisBody"><p>Waiting on live conditions…</p></div>
+      <div class="analysis-disclaimer">
+        Simplified read of wind vs. stretch-run geometry + track condition — a handicapping aid, not a guarantee of how the race plays out.
+      </div>
+    </div>
+
+    <div class="racecard-panel">
+      <div class="panel-title">Race Card — Post-Time Forecasts</div>
+      <form id="raceForm" class="race-form">
+        <input type="number" id="raceNumInput" placeholder="Race #" min="1" step="1" required>
+        <input type="time" id="raceTimeInput" required>
+        <button type="submit">+ Add Race</button>
+      </form>
+      <div class="race-row" id="raceRow">
+        <div class="race-empty">No races added yet — enter a race number and post time above.</div>
+      </div>
+    </div>
+
+    <div class="ticker-panel">
+      <div class="panel-title">Next 8 Hours</div>
+      <div class="ticker" id="ticker">
+        <div class="tick"><span class="t-time">Loading…</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: metric tiles -->
+  <div class="tile-stack">
+    <div class="tile">
+      <div>
+        <div class="tlabel">Temperature</div>
+        <div class="tsub" id="feelsLike">Feels like —</div>
+      </div>
+      <div class="tvalue"><span id="temp">—</span><span class="tunit">°F</span></div>
+    </div>
+
+    <div class="tile">
+      <div>
+        <div class="tlabel">Wind Gusts</div>
+        <div class="tsub" id="windAt10">at 10m</div>
+      </div>
+      <div class="tvalue"><span id="gust">—</span><span class="tunit">mph</span></div>
+    </div>
+
+    <div class="tile" id="rainTile">
+      <div>
+        <div class="tlabel">Rainfall — Today</div>
+        <div class="tsub" id="rainRate">Current rate —</div>
+        <div class="tsub" id="rain6h">Last 6h —</div>
+        <div class="tsub" id="rain24h">Last 24h —</div>
+        <div class="tsub" id="rain48h">Last 48h —</div>
+      </div>
+      <div class="tvalue"><span id="rainTotal">—</span><span class="tunit">in</span></div>
+    </div>
+
+    <div class="tile">
+      <div>
+        <div class="tlabel">Humidity</div>
+        <div class="tsub" id="cloudCover">Cloud cover —</div>
+      </div>
+      <div class="tvalue"><span id="humidity">—</span><span class="tunit">%</span></div>
+    </div>
+
+    <div class="tile">
+      <div>
+        <div class="tlabel">Barometric Pressure</div>
+        <div class="tsub">at sea level</div>
+      </div>
+      <div class="tvalue"><span id="pressure">—</span><span class="tunit">hPa</span></div>
+    </div>
+
+    <div class="tile">
+      <div>
+        <div class="tlabel">Conditions</div>
+        <div class="tsub" id="sunTimes">Sunrise / Sunset —</div>
+      </div>
+      <div class="tvalue" style="font-size:18px;"><span id="weatherDesc">—</span></div>
+    </div>
+
+    <div class="tile radar-panel">
+      <div class="panel-title" style="margin-bottom:10px;">
+        Radar — Saratoga Race Course
+        <span class="tag" id="radarTag">LIVE</span>
+      </div>
+      <div id="radarMap"></div>
+      <div class="radar-readout" id="radarReadout">Loading radar…</div>
+    </div>
+
+    <div class="tile futurecast-panel">
+      <div class="panel-title" style="margin-bottom:10px;">
+        Futurecast — Regional Precip
+        <span class="tag">WINDY.COM</span>
+      </div>
+      <div class="futurecast-frame-wrap">
+        <iframe
+          src="https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1"
+          loading="lazy"
+          title="Windy.com multi-hour precipitation forecast near Saratoga Race Course">
+        </iframe>
+      </div>
+      <div class="futurecast-readout">
+        Multi-hour model forecast (ECMWF), with Windy's own timeline — separate from the live RainViewer radar above, which only covers the near-term.
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span>Weather data: Open-Meteo (no API key required) · Saratoga Race Course, NY (43.0723, -73.7859)</span>
+  <span>Track condition and trend estimates are heuristic, not official stewards' calls — always confirm with track superintendent reports.</span>
+</footer>
+
+<script>
+(function(){
+  const LAT = 43.0723, LON = -73.7859;
+  const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+  const FORECAST_STEP_COUNT = 12; // + the live "now" entry = 13 points, 6 hours ahead in 30-min steps
+  const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
+    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,` +
+    `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl` +
+    `&hourly=temperature_2m,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m` +
+    `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
+    `&daily=precipitation_sum,sunrise,sunset` +
+    `&past_days=2` +
+    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York`;
+
+  const $ = (id) => document.getElementById(id);
+  let countdownTimer = null;
+  let secondsLeft = REFRESH_MS / 1000;
+  let forecastSteps = [];
+  let lastApparentTemp = null;
+  let lastWeatherData = null;
+  let raceCard = []; // in-memory only — resets on reload, no backend
+  let raceIdCounter = 1;
+
+  const WMO = {
+    0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
+    45:"Fog",48:"Rime fog",
+    51:"Light drizzle",53:"Drizzle",55:"Dense drizzle",
+    56:"Freezing drizzle",57:"Freezing drizzle",
+    61:"Light rain",63:"Rain",65:"Heavy rain",
+    66:"Freezing rain",67:"Freezing rain",
+    71:"Light snow",73:"Snow",75:"Heavy snow",77:"Snow grains",
+    80:"Light showers",81:"Showers",82:"Violent showers",
+    85:"Snow showers",86:"Heavy snow showers",
+    95:"Thunderstorm",96:"Thunderstorm w/ hail",99:"Thunderstorm w/ hail"
+  };
+
+  function compassPoint(deg){
+    const pts = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+    return pts[Math.round(deg / 22.5) % 16];
+  }
+
+  // Dirt firms back up fast, so this leans hard on the instant rain rate and
+  // today's running total — the same heuristic this app always used.
+  function dirtCondition(rainToday, rainRate){
+    const el = $("dirtConditionValue");
+    el.className = "tc-value";
+    let label;
+    if (rainRate > 0.05 || rainToday > 0.6){
+      label = "SLOPPY / WET"; el.classList.add("cond-sloppy");
+    } else if (rainToday > 0.15){
+      label = "MUDDY"; el.classList.add("cond-muddy");
+    } else if (rainToday > 0){
+      label = "GOOD"; el.classList.add("cond-good");
+    } else {
+      label = "FAST"; el.classList.add("cond-fast");
+    }
+    el.textContent = label;
+    return label;
+  }
+
+  // Turf drains slower and stays soft longer after rain than dirt does — a
+  // grass course that took a soaking yesterday can still play soft today even
+  // on a dry, sunny afternoon. So this weights the trailing 24h/48h rainfall
+  // totals more heavily than the current instant rate, roughly mirroring the
+  // dirt thresholds above but scaled to rolling windows instead of "today."
+  function turfCondition(rain24h, rain48h, rainRate){
+    const el = $("turfConditionValue");
+    el.className = "tc-value";
+    let label;
+    if (rain24h > 0.5 || rain48h > 1.0 || rainRate > 0.15){
+      label = "SOFT"; el.classList.add("cond-sloppy");
+    } else if (rain24h > 0.2 || rain48h > 0.5){
+      label = "YIELDING"; el.classList.add("cond-muddy");
+    } else if (rain24h > 0 || rain48h > 0.1){
+      label = "GOOD"; el.classList.add("cond-good");
+    } else {
+      label = "FIRM"; el.classList.add("cond-fast");
+    }
+    el.textContent = label;
+    return label;
+  }
+
+  // Simplified heuristic, not a scientific drying model: compares rainfall in
+  // the last 6h against the prior 6h to see whether precipitation is picking
+  // up or tapering off, then leans on current wind + sun (low cloud cover)
+  // since a track dries out faster when it's windy and sunny than on a still,
+  // overcast day with identical rainfall totals.
+  function trackTrend(rainLast6, rainPrior6, windSpeed, cloudCover){
+    const windy = windSpeed >= 8;
+    const sunny = cloudCover <= 40;
+
+    if (rainLast6 > 0.02 && rainLast6 > rainPrior6 * 1.2){
+      return { label: "Wetting", arrow: "↓", cls: "trend-wet" };
+    }
+    if (rainLast6 <= 0.02 && (windy || sunny)){
+      return { label: "Drying", arrow: "↑", cls: "trend-dry" };
+    }
+    return { label: "Holding", arrow: "→", cls: "trend-hold" };
+  }
+
+  function renderTrackTrend(trend){
+    [$("dirtTrend"), $("turfTrend")].forEach(el => {
+      el.className = `tc-trend ${trend.cls}`;
+      el.textContent = `${trend.arrow} ${trend.label}`;
+    });
+  }
+
+  // ---------- Race card (post-time forecasts, in-memory only) ----------
+  function fmtRaceTime(timeStr){
+    return new Date(`2000-01-01T${timeStr}`).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+  }
+
+  // Post times only carry a clock time, no date, so we match them against
+  // today's hourly entries by hour-of-day distance — nearest hour wins, no
+  // interpolation. Scoped to today's date since past_days now also puts
+  // yesterday's (and the day before's) same hour-of-day in the array.
+  function nearestHourlyIndex(data, timeStr){
+    const { date: todayStr } = nowInTrackTZ();
+    const [h, m] = timeStr.split(":").map(Number);
+    const targetMinutes = h * 60 + m;
+    let bestIdx = -1, bestDiff = Infinity;
+    data.hourly.time.forEach((t, i) => {
+      if (!t.startsWith(todayStr)) return;
+      const hh = Number(t.slice(11, 13));
+      const diff = Math.abs(hh * 60 - targetMinutes);
+      if (diff < bestDiff){ bestDiff = diff; bestIdx = i; }
+    });
+    return bestIdx;
+  }
+
+  function addRace(number, time){
+    raceCard.push({ id: raceIdCounter++, number, time });
+    raceCard.sort((a, b) => a.time.localeCompare(b.time));
+    renderRaceCard(lastWeatherData);
+  }
+
+  function removeRace(id){
+    raceCard = raceCard.filter(r => r.id !== id);
+    renderRaceCard(lastWeatherData);
+  }
+
+  function renderRaceCard(data){
+    const row = $("raceRow");
+    row.innerHTML = "";
+
+    if (!raceCard.length){
+      row.innerHTML = `<div class="race-empty">No races added yet — enter a race number and post time above.</div>`;
+      return;
+    }
+    if (!data){
+      row.innerHTML = `<div class="race-empty">Waiting on live conditions…</div>`;
+      return;
+    }
+
+    raceCard.forEach(race => {
+      const idx = nearestHourlyIndex(data, race.time);
+      const card = document.createElement("div");
+      card.className = "race-card";
+      const body = idx < 0
+        ? `<div class="rc-row"><span class="rc-label">—</span><span>Outside forecast window</span></div>`
+        : `
+          <div class="rc-row"><span class="rc-label">Temp</span><span>${Math.round(data.hourly.temperature_2m[idx])}°F</span></div>
+          <div class="rc-row"><span class="rc-label">Wind</span><span>${Math.round(data.hourly.wind_speed_10m[idx])} mph ${data.hourly.wind_direction_10m?.[idx] != null ? compassPoint(data.hourly.wind_direction_10m[idx]) : ""}</span></div>
+          <div class="rc-row"><span class="rc-label">Rain</span><span>${data.hourly.precipitation_probability[idx]}% pop</span></div>
+        `;
+      card.innerHTML = `
+        <button class="rc-remove" data-id="${race.id}" title="Remove race" aria-label="Remove race ${race.number}">×</button>
+        <div class="rc-num">Race ${race.number}</div>
+        <div class="rc-time">${fmtRaceTime(race.time)}</div>
+        ${body}
+      `;
+      row.appendChild(card);
+    });
+
+    row.querySelectorAll(".rc-remove").forEach(btn => {
+      btn.addEventListener("click", () => removeRace(Number(btn.dataset.id)));
+    });
+  }
+
+  // ---------- Track play analysis (rule-based heuristic, no LLM) ----------
+  // Compass bearing horses are heading on each straight. Assumes the aerial
+  // photo is north-up and the field runs counterclockwise, standard for
+  // Saratoga and virtually every N. American thoroughbred track.
+  const TRACK_HEADING = { homestretch: 270, backstretch: 90 };
+
+  // Aviation-style wind component math: headwind is positive when the wind's
+  // source bearing matches the direction of travel (blowing straight into you).
+  function windComponents(speed, sourceDeg, headingDeg){
+    const rad = (sourceDeg - headingDeg) * Math.PI / 180;
+    return {
+      headwind: speed * Math.cos(rad),
+      crosswind: speed * Math.sin(rad),
+    };
+  }
+
+  function describeStretchWind(headwind, crosswind){
+    const absHead = Math.abs(headwind);
+    const absCross = Math.abs(crosswind);
+    if (absHead < 2 && absCross < 2){
+      return { kind: "calm", text: "wind is essentially a non-factor here — times shouldn't be meaningfully skewed either way." };
+    }
+    if (absHead >= absCross){
+      const strength = absHead < 5 ? "light" : absHead < 10 ? "moderate" : "strong";
+      if (headwind > 0){
+        return { kind: "headwind", strength, mag: absHead,
+          text: `a ${strength} headwind (~${absHead.toFixed(0)} mph into the field). Hot early fractions tend to come back faster than normal here — that favors horses rating off the pace over lone-speed types trying to wire the field.` };
+      }
+      return { kind: "tailwind", strength, mag: absHead,
+        text: `a ${strength} tailwind (~${absHead.toFixed(0)} mph). Speed that gets loose on the lead is harder to reel in here — that tends to favor need-to-lead / early-speed types over deep closers.` };
+    }
+    const strength = absCross < 5 ? "light" : absCross < 10 ? "moderate" : "strong";
+    return { kind: "crosswind", strength, mag: absCross,
+      text: `mostly a ${strength} crosswind (~${absCross.toFixed(0)} mph) rather than straight down the lane — limited effect on final time, though horses may drift off a true line.` };
+  }
+
+  function buildTrackPlayAnalysis(speed, sourceDeg, condLabel){
+    if (speed == null || sourceDeg == null){
+      return "<p>Waiting on live conditions…</p>";
+    }
+
+    const home = windComponents(speed, sourceDeg, TRACK_HEADING.homestretch);
+    const back = windComponents(speed, sourceDeg, TRACK_HEADING.backstretch);
+    const homeDesc = describeStretchWind(home.headwind, home.crosswind);
+    const backDesc = describeStretchWind(back.headwind, back.crosswind);
+
+    let homeSentence = `<strong>Final stretch:</strong> Down the last straightaway into the wire, ${homeDesc.text}`;
+
+    const wet = condLabel === "SLOPPY / WET" || condLabel === "MUDDY";
+    if (wet && homeDesc.kind === "tailwind"){
+      homeSentence += " A wet track already tends to favor speed, so the tailwind reinforces that — expect the speed bias to run stronger than a dry-track tailwind alone.";
+    } else if (wet && homeDesc.kind === "headwind"){
+      homeSentence += " That cuts against the surface's usual wet-track speed bias, so the two effects partially cancel out — lean on the pace scenario race-by-race rather than a blanket bias call.";
+    }
+
+    const paragraphs = [`<p>${homeSentence}</p>`];
+
+    if (backDesc.kind !== "calm"){
+      const sameDirection = backDesc.kind === homeDesc.kind;
+      paragraphs.push(`<p><strong>Backstretch:</strong> ${sameDirection
+        ? `Same general push as the stretch — ${backDesc.kind === "headwind" ? "into" : "with"} the field, ${backDesc.strength} at ~${backDesc.mag.toFixed(0)} mph.`
+        : `Opposite feel from the stretch — ${backDesc.text}`}</p>`);
+    }
+
+    return paragraphs.join("");
+  }
+
+  function renderTrackPlayAnalysis(idx, step){
+    if (!step) return;
+    const context = $("analysisContext");
+    context.textContent = idx === 0
+      ? "Based on live current conditions."
+      : `Based on conditions projected for ${fmtTime(step.time)} (+${idx * 30}m).`;
+    const condLabel = $("dirtConditionValue").textContent.trim();
+    $("analysisBody").innerHTML = buildTrackPlayAnalysis(step.wind, step.dir, condLabel);
+  }
+
+  function setStatus(ok, msg){
+    const pill = $("statusPill");
+    pill.classList.toggle("err", !ok);
+    $("statusText").textContent = msg;
+  }
+
+  function fmtTime(iso){
+    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute:'2-digit', timeZone:'America/New_York' });
+  }
+
+  // API timestamps are labeled in track-local time (America/New_York) with no UTC
+  // offset, so "now" has to be computed in that same zone rather than with
+  // toISOString() (always UTC) or the browser's own local zone.
+  function nowInTrackTZ(){
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const get = (type) => parts.find(p => p.type === type)?.value;
+    const hour = get('hour') === '24' ? '00' : get('hour');
+    const date = `${get('year')}-${get('month')}-${get('day')}`;
+    return { date, hourPrefix: `${date}T${hour}` };
+  }
+
+  function setWindVisuals(dirDeg, speed){
+    $("windArrow").setAttribute("transform", `rotate(${dirDeg} 50 50)`);
+    $("windSpeed").textContent = Math.round(speed ?? 0);
+    $("windDir").textContent = `${compassPoint(dirDeg)} (${Math.round(dirDeg)}°)`;
+
+    // Flow streaks travel where the wind is blowing TOWARD (flip the source direction 180°).
+    // The animation loop reads these each frame, so streaks already in flight ease
+    // toward new conditions instead of snapping.
+    flowAngleDeg = (dirDeg + 180) % 360;
+    flowSpeedMph = speed ?? 0;
+  }
+
+  // ---------- Wind flow streaks (Windy.com-style particle streamlines) ----------
+  // We only have one wind reading for the whole track (not a true spatial vector
+  // field), so every particle drifts at the same angle/speed — this is an honest
+  // "which way is the wind blowing" visualization, not a fabricated flow map.
+  let flowCanvas, flowCtx;
+  let flowParticles = [];
+  let flowAngleDeg = 90;
+  let flowSpeedMph = 0;
+  const FLOW_PARTICLE_COUNT = 260;
+  const reduceMotion = typeof matchMedia === "function" &&
+    matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function flowVector(deg){
+    const rad = deg * Math.PI / 180;
+    return { dx: Math.sin(rad), dy: -Math.cos(rad) }; // 0deg = up/north, 90deg = right/east
+  }
+
+  function respawnParticle(p, w, h){
+    const pad = Math.max(w, h) * 0.15;
+    p.x = -pad + Math.random() * (w + 2 * pad);
+    p.y = -pad + Math.random() * (h + 2 * pad);
+    p.trail = [];
+    p.age = 0;
+    p.maxAge = 70 + Math.random() * 70;
+    p.variance = 0.75 + Math.random() * 0.5;
+  }
+
+  function resizeFlowCanvas(){
+    if (!flowCanvas) return;
+    const rect = flowCanvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    flowCanvas.width = Math.max(1, rect.width * dpr);
+    flowCanvas.height = Math.max(1, rect.height * dpr);
+    flowCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function drawFlowFrame(){
+    const w = flowCanvas.clientWidth;
+    const h = flowCanvas.clientHeight;
+    flowCtx.clearRect(0, 0, w, h);
+
+    const { dx, dy } = flowVector(flowAngleDeg);
+    // Visual pacing, not a literal px-per-mph conversion: keeps calm wind
+    // gently readable and caps out so strong wind doesn't turn into noise.
+    const speedPx = 0.6 + Math.min(flowSpeedMph, 30) * 0.09;
+
+    flowParticles.forEach(p => {
+      p.x += dx * speedPx * p.variance;
+      p.y += dy * speedPx * p.variance;
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > 16) p.trail.shift();
+      p.age++;
+
+      const pad = Math.max(w, h) * 0.15;
+      const outOfBounds = p.x < -pad || p.x > w + pad || p.y < -pad || p.y > h + pad;
+      if (outOfBounds || p.age > p.maxAge){
+        respawnParticle(p, w, h);
+        return;
+      }
+
+      for (let i = 1; i < p.trail.length; i++){
+        const a = p.trail[i - 1], b = p.trail[i];
+        const alpha = (i / p.trail.length) * 0.95;
+        // Dark pass underneath, amber pass on top — same contrast trick as the
+        // rest of the dashboard's wind graphics, so streaks read over both the
+        // light sand and dark turf in the photo.
+        flowCtx.lineCap = "round";
+        flowCtx.strokeStyle = `rgba(0, 0, 0, ${alpha * 0.65})`;
+        flowCtx.lineWidth = 5.5;
+        flowCtx.beginPath();
+        flowCtx.moveTo(a.x, a.y);
+        flowCtx.lineTo(b.x, b.y);
+        flowCtx.stroke();
+
+        flowCtx.strokeStyle = `rgba(240, 180, 41, ${alpha})`;
+        flowCtx.lineWidth = 3;
+        flowCtx.beginPath();
+        flowCtx.moveTo(a.x, a.y);
+        flowCtx.lineTo(b.x, b.y);
+        flowCtx.stroke();
+      }
+    });
+
+    if (!reduceMotion) requestAnimationFrame(drawFlowFrame);
+  }
+
+  function initWindFlow(){
+    flowCanvas = $("windFlowCanvas");
+    if (!flowCanvas) return;
+    flowCtx = flowCanvas.getContext("2d");
+    resizeFlowCanvas();
+
+    const w = flowCanvas.clientWidth, h = flowCanvas.clientHeight;
+    flowParticles = Array.from({ length: FLOW_PARTICLE_COUNT }, () => {
+      const p = {};
+      respawnParticle(p, w, h);
+      p.trail = [];
+      return p;
+    });
+
+    new ResizeObserver(resizeFlowCanvas).observe(flowCanvas);
+
+    // Reduced motion: draw the streaks once as a static snapshot instead of
+    // looping — still shows direction, just doesn't animate.
+    if (reduceMotion){
+      for (let i = 0; i < 6; i++) drawFlowFrame();
+    } else {
+      requestAnimationFrame(drawFlowFrame);
+    }
+  }
+
+  // Builds the scrubber timeline: live "now" reading, then minutely_15 samples
+  // taken every 30 minutes (every 2nd 15-min entry) for the next few hours.
+  function buildForecastSteps(data){
+    const c = data.current;
+    const steps = [{
+      time: c.time,
+      temp: c.temperature_2m,
+      wind: c.wind_speed_10m,
+      dir: c.wind_direction_10m,
+      gust: c.wind_gusts_10m,
+      precip: c.rain ?? c.precipitation ?? 0,
+    }];
+
+    const m = data.minutely_15;
+    if (m?.time?.length){
+      const nowMs = Date.now();
+      let startIdx = m.time.findIndex(t => new Date(t).getTime() > nowMs);
+      if (startIdx < 0) startIdx = 0;
+      for (let i = 0; i < FORECAST_STEP_COUNT; i++){
+        const pos = startIdx + i * 2;
+        if (pos >= m.time.length) break;
+        steps.push({
+          time: m.time[pos],
+          temp: m.temperature_2m?.[pos],
+          wind: m.wind_speed_10m?.[pos],
+          dir: m.wind_direction_10m?.[pos],
+          gust: m.wind_gusts_10m?.[pos],
+          precip: m.precipitation?.[pos] ?? 0,
+        });
+      }
+    }
+    return steps;
+  }
+
+  function renderForecastScale(){
+    const scale = $("forecastScale");
+    scale.innerHTML = "";
+    scale.style.gridTemplateColumns = `repeat(${forecastSteps.length}, 1fr)`;
+    forecastSteps.forEach((step, i) => {
+      const span = document.createElement("span");
+      if (i === 0) span.textContent = "Now";
+      else if (i % 2 === 0) span.textContent = `+${i / 2}h`;
+      scale.appendChild(span);
+    });
+  }
+
+  function applyForecastStep(idx){
+    const step = forecastSteps[idx];
+    if (!step) return;
+
+    setWindVisuals(step.dir ?? 0, step.wind ?? 0);
+    $("gust").textContent = Math.round(step.gust ?? 0);
+    $("temp").textContent = Math.round(step.temp ?? 0);
+
+    const tag = $("forecastTag");
+    const readout = $("forecastReadout");
+    if (idx === 0){
+      tag.textContent = "LIVE";
+      tag.classList.remove("projected");
+      readout.textContent = "Showing current live conditions";
+      $("windAt10").textContent = `Sustained ${Math.round(step.wind ?? 0)} mph`;
+      $("feelsLike").textContent = `Feels like ${Math.round(lastApparentTemp ?? step.temp)}°F`;
+      $("rainRate").textContent = `Current rate ${(step.precip ?? 0).toFixed(2)} in/hr`;
+    } else {
+      const mins = idx * 30;
+      const label = mins < 60 ? `+${mins}m` : `+${(mins / 60).toFixed(mins % 60 ? 1 : 0)}h`;
+      tag.textContent = label;
+      tag.classList.add("projected");
+      readout.textContent = `Projected for ${fmtTime(step.time)} (${label})`;
+      $("windAt10").textContent = `Projected sustained ${Math.round(step.wind ?? 0)} mph`;
+      $("feelsLike").textContent = `Projected — feels-like unavailable`;
+      $("rainRate").textContent = `Projected rate ${(step.precip ?? 0).toFixed(2)} in/hr`;
+    }
+
+    applyRadarForStep(idx, step);
+    renderTrackPlayAnalysis(idx, step);
+  }
+
+  // ---------- Radar (RainViewer tiles over an OpenStreetMap base) ----------
+  let radarMap = null;
+  let radarFrames = []; // [{time: ms, url: tile template}], oldest → newest
+  let radarLayer = null;
+
+  function initRadarMap(){
+    if (typeof L === "undefined") return; // CDN blocked/offline — radar panel just stays on its loading message
+    radarMap = L.map("radarMap", { attributionControl: true, zoomControl: true }).setView([LAT, LON], 8);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors, radar &copy; RainViewer",
+      maxZoom: 12,
+    }).addTo(radarMap);
+    L.marker([LAT, LON]).addTo(radarMap).bindPopup("Saratoga Race Course");
+  }
+
+  async function loadRadarFrames(){
+    try{
+      const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const host = data.host;
+      const past = data.radar?.past ?? [];
+      const nowcast = data.radar?.nowcast ?? [];
+      radarFrames = [...past, ...nowcast].map(f => ({
+        time: f.time * 1000,
+        url: `${host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
+      }));
+      applyRadarForStep(+$("forecastSlider").value, forecastSteps[+$("forecastSlider").value]);
+    } catch(err){
+      console.error(err);
+      $("radarReadout").textContent = "Radar unavailable — couldn't reach RainViewer";
+    }
+  }
+
+  function nearestRadarFrame(targetMs){
+    if (!radarFrames.length) return null;
+    return radarFrames.reduce((best, f) =>
+      Math.abs(f.time - targetMs) < Math.abs(best.time - targetMs) ? f : best
+    );
+  }
+
+  // RainViewer's free nowcast only extrapolates ~30-60 min ahead — real limit of radar
+  // forecasting, not a bug. Past that we hold on the latest frame and say so.
+  function applyRadarForStep(idx, step){
+    if (!radarMap || !radarFrames.length) return;
+    const targetMs = step ? new Date(step.time).getTime() : Date.now();
+    const frame = nearestRadarFrame(targetMs);
+    if (!frame) return;
+
+    if (radarLayer) radarMap.removeLayer(radarLayer);
+    radarLayer = L.tileLayer(frame.url, { opacity: 0.75, zIndex: 5 }).addTo(radarMap);
+
+    const frameLabel = new Date(frame.time).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', timeZone:'America/New_York' });
+    const tag = $("radarTag");
+    const readout = $("radarReadout");
+    const maxFrameMs = radarFrames[radarFrames.length - 1].time;
+    const beyondRange = targetMs > maxFrameMs + 5 * 60 * 1000;
+
+    if (idx === 0){
+      tag.textContent = "LIVE";
+      tag.classList.remove("projected");
+      readout.textContent = `Radar frame: ${frameLabel}`;
+    } else if (beyondRange){
+      tag.textContent = "N/A";
+      tag.classList.add("projected");
+      readout.textContent = `Radar nowcast only reaches ~1h ahead — showing latest frame (${frameLabel})`;
+    } else {
+      const mins = idx * 30;
+      tag.textContent = mins < 60 ? `+${mins}m` : `+${(mins / 60).toFixed(mins % 60 ? 1 : 0)}h`;
+      tag.classList.add("projected");
+      readout.textContent = `Projected radar: ${frameLabel}`;
+    }
+  }
+
+  async function fetchWeather(){
+    setStatus(true, "Updating");
+    try{
+      const res = await fetch(API);
+      if(!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      render(data);
+      setStatus(true, "Live");
+      $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'});
+    } catch(err){
+      console.error(err);
+      setStatus(false, "Connection issue — retrying");
+    } finally {
+      secondsLeft = REFRESH_MS / 1000;
+    }
+  }
+
+  function render(data){
+    const c = data.current;
+    lastApparentTemp = c.apparent_temperature;
+    lastWeatherData = data;
+
+    // Tiles not covered by the forecast scrubber (no 15-min resolution data for these)
+    $("humidity").textContent = Math.round(c.relative_humidity_2m ?? 0);
+    $("cloudCover").textContent = `Cloud cover ${Math.round(c.cloud_cover ?? 0)}%`;
+    $("pressure").textContent = Math.round(c.pressure_msl ?? 0);
+    $("weatherDesc").textContent = WMO[c.weather_code] ?? "—";
+
+    const { date: todayStr, hourPrefix: nowHourPrefix } = nowInTrackTZ();
+
+    let todayIdx = data.daily?.time?.findIndex(t => t === todayStr) ?? -1;
+    if (todayIdx < 0) todayIdx = 0;
+    const rainToday = data.daily?.precipitation_sum?.[todayIdx] ?? 0;
+    $("rainTotal").textContent = rainToday.toFixed(2);
+    $("rainTile").classList.toggle("alert", rainToday > 0.5);
+
+    // Rolling last-24-hours total (past_days=2 gives us prior hourly data so
+    // this window doesn't just reset at midnight like "Today" does)
+    let nowHourIdx = data.hourly?.time?.findIndex(t => t.startsWith(nowHourPrefix)) ?? -1;
+    const sumPrecip = (fromIdx, toIdx) => {
+      if (nowHourIdx < 0 || !data.hourly?.precipitation || toIdx < 0) return 0;
+      let total = 0;
+      for (let i = Math.max(0, fromIdx); i <= toIdx; i++){
+        total += data.hourly.precipitation[i] ?? 0;
+      }
+      return total;
+    };
+    const rain24h = sumPrecip(nowHourIdx - 23, nowHourIdx);
+    const rain48h = sumPrecip(nowHourIdx - 47, nowHourIdx);
+    const rainLast6h = sumPrecip(nowHourIdx - 5, nowHourIdx);
+    const rainPrior6h = sumPrecip(nowHourIdx - 11, nowHourIdx - 6);
+    $("rain6h").textContent = nowHourIdx >= 0 ? `Last 6h ${rainLast6h.toFixed(2)} in` : "Last 6h —";
+    $("rain24h").textContent = nowHourIdx >= 0 ? `Last 24h ${rain24h.toFixed(2)} in` : "Last 24h —";
+    $("rain48h").textContent = nowHourIdx >= 0 ? `Last 48h ${rain48h.toFixed(2)} in` : "Last 48h —";
+
+    if (data.daily?.sunrise?.[todayIdx] && data.daily?.sunset?.[todayIdx]){
+      $("sunTimes").textContent = `Sunrise ${fmtTime(data.daily.sunrise[todayIdx])} / Sunset ${fmtTime(data.daily.sunset[todayIdx])}`;
+    }
+
+    const rainRate = c.rain ?? c.precipitation ?? 0;
+    dirtCondition(rainToday, rainRate);
+    turfCondition(rain24h, rain48h, rainRate);
+    renderTrackTrend(trackTrend(rainLast6h, rainPrior6h, c.wind_speed_10m ?? 0, c.cloud_cover ?? 0));
+
+    // Hourly ticker — next 8 hours from now
+    const ticker = $("ticker");
+    ticker.innerHTML = "";
+    let startIdx = nowHourIdx >= 0 ? nowHourIdx : data.hourly.time.findIndex(t => t.startsWith(nowHourPrefix));
+    if (startIdx < 0) startIdx = 0;
+    for (let i = startIdx; i < Math.min(startIdx + 8, data.hourly.time.length); i++){
+      const div = document.createElement("div");
+      div.className = "tick";
+      div.innerHTML = `
+        <div class="t-time">${fmtTime(data.hourly.time[i])}</div>
+        <div class="t-temp">${Math.round(data.hourly.temperature_2m[i])}°</div>
+        <div class="t-precip">${data.hourly.precipitation_probability[i]}% pop</div>
+        <div class="t-wind">${Math.round(data.hourly.wind_speed_10m[i])} mph</div>
+      `;
+      ticker.appendChild(div);
+    }
+
+    // Wind forecast scrubber — drives the compass, track arrows, gusts, temp, rain rate
+    forecastSteps = buildForecastSteps(data);
+    const slider = $("forecastSlider");
+    slider.max = Math.max(0, forecastSteps.length - 1);
+    if (+slider.value > +slider.max) slider.value = 0;
+    renderForecastScale();
+    applyForecastStep(+slider.value);
+
+    renderRaceCard(data);
+  }
+
+  function tickClock(){
+    $("clock").textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+    secondsLeft = Math.max(0, secondsLeft - 1);
+    const m = Math.floor(secondsLeft/60).toString().padStart(2,"0");
+    const s = Math.floor(secondsLeft%60).toString().padStart(2,"0");
+    $("countdown").textContent = `${m}:${s}`;
+    if (secondsLeft <= 0) fetchWeather();
+  }
+
+  $("refreshBtn").addEventListener("click", fetchWeather);
+  $("forecastSlider").addEventListener("input", (e) => applyForecastStep(+e.target.value));
+
+  $("raceForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const numInput = $("raceNumInput");
+    const timeInput = $("raceTimeInput");
+    const number = numInput.value.trim();
+    const time = timeInput.value; // "HH:MM" 24h, from <input type="time">
+    if (!number || !time) return;
+    addRace(number, time);
+    numInput.value = "";
+    timeInput.value = "";
+    numInput.focus();
+  });
+
+  initWindFlow();
+  initRadarMap();
+  loadRadarFrames();
+  fetchWeather();
+  setInterval(tickClock, 1000);
+  setInterval(fetchWeather, REFRESH_MS);
+  setInterval(loadRadarFrames, REFRESH_MS);
+})();
+</script>
+</body>
+</html>
