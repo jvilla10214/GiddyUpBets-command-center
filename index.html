@@ -494,6 +494,48 @@
     transition: background .15s;
   }
   .race-form button:hover{ background: #ffc94d; }
+  .race-bulk{ margin-bottom: 14px; }
+  .race-bulk-label{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-bottom: 6px;
+  }
+  .race-bulk-textarea{
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+    resize: vertical;
+    margin-bottom: 8px;
+  }
+  .race-bulk-textarea:focus{ border-color: var(--tote-amber); }
+  .race-bulk-btn{
+    background: var(--panel-2);
+    border: 1px solid var(--tote-amber);
+    color: var(--tote-amber);
+    font-family:'Oswald', sans-serif;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .race-bulk-btn:hover{ background: var(--tote-amber); color: var(--ink); }
+  .race-bulk-status{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-top: 6px;
+  }
   .race-row{
     display:flex;
     gap: 10px;
@@ -688,6 +730,14 @@
         <input type="time" id="raceTimeInput" required>
         <button type="submit">+ Add Race</button>
       </form>
+
+      <div class="race-bulk">
+        <div class="race-bulk-label">Or paste the whole day's card at once — one race per line, e.g. "1 1:05 PM"</div>
+        <textarea id="raceBulkInput" class="race-bulk-textarea" rows="3" placeholder="1 1:05 PM&#10;2 1:35 PM&#10;3 2:08 PM"></textarea>
+        <button type="button" id="raceBulkBtn" class="race-bulk-btn">Parse &amp; Add All</button>
+        <div class="race-bulk-status" id="raceBulkStatus"></div>
+      </div>
+
       <div class="race-row" id="raceRow">
         <div class="race-empty">No races added yet — enter a race number and post time above.</div>
       </div>
@@ -921,6 +971,34 @@
     raceCard.push({ id: raceIdCounter++, number, time });
     raceCard.sort((a, b) => a.time.localeCompare(b.time));
     renderRaceCard(lastWeatherData);
+  }
+
+  // No free live feed for actual daily post times exists (NYRA's wagering
+  // platform that has them blocks cross-origin requests), so this parses
+  // whatever the user pastes in — one race per line, flexible formats like
+  // "1 1:05 PM", "Race 2: 1:35pm", "3) 2:08 PM". Post times run PM by
+  // default when no AM/PM is given, since race cards don't start before noon.
+  function parseBulkRaces(text){
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const parsed = [];
+    const failed = [];
+    lines.forEach(line => {
+      const timeMatch = line.match(/(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/);
+      if (!timeMatch){ failed.push(line); return; }
+      const rest = line.slice(0, timeMatch.index) + line.slice(timeMatch.index + timeMatch[0].length);
+      const numMatch = rest.match(/\d+/);
+      if (!numMatch){ failed.push(line); return; }
+
+      let hour = parseInt(timeMatch[1], 10);
+      const minute = timeMatch[2];
+      const meridiem = timeMatch[3] ? timeMatch[3].toUpperCase() : null;
+      if (meridiem === "PM" && hour < 12) hour += 12;
+      if (meridiem === "AM" && hour === 12) hour = 0;
+      if (!meridiem && hour >= 1 && hour <= 11) hour += 12;
+
+      parsed.push({ number: numMatch[0], time: `${String(hour).padStart(2, "0")}:${minute}` });
+    });
+    return { parsed, failed };
   }
 
   function removeRace(id){
@@ -1458,6 +1536,24 @@
     numInput.value = "";
     timeInput.value = "";
     numInput.focus();
+  });
+
+  $("raceBulkBtn").addEventListener("click", () => {
+    const input = $("raceBulkInput");
+    const status = $("raceBulkStatus");
+    const { parsed, failed } = parseBulkRaces(input.value);
+
+    parsed.forEach(r => addRace(r.number, r.time));
+
+    if (parsed.length && !failed.length){
+      status.textContent = `Added ${parsed.length} race${parsed.length === 1 ? "" : "s"}.`;
+      input.value = "";
+    } else if (parsed.length && failed.length){
+      status.textContent = `Added ${parsed.length}, couldn't parse: ${failed.join(" / ")}`;
+      input.value = failed.join("\n");
+    } else {
+      status.textContent = `Couldn't parse any lines — try a format like "1 1:05 PM".`;
+    }
   });
 
   initWindFlow();
