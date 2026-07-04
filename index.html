@@ -124,10 +124,9 @@
   /* ---------- Layout ---------- */
   .grid{
     display:grid;
-    grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.75fr) minmax(260px, 0.7fr);
+    grid-template-columns: minmax(260px, 0.7fr) minmax(0, 1.3fr) minmax(260px, 0.75fr);
     gap: 18px;
   }
-  .alert-sidebar{ grid-column: 3; }
   @media (max-width: 1150px){
     .grid{ grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr); }
     .alert-sidebar{ grid-column: 1 / -1; }
@@ -650,6 +649,21 @@
 
   /* ---------- Unified alert feed sidebar ---------- */
   .alert-sidebar{ display: flex; flex-direction: column; }
+  .alert-title-actions{ display: flex; align-items: center; gap: 10px; }
+  .alert-collapse-btn{
+    background: none;
+    border: none;
+    color: var(--parchment-dim);
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 4px;
+    cursor: pointer;
+    transition: transform .2s, color .15s;
+  }
+  .alert-collapse-btn:hover{ color: var(--tote-amber); }
+  .alert-sidebar.collapsed .alert-collapse-btn{ transform: rotate(-90deg); }
+  .alert-sidebar.collapsed .alert-filters,
+  .alert-sidebar.collapsed .alert-list{ display: none; }
   .alert-filters{
     display: flex;
     gap: 8px;
@@ -757,6 +771,20 @@
 </header>
 
 <div class="grid">
+  <div class="alert-sidebar panel" id="alertSidebar">
+    <div class="panel-title">
+      Alert Feed
+      <span class="alert-title-actions">
+        <span class="tag" id="alertCountTag">0</span>
+        <button type="button" id="alertCollapseBtn" class="alert-collapse-btn" aria-expanded="true" title="Collapse alert feed">▾</button>
+      </span>
+    </div>
+    <div class="alert-filters" id="alertFilters"></div>
+    <div class="alert-list" id="alertList">
+      <div class="alert-empty">No alerts yet.</div>
+    </div>
+  </div>
+
   <!-- LEFT: Track + wind -->
   <div class="panel">
     <div class="panel-title">Saratoga Race Course <span class="tag" id="asOf">—</span></div>
@@ -931,16 +959,6 @@
     </div>
   </div>
 
-  <div class="alert-sidebar panel">
-    <div class="panel-title">
-      Alert Feed
-      <span class="tag" id="alertCountTag">0</span>
-    </div>
-    <div class="alert-filters" id="alertFilters"></div>
-    <div class="alert-list" id="alertList">
-      <div class="alert-empty">No alerts yet.</div>
-    </div>
-  </div>
 </div>
 
 <div class="panel log-panel">
@@ -2040,6 +2058,17 @@
   alertFeed = loadAlertFeed();
   alertState = loadAlertState();
   renderAlertFeed();
+
+  const ALERT_COLLAPSE_KEY = "giddyupbets_alert_collapsed";
+  function setAlertCollapsed(collapsed){
+    $("alertSidebar").classList.toggle("collapsed", collapsed);
+    $("alertCollapseBtn").setAttribute("aria-expanded", String(!collapsed));
+    localStorage.setItem(ALERT_COLLAPSE_KEY, collapsed ? "1" : "0");
+  }
+  $("alertCollapseBtn").addEventListener("click", () => {
+    setAlertCollapsed(!$("alertSidebar").classList.contains("collapsed"));
+  });
+  setAlertCollapsed(localStorage.getItem(ALERT_COLLAPSE_KEY) === "1");
 
   initWindFlow();
   initRadarMap();
