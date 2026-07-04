@@ -80,10 +80,21 @@
   .status-cluster{
     display:flex;
     align-items:center;
+    flex-wrap: wrap;
     gap: 18px;
     font-family:'IBM Plex Mono', monospace;
     font-size: 13px;
     color: var(--parchment-dim);
+  }
+  @media (max-width: 480px){
+    .alert-dropdown{
+      position: fixed;
+      left: 50%;
+      right: auto;
+      top: 70px;
+      transform: translateX(-50%);
+      width: 92vw;
+    }
   }
 
   .pill{
@@ -124,16 +135,11 @@
   /* ---------- Layout ---------- */
   .grid{
     display:grid;
-    grid-template-columns: minmax(260px, 0.7fr) minmax(0, 1.3fr) minmax(260px, 0.75fr);
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
     gap: 18px;
-  }
-  @media (max-width: 1150px){
-    .grid{ grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr); }
-    .alert-sidebar{ grid-column: 1 / -1; }
   }
   @media (max-width: 900px){
     .grid{ grid-template-columns: 1fr; }
-    .alert-sidebar{ grid-column: 1; }
   }
 
   .panel{
@@ -647,23 +653,67 @@
     line-height: 1.5;
   }
 
-  /* ---------- Unified alert feed sidebar ---------- */
-  .alert-sidebar{ display: flex; flex-direction: column; }
-  .alert-title-actions{ display: flex; align-items: center; gap: 10px; }
-  .alert-collapse-btn{
-    background: none;
-    border: none;
-    color: var(--parchment-dim);
-    font-size: 13px;
-    line-height: 1;
-    padding: 2px 4px;
+  /* ---------- Unified alert feed (bell + dropdown) ---------- */
+  .alert-bell-wrap{ position: relative; }
+  .alert-bell-btn{
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    border-radius: 999px;
     cursor: pointer;
-    transition: transform .2s, color .15s;
+    transition: border-color .15s, color .15s;
   }
-  .alert-collapse-btn:hover{ color: var(--tote-amber); }
-  .alert-sidebar.collapsed .alert-collapse-btn{ transform: rotate(-90deg); }
-  .alert-sidebar.collapsed .alert-filters,
-  .alert-sidebar.collapsed .alert-list{ display: none; }
+  .alert-bell-btn:hover{ border-color: var(--tote-amber); }
+  .alert-bell-btn.has-unread{ color: var(--tote-amber); border-color: var(--tote-amber); }
+  .alert-badge{
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--silk-red);
+    color: #fff;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+  }
+  .alert-dropdown{
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    width: 400px;
+    max-width: min(90vw, 400px);
+    max-height: 70vh;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 16px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+    z-index: 50;
+  }
+  .alert-dropdown[hidden]{ display: none; }
+  .alert-dropdown-header{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-size: 13px;
+    color: var(--parchment-dim);
+    margin-bottom: 14px;
+  }
+  .alert-dropdown .alert-list{ max-height: none; }
   .alert-filters{
     display: flex;
     gap: 8px;
@@ -767,24 +817,29 @@
     <span id="clock">--:--:--</span>
     <span>Next refresh: <span id="countdown">--</span></span>
     <button id="refreshBtn">↻ Refresh now</button>
+    <div class="alert-bell-wrap">
+      <button type="button" id="alertBellBtn" class="alert-bell-btn" aria-expanded="false" title="Alert feed">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <span class="alert-badge" id="alertBadge" hidden>0</span>
+      </button>
+      <div class="alert-dropdown" id="alertDropdown" hidden>
+        <div class="alert-dropdown-header">
+          Alert Feed
+          <span class="tag" id="alertCountTag">0</span>
+        </div>
+        <div class="alert-filters" id="alertFilters"></div>
+        <div class="alert-list" id="alertList">
+          <div class="alert-empty">No alerts yet.</div>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 
 <div class="grid">
-  <div class="alert-sidebar panel" id="alertSidebar">
-    <div class="panel-title">
-      Alert Feed
-      <span class="alert-title-actions">
-        <span class="tag" id="alertCountTag">0</span>
-        <button type="button" id="alertCollapseBtn" class="alert-collapse-btn" aria-expanded="true" title="Collapse alert feed">▾</button>
-      </span>
-    </div>
-    <div class="alert-filters" id="alertFilters"></div>
-    <div class="alert-list" id="alertList">
-      <div class="alert-empty">No alerts yet.</div>
-    </div>
-  </div>
-
   <!-- LEFT: Track + wind -->
   <div class="panel">
     <div class="panel-title">Saratoga Race Course <span class="tag" id="asOf">—</span></div>
@@ -1362,9 +1417,11 @@
 
   const ALERT_FEED_KEY = "giddyupbets_alert_feed_v1";
   const ALERT_STATE_KEY = "giddyupbets_alert_state_v1";
+  const ALERT_LAST_SEEN_KEY = "giddyupbets_alert_last_seen";
   const ALERT_FEED_MAX = 50;
   let alertFeed = [];
   let alertState = { initialized: false, windTier: null, rainActive: null, rainTotalTier: null, dirtTier: null };
+  let alertLastSeen = localStorage.getItem(ALERT_LAST_SEEN_KEY);
 
   function loadAlertFeed(){
     try{
@@ -1425,6 +1482,22 @@
   // Filter buttons are generated from ALERT_TYPES rather than hardcoded, so
   // turning on "scratch" or "odds" later (once they have a real data source)
   // is just flipping enabled:true here — no UI restructuring.
+  function updateAlertBadge(){
+    const unread = alertLastSeen
+      ? alertFeed.filter(a => new Date(a.timestamp).getTime() > new Date(alertLastSeen).getTime()).length
+      : alertFeed.length;
+    const badge = $("alertBadge");
+    const bell = $("alertBellBtn");
+    if (unread > 0){
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.hidden = false;
+      bell.classList.add("has-unread");
+    } else {
+      badge.hidden = true;
+      bell.classList.remove("has-unread");
+    }
+  }
+
   function renderAlertFeed(){
     const filterContainer = $("alertFilters");
     filterContainer.innerHTML = "";
@@ -1442,6 +1515,7 @@
     });
 
     $("alertCountTag").textContent = alertFeed.length;
+    updateAlertBadge();
 
     const list = $("alertList");
     const filtered = alertFilter === "all" ? alertFeed : alertFeed.filter(a => a.type === alertFilter);
@@ -2059,16 +2133,26 @@
   alertState = loadAlertState();
   renderAlertFeed();
 
-  const ALERT_COLLAPSE_KEY = "giddyupbets_alert_collapsed";
-  function setAlertCollapsed(collapsed){
-    $("alertSidebar").classList.toggle("collapsed", collapsed);
-    $("alertCollapseBtn").setAttribute("aria-expanded", String(!collapsed));
-    localStorage.setItem(ALERT_COLLAPSE_KEY, collapsed ? "1" : "0");
+  function setAlertDropdownOpen(open){
+    $("alertDropdown").hidden = !open;
+    $("alertBellBtn").setAttribute("aria-expanded", String(open));
+    if (open){
+      alertLastSeen = new Date().toISOString();
+      localStorage.setItem(ALERT_LAST_SEEN_KEY, alertLastSeen);
+      updateAlertBadge();
+    }
   }
-  $("alertCollapseBtn").addEventListener("click", () => {
-    setAlertCollapsed(!$("alertSidebar").classList.contains("collapsed"));
+
+  $("alertBellBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    setAlertDropdownOpen($("alertDropdown").hidden);
   });
-  setAlertCollapsed(localStorage.getItem(ALERT_COLLAPSE_KEY) === "1");
+  document.addEventListener("click", (e) => {
+    const dropdown = $("alertDropdown");
+    if (!dropdown.hidden && !dropdown.contains(e.target) && e.target !== $("alertBellBtn")){
+      setAlertDropdownOpen(false);
+    }
+  });
 
   initWindFlow();
   initRadarMap();
