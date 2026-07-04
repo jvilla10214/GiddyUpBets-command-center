@@ -124,11 +124,17 @@
   /* ---------- Layout ---------- */
   .grid{
     display:grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
+    grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.75fr) minmax(260px, 0.7fr);
     gap: 18px;
+  }
+  .alert-sidebar{ grid-column: 3; }
+  @media (max-width: 1150px){
+    .grid{ grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr); }
+    .alert-sidebar{ grid-column: 1 / -1; }
   }
   @media (max-width: 900px){
     .grid{ grid-template-columns: 1fr; }
+    .alert-sidebar{ grid-column: 1; }
   }
 
   .panel{
@@ -777,6 +783,82 @@
     line-height: 1.5;
   }
 
+  /* ---------- Unified alert feed sidebar ---------- */
+  .alert-sidebar{ display: flex; flex-direction: column; }
+  .alert-filters{
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .alert-filter{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .alert-filter:hover{ border-color: var(--tote-amber); }
+  .alert-filter.active{ background: var(--tote-amber); border-color: var(--tote-amber); color: var(--ink); }
+  .alert-list{
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 720px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .alert-list::-webkit-scrollbar{ width: 6px; }
+  .alert-list::-webkit-scrollbar-thumb{ background: var(--panel-border); border-radius: 4px; }
+  .alert-empty{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--parchment-dim);
+    padding: 24px 4px;
+    text-align: center;
+  }
+  .alert-row{
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .alert-dot{
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-top: 4px;
+  }
+  .alert-row.alert-weather .alert-dot{ background: var(--tote-amber); box-shadow: 0 0 6px var(--tote-amber); }
+  .alert-row.alert-bias .alert-dot{ background: var(--rail-green); box-shadow: 0 0 6px var(--rail-green); }
+  .alert-body{ min-width: 0; }
+  .alert-message{
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 12.5px;
+    color: var(--parchment);
+    line-height: 1.4;
+  }
+  .alert-meta{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--parchment-dim);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .alert-row.alert-weather .alert-category{ color: var(--tote-amber); }
+  .alert-row.alert-bias .alert-category{ color: var(--rail-green); }
+
   footer{
     margin-top: 22px;
     display:flex;
@@ -1000,6 +1082,17 @@
       <div class="futurecast-readout">
         Multi-hour model forecast (ECMWF), with Windy's own timeline — separate from the live RainViewer radar above, which only covers the near-term.
       </div>
+    </div>
+  </div>
+
+  <div class="alert-sidebar panel">
+    <div class="panel-title">
+      Alert Feed
+      <span class="tag" id="alertCountTag">0</span>
+    </div>
+    <div class="alert-filters" id="alertFilters"></div>
+    <div class="alert-list" id="alertList">
+      <div class="alert-empty">No alerts yet.</div>
     </div>
   </div>
 </div>
@@ -1281,6 +1374,7 @@
     weatherLog.sort((a, b) => b.date.localeCompare(a.date));
     saveWeatherLog();
     renderLogTable();
+    pushBiasAlertForEntry(stats);
   }
 
   // On-demand: snapshots TODAY right now, flagged partial since the day
@@ -1301,6 +1395,7 @@
     weatherLog.sort((a, b) => b.date.localeCompare(a.date));
     saveWeatherLog();
     renderLogTable();
+    pushBiasAlertForEntry(stats);
   }
 
   function removeLogEntry(dateStr){
@@ -1381,12 +1476,199 @@
         weatherLog.sort((a, b) => b.date.localeCompare(a.date));
         saveWeatherLog();
         renderLogTable();
+        pushBiasAlertForEntry(stats);
         status.textContent = `Added ${dateStr} to the Daily Log.`;
       });
     } catch(err){
       console.error(err);
       status.textContent = "Couldn't reach the archive — try again in a moment.";
     }
+  }
+
+  // ---------- Unified alert feed ----------
+  // STAGE 1: detection + storage only. Alerts are console.logged for now;
+  // rendering gets wired up once the sidebar UI exists (stage 2/3).
+  //
+  // Scratch/odds are defined here so the UI filter structure is ready, but
+  // they have no data source yet — deliberately left unpopulated.
+  const ALERT_TYPES = {
+    weather: { label: "Weather", colorVar: "--tote-amber", enabled: true },
+    bias:    { label: "Bias",    colorVar: "--rail-green",  enabled: true },
+    scratch: { label: "Scratch", colorVar: "--silk-red",    enabled: false },
+    odds:    { label: "Odds",    colorVar: "--sky",         enabled: false },
+  };
+
+  const ALERT_FEED_KEY = "giddyupbets_alert_feed_v1";
+  const ALERT_STATE_KEY = "giddyupbets_alert_state_v1";
+  const ALERT_FEED_MAX = 50;
+  let alertFeed = [];
+  let alertState = { initialized: false, windTier: null, rainActive: null, rainTotalTier: null, dirtTier: null };
+
+  function loadAlertFeed(){
+    try{
+      const raw = localStorage.getItem(ALERT_FEED_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("Alert feed failed to load", err);
+      return [];
+    }
+  }
+  function saveAlertFeed(){
+    try{ localStorage.setItem(ALERT_FEED_KEY, JSON.stringify(alertFeed)); }
+    catch(err){ console.error("Alert feed failed to save", err); }
+  }
+  function loadAlertState(){
+    try{
+      const raw = localStorage.getItem(ALERT_STATE_KEY);
+      return raw ? JSON.parse(raw) : alertState;
+    } catch(err){
+      console.error("Alert state failed to load", err);
+      return alertState;
+    }
+  }
+  function saveAlertState(){
+    try{ localStorage.setItem(ALERT_STATE_KEY, JSON.stringify(alertState)); }
+    catch(err){ console.error("Alert state failed to save", err); }
+  }
+
+  function makeAlert(type, message, track){
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type,
+      track: track ?? "Saratoga",
+      message,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  function pushAlert(alert){
+    alertFeed.unshift(alert); // newest first
+    if (alertFeed.length > ALERT_FEED_MAX) alertFeed.length = ALERT_FEED_MAX;
+    saveAlertFeed();
+    renderAlertFeed();
+  }
+
+  let alertFilter = "all";
+
+  function fmtRelativeTime(iso){
+    const diffMin = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return `${Math.round(diffHr / 24)}d ago`;
+  }
+
+  // Filter buttons are generated from ALERT_TYPES rather than hardcoded, so
+  // turning on "scratch" or "odds" later (once they have a real data source)
+  // is just flipping enabled:true here — no UI restructuring.
+  function renderAlertFeed(){
+    const filterContainer = $("alertFilters");
+    filterContainer.innerHTML = "";
+    const makeFilterBtn = (key, label) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "alert-filter" + (alertFilter === key ? " active" : "");
+      btn.textContent = label;
+      btn.addEventListener("click", () => { alertFilter = key; renderAlertFeed(); });
+      return btn;
+    };
+    filterContainer.appendChild(makeFilterBtn("all", "All"));
+    Object.entries(ALERT_TYPES).forEach(([key, cfg]) => {
+      if (cfg.enabled) filterContainer.appendChild(makeFilterBtn(key, cfg.label));
+    });
+
+    $("alertCountTag").textContent = alertFeed.length;
+
+    const list = $("alertList");
+    const filtered = alertFilter === "all" ? alertFeed : alertFeed.filter(a => a.type === alertFilter);
+    list.innerHTML = "";
+    if (!filtered.length){
+      const label = alertFilter === "all" ? "" : `${(ALERT_TYPES[alertFilter]?.label ?? alertFilter).toLowerCase()} `;
+      list.innerHTML = `<div class="alert-empty">No ${label}alerts yet.</div>`;
+      return;
+    }
+    filtered.forEach(a => {
+      const row = document.createElement("div");
+      row.className = `alert-row alert-${a.type}`;
+      row.innerHTML = `
+        <span class="alert-dot"></span>
+        <div class="alert-body">
+          <div class="alert-message">${a.message}</div>
+          <div class="alert-meta">${a.track} · <span class="alert-category">${ALERT_TYPES[a.type]?.label ?? a.type}</span> · ${fmtRelativeTime(a.timestamp)}</div>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+  }
+
+  function windTierFor(speed, gust){
+    const v = Math.max(speed ?? 0, gust ?? 0);
+    if (v >= 25) return "high";
+    if (v >= 15) return "moderate";
+    return "calm";
+  }
+  function rainTotalTierFor(total){
+    if (total >= 0.5) return "0.5";
+    if (total >= 0.25) return "0.25";
+    return "none";
+  }
+
+  // Compares this fetch's derived state against the last one (persisted, so
+  // a page reload doesn't cause spurious re-fires). Only tier *transitions*
+  // generate an alert — staying above a threshold on every 5-min refresh
+  // does not.
+  function detectWeatherAlerts(current, rainToday, dirtLabel){
+    const windTier = windTierFor(current.wind_speed_10m, current.wind_gusts_10m);
+    const rainRate = current.rain ?? current.precipitation ?? 0;
+    const rainActive = rainRate > 0;
+    const rainTotalTier = rainTotalTierFor(rainToday);
+    const peakWind = Math.round(Math.max(current.wind_speed_10m ?? 0, current.wind_gusts_10m ?? 0));
+
+    if (alertState.initialized){
+      if (windTier !== alertState.windTier){
+        if (windTier === "moderate" && alertState.windTier !== "high"){
+          pushAlert(makeAlert("weather", `Wind crossed 15 mph — currently ${peakWind} mph`));
+        } else if (windTier === "high"){
+          pushAlert(makeAlert("weather", `Wind crossed 25 mph — currently ${peakWind} mph`));
+        }
+      }
+
+      if (rainActive && !alertState.rainActive){
+        pushAlert(makeAlert("weather", "Rain has started"));
+      } else if (!rainActive && alertState.rainActive){
+        pushAlert(makeAlert("weather", "Rain has stopped"));
+      }
+
+      if (rainTotalTier !== alertState.rainTotalTier){
+        if (rainTotalTier === "0.25" && alertState.rainTotalTier !== "0.5"){
+          pushAlert(makeAlert("weather", `Today's rainfall crossed 0.25 in (now ${rainToday.toFixed(2)} in)`));
+        } else if (rainTotalTier === "0.5"){
+          pushAlert(makeAlert("weather", `Today's rainfall crossed 0.5 in (now ${rainToday.toFixed(2)} in)`));
+        }
+      }
+
+      if (dirtLabel !== alertState.dirtTier){
+        pushAlert(makeAlert("weather", `Track condition changed: ${alertState.dirtTier ?? "—"} → ${dirtLabel}`));
+      }
+    }
+
+    alertState = { initialized: true, windTier, rainActive, rainTotalTier, dirtTier: dirtLabel };
+    saveAlertState();
+  }
+
+  function fmtLogDateShort(dateStr){
+    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+
+  // Bias alerts fire whenever the Daily Log gains or updates an entry —
+  // auto, on-demand, or backfilled from Historical Lookup all funnel here.
+  function pushBiasAlertForEntry(entry){
+    pushAlert(makeAlert(
+      "bias",
+      `${fmtLogDateShort(entry.date)} logged — Dirt: ${entry.dirtConditionLabel}, Turf: ${entry.turfConditionLabel}, Rain: ${entry.rainTotal.toFixed(2)} in`
+    ));
   }
 
   // ---------- Race card (post-time forecasts, in-memory only) ----------
@@ -1935,9 +2217,10 @@
     }
 
     const rainRate = c.rain ?? c.precipitation ?? 0;
-    dirtCondition(rainToday, rainRate);
+    const dirtLabel = dirtCondition(rainToday, rainRate);
     turfCondition(rain24h, rain48h, rainRate);
     renderTrackTrend(trackTrend(rainLast6h, rainPrior6h, c.wind_speed_10m ?? 0, c.cloud_cover ?? 0));
+    detectWeatherAlerts(c, rainToday, dirtLabel);
 
     // Hourly ticker — next 8 hours from now
     const ticker = $("ticker");
@@ -2042,6 +2325,10 @@
   weatherLog = loadWeatherLog();
   renderLogTable();
 
+  alertFeed = loadAlertFeed();
+  alertState = loadAlertState();
+  renderAlertFeed();
+
   initWindFlow();
   initRadarMap();
   loadRadarFrames();
@@ -2049,6 +2336,7 @@
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(loadRadarFrames, REFRESH_MS);
+  setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
 })();
 </script>
