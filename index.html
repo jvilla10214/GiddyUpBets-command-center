@@ -650,6 +650,133 @@
   .tick .t-precip{ font-size: 11px; color: var(--sky); }
   .tick .t-wind{ font-size: 10px; color: var(--parchment-dim); margin-top:2px; }
 
+  /* ---------- Weather log + historical lookup ---------- */
+  .log-panel{ margin-top: 18px; }
+  .log-tabs{
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .log-tab{
+    background: none;
+    border: none;
+    color: var(--parchment-dim);
+    font-family:'Oswald', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 4px;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+  }
+  .log-tab + .log-tab{ margin-left: 14px; }
+  .log-tab.active{ color: var(--tote-amber); border-bottom-color: var(--tote-amber); }
+  .log-tab-panel[hidden]{ display: none; }
+  .log-controls{
+    display:flex;
+    align-items:center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .log-controls button{
+    background: var(--tote-amber);
+    border: none;
+    color: var(--ink);
+    font-family:'Oswald', sans-serif;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .log-controls button:hover{ background: #ffc94d; }
+  .log-controls input[type="date"]{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    outline: none;
+  }
+  .log-controls input[type="date"]:focus{ border-color: var(--tote-amber); }
+  .log-note{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+  }
+  .log-table-wrap{ overflow-x: auto; }
+  .log-table{
+    width: 100%;
+    border-collapse: collapse;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+  .log-table th{
+    text-align: left;
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--panel-border);
+    white-space: nowrap;
+  }
+  .log-table td{
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--panel-border);
+    color: var(--parchment);
+    white-space: nowrap;
+  }
+  .log-table tr:last-child td{ border-bottom: none; }
+  .log-table .log-empty{ color: var(--parchment-dim); white-space: normal; }
+  .log-partial td{ color: var(--parchment-dim); }
+  .log-partial-tag{
+    font-size: 9px;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .log-remove, #historyAddBtn{
+    background: none;
+    border: none;
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    cursor: pointer;
+  }
+  .log-remove{ font-size: 14px; padding: 2px 4px; }
+  .log-remove:hover{ color: var(--silk-red); }
+  #historyAddBtn{
+    font-size: 11px;
+    border: 1px solid var(--tote-amber);
+    color: var(--tote-amber);
+    border-radius: 4px;
+    padding: 4px 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  #historyAddBtn:hover{ background: var(--tote-amber); color: var(--ink); }
+  .log-disclaimer{
+    margin-top: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    line-height: 1.5;
+  }
+
   footer{
     margin-top: 22px;
     display:flex;
@@ -877,6 +1004,63 @@
   </div>
 </div>
 
+<div class="panel log-panel">
+  <div class="panel-title">
+    Track Condition &amp; Weather Log
+    <span class="tag" id="logTag">0 ENTRIES</span>
+  </div>
+
+  <div class="log-tabs">
+    <button type="button" class="log-tab active" id="logTabBtnDaily">Daily Log</button>
+    <button type="button" class="log-tab" id="logTabBtnHistory">Historical Lookup</button>
+  </div>
+
+  <div class="log-tab-panel" id="logTabDaily">
+    <div class="log-controls">
+      <button type="button" id="logNowBtn">+ Log Today's Snapshot Now</button>
+      <span class="log-note">Automatically logs the most recently completed day once it's over.</span>
+    </div>
+    <div class="log-table-wrap">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>High</th><th>Low</th><th>Wind Avg</th><th>Peak Gust</th>
+            <th>Prevailing Dir</th><th>Rain</th><th>Dirt</th><th>Turf</th><th>Conditions</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="logTableBody">
+          <tr><td colspan="11" class="log-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="log-tab-panel" id="logTabHistory" hidden>
+    <div class="log-controls">
+      <input type="date" id="historyDateInput">
+      <button type="button" id="historyLookupBtn">Look Up</button>
+      <span class="log-note" id="historyStatus">Pulls any past date live from Open-Meteo's free archive — not saved unless you add it.</span>
+    </div>
+    <div class="log-table-wrap">
+      <table class="log-table" id="historyTable" hidden>
+        <thead>
+          <tr>
+            <th>Date</th><th>High</th><th>Low</th><th>Wind Avg</th><th>Peak Gust</th>
+            <th>Prevailing Dir</th><th>Rain</th><th>Dirt</th><th>Turf</th><th>Conditions</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="log-disclaimer">
+    Daily Log is stored locally in this browser only (no backend, no sync across devices) — the data foundation for
+    the upcoming bias tracker. Track condition columns use the same dirt/turf heuristics as the live badges above,
+    adapted to a full day rather than a rolling window.
+  </div>
+</div>
+
 <footer>
   <span>Weather data: Open-Meteo (no API key required) · Saratoga Race Course, NY (43.0723, -73.7859)</span>
   <span>Track condition and trend estimates are heuristic, not official stewards' calls — always confirm with track superintendent reports.</span>
@@ -892,7 +1076,7 @@
     `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl` +
     `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m` +
     `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
-    `&daily=precipitation_sum,sunrise,sunset` +
+    `&daily=precipitation_sum,sunrise,sunset,temperature_2m_max,temperature_2m_min,wind_gusts_10m_max,weather_code` +
     `&past_days=2` +
     `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York`;
 
@@ -925,19 +1109,18 @@
 
   // Dirt firms back up fast, so this leans hard on the instant rain rate and
   // today's running total — the same heuristic this app always used.
+  // Pure classifier (no DOM) so the live badge and the log/history tables
+  // below can all share one source of truth for the thresholds.
+  function classifyDirtCondition(rainToday, rainRate){
+    if (rainRate > 0.05 || rainToday > 0.6) return { label: "SLOPPY / WET", cls: "cond-sloppy" };
+    if (rainToday > 0.15) return { label: "MUDDY", cls: "cond-muddy" };
+    if (rainToday > 0) return { label: "GOOD", cls: "cond-good" };
+    return { label: "FAST", cls: "cond-fast" };
+  }
   function dirtCondition(rainToday, rainRate){
     const el = $("dirtConditionValue");
-    el.className = "tc-value";
-    let label;
-    if (rainRate > 0.05 || rainToday > 0.6){
-      label = "SLOPPY / WET"; el.classList.add("cond-sloppy");
-    } else if (rainToday > 0.15){
-      label = "MUDDY"; el.classList.add("cond-muddy");
-    } else if (rainToday > 0){
-      label = "GOOD"; el.classList.add("cond-good");
-    } else {
-      label = "FAST"; el.classList.add("cond-fast");
-    }
+    const { label, cls } = classifyDirtCondition(rainToday, rainRate);
+    el.className = "tc-value " + cls;
     el.textContent = label;
     return label;
   }
@@ -947,19 +1130,16 @@
   // on a dry, sunny afternoon. So this weights the trailing 24h/48h rainfall
   // totals more heavily than the current instant rate, roughly mirroring the
   // dirt thresholds above but scaled to rolling windows instead of "today."
+  function classifyTurfCondition(rain24h, rain48h, rainRate){
+    if (rain24h > 0.5 || rain48h > 1.0 || rainRate > 0.15) return { label: "SOFT", cls: "cond-sloppy" };
+    if (rain24h > 0.2 || rain48h > 0.5) return { label: "YIELDING", cls: "cond-muddy" };
+    if (rain24h > 0 || rain48h > 0.1) return { label: "GOOD", cls: "cond-good" };
+    return { label: "FIRM", cls: "cond-fast" };
+  }
   function turfCondition(rain24h, rain48h, rainRate){
     const el = $("turfConditionValue");
-    el.className = "tc-value";
-    let label;
-    if (rain24h > 0.5 || rain48h > 1.0 || rainRate > 0.15){
-      label = "SOFT"; el.classList.add("cond-sloppy");
-    } else if (rain24h > 0.2 || rain48h > 0.5){
-      label = "YIELDING"; el.classList.add("cond-muddy");
-    } else if (rain24h > 0 || rain48h > 0.1){
-      label = "GOOD"; el.classList.add("cond-good");
-    } else {
-      label = "FIRM"; el.classList.add("cond-fast");
-    }
+    const { label, cls } = classifyTurfCondition(rain24h, rain48h, rainRate);
+    el.className = "tc-value " + cls;
     el.textContent = label;
     return label;
   }
@@ -987,6 +1167,226 @@
       el.className = `tc-trend ${trend.cls}`;
       el.textContent = `${trend.arrow} ${trend.label}`;
     });
+  }
+
+  // ---------- Weather log + historical lookup ----------
+  // The daily log is the forward-looking record (auto once a day, or
+  // on-demand), stored in this browser only — there's no backend, so it
+  // won't sync across devices and clearing browser data clears it too.
+  // Historical Lookup instead pulls any past date live from Open-Meteo's
+  // free archive API (ERA5 reanalysis), no key required, ~5 day lag.
+  const LOG_STORAGE_KEY = "giddyupbets_weather_log_v1";
+  const ARCHIVE_API_BASE = "https://archive-api.open-meteo.com/v1/archive";
+  let weatherLog = [];
+
+  function shiftDateStr(dateStr, deltaDays){
+    const d = new Date(`${dateStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + deltaDays);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function loadWeatherLog(){
+    try{
+      const raw = localStorage.getItem(LOG_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("Weather log failed to load", err);
+      return [];
+    }
+  }
+
+  function saveWeatherLog(){
+    try{
+      localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(weatherLog));
+    } catch(err){
+      console.error("Weather log failed to save", err);
+    }
+  }
+
+  // Shared by the live daily log AND historical lookups — both APIs return
+  // Open-Meteo's daily/hourly blocks in the same shape. rainRate stands in
+  // for "instant" intensity when we only have hindsight daily data: the
+  // highest single hourly total that day, since neither source gives us a
+  // true instantaneous rate after the fact.
+  function computeDayStatsFromDaily(dailyBlock, hourlyBlock, dateStr, prevDayRainTotal){
+    const dIdx = dailyBlock?.time?.findIndex(t => t === dateStr) ?? -1;
+    if (dIdx < 0) return null;
+
+    const hIdxs = [];
+    hourlyBlock?.time?.forEach((t, i) => { if (t.startsWith(dateStr)) hIdxs.push(i); });
+
+    let windAvg = null;
+    let prevailingDeg = null;
+    if (hIdxs.length){
+      const speeds = hIdxs.map(i => hourlyBlock.wind_speed_10m?.[i]).filter(v => v != null);
+      windAvg = speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : null;
+
+      let sumSin = 0, sumCos = 0, count = 0;
+      hIdxs.forEach(i => {
+        const deg = hourlyBlock.wind_direction_10m?.[i];
+        if (deg == null) return;
+        const spd = hourlyBlock.wind_speed_10m?.[i] ?? 1; // weight by speed so calm hours don't skew it
+        const rad = deg * Math.PI / 180;
+        sumSin += Math.sin(rad) * spd;
+        sumCos += Math.cos(rad) * spd;
+        count++;
+      });
+      if (count){
+        let deg = Math.atan2(sumSin, sumCos) * 180 / Math.PI;
+        if (deg < 0) deg += 360;
+        prevailingDeg = deg;
+      }
+    }
+
+    const maxHourlyPrecip = hIdxs.length
+      ? Math.max(...hIdxs.map(i => hourlyBlock.precipitation?.[i] ?? 0))
+      : 0;
+    const rainTotal = dailyBlock.precipitation_sum?.[dIdx] ?? 0;
+    const rain48 = rainTotal + (prevDayRainTotal ?? 0);
+
+    return {
+      date: dateStr,
+      tempHigh: dailyBlock.temperature_2m_max?.[dIdx] ?? null,
+      tempLow: dailyBlock.temperature_2m_min?.[dIdx] ?? null,
+      windAvg,
+      windGustPeak: dailyBlock.wind_gusts_10m_max?.[dIdx] ?? null,
+      windPrevailingDeg: prevailingDeg,
+      rainTotal,
+      dirtConditionLabel: classifyDirtCondition(rainTotal, maxHourlyPrecip).label,
+      turfConditionLabel: classifyTurfCondition(rainTotal, rain48, maxHourlyPrecip).label,
+      conditionsDesc: WMO[dailyBlock.weather_code?.[dIdx]] ?? "—",
+    };
+  }
+
+  // Auto-logs the most recently *completed* day (not today — Open-Meteo's
+  // "today" daily aggregate blends forecast for hours that haven't happened
+  // yet, so it isn't a trustworthy final record until the day has fully
+  // elapsed). Runs on every weather refresh; no-ops once yesterday's final
+  // entry already exists.
+  function maybeAutoLogYesterday(data){
+    const { date: todayStr } = nowInTrackTZ();
+    const yesterdayStr = shiftDateStr(todayStr, -1);
+    if (weatherLog.some(e => e.date === yesterdayStr && !e.isPartial)) return;
+
+    const dayBeforeStr = shiftDateStr(yesterdayStr, -1);
+    const dbIdx = data.daily?.time?.findIndex(t => t === dayBeforeStr) ?? -1;
+    const prevRain = dbIdx >= 0 ? (data.daily.precipitation_sum?.[dbIdx] ?? 0) : 0;
+
+    const stats = computeDayStatsFromDaily(data.daily, data.hourly, yesterdayStr, prevRain);
+    if (!stats) return;
+
+    weatherLog = weatherLog.filter(e => e.date !== yesterdayStr); // drop any stale partial
+    weatherLog.push({ ...stats, isPartial: false, capturedAt: new Date().toISOString() });
+    weatherLog.sort((a, b) => b.date.localeCompare(a.date));
+    saveWeatherLog();
+    renderLogTable();
+  }
+
+  // On-demand: snapshots TODAY right now, flagged partial since the day
+  // hasn't fully played out (repeated clicks replace the prior partial
+  // rather than piling up duplicates).
+  function logSnapshotNow(){
+    if (!lastWeatherData) return;
+    const { date: todayStr } = nowInTrackTZ();
+    const yesterdayStr = shiftDateStr(todayStr, -1);
+    const yIdx = lastWeatherData.daily?.time?.findIndex(t => t === yesterdayStr) ?? -1;
+    const prevRain = yIdx >= 0 ? (lastWeatherData.daily.precipitation_sum?.[yIdx] ?? 0) : 0;
+
+    const stats = computeDayStatsFromDaily(lastWeatherData.daily, lastWeatherData.hourly, todayStr, prevRain);
+    if (!stats) return;
+
+    weatherLog = weatherLog.filter(e => e.date !== todayStr);
+    weatherLog.push({ ...stats, isPartial: true, capturedAt: new Date().toISOString() });
+    weatherLog.sort((a, b) => b.date.localeCompare(a.date));
+    saveWeatherLog();
+    renderLogTable();
+  }
+
+  function removeLogEntry(dateStr){
+    weatherLog = weatherLog.filter(e => e.date !== dateStr);
+    saveWeatherLog();
+    renderLogTable();
+  }
+
+  function fmtLogRow(entry){
+    return `
+      <td>${entry.date}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}</td>
+      <td>${entry.tempHigh != null ? Math.round(entry.tempHigh) + "°" : "—"}</td>
+      <td>${entry.tempLow != null ? Math.round(entry.tempLow) + "°" : "—"}</td>
+      <td>${entry.windAvg != null ? Math.round(entry.windAvg) + " mph" : "—"}</td>
+      <td>${entry.windGustPeak != null ? Math.round(entry.windGustPeak) + " mph" : "—"}</td>
+      <td>${entry.windPrevailingDeg != null ? `${compassPoint(entry.windPrevailingDeg)} (${Math.round(entry.windPrevailingDeg)}°)` : "—"}</td>
+      <td>${entry.rainTotal != null ? entry.rainTotal.toFixed(2) + " in" : "—"}</td>
+      <td>${entry.dirtConditionLabel ?? "—"}</td>
+      <td>${entry.turfConditionLabel ?? "—"}</td>
+      <td>${entry.conditionsDesc ?? "—"}</td>
+    `;
+  }
+
+  function renderLogTable(){
+    const tbody = $("logTableBody");
+    const tag = $("logTag");
+    tag.textContent = `${weatherLog.length} ${weatherLog.length === 1 ? "ENTRY" : "ENTRIES"}`;
+    tbody.innerHTML = "";
+
+    if (!weatherLog.length){
+      tbody.innerHTML = `<tr><td colspan="11" class="log-empty">No entries yet — one logs automatically once a day completes, or click "Log Today's Snapshot Now."</td></tr>`;
+      return;
+    }
+
+    weatherLog.forEach(entry => {
+      const tr = document.createElement("tr");
+      if (entry.isPartial) tr.classList.add("log-partial");
+      tr.innerHTML = `${fmtLogRow(entry)}<td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>`;
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll(".log-remove").forEach(btn => {
+      btn.addEventListener("click", () => removeLogEntry(btn.dataset.date));
+    });
+  }
+
+  async function lookupHistoricalDay(dateStr){
+    const status = $("historyStatus");
+    const table = $("historyTable");
+    status.textContent = "Looking up…";
+    table.hidden = true;
+    try{
+      const prevDateStr = shiftDateStr(dateStr, -1);
+      const url = `${ARCHIVE_API_BASE}?latitude=${LAT}&longitude=${LON}` +
+        `&start_date=${prevDateStr}&end_date=${dateStr}` +
+        `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_gusts_10m_max,weather_code` +
+        `&hourly=wind_speed_10m,wind_direction_10m,precipitation` +
+        `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+
+      const prevIdx = data.daily?.time?.findIndex(t => t === prevDateStr) ?? -1;
+      const prevRain = prevIdx >= 0 ? (data.daily.precipitation_sum?.[prevIdx] ?? 0) : 0;
+      const stats = computeDayStatsFromDaily(data.daily, data.hourly, dateStr, prevRain);
+
+      if (!stats || stats.tempHigh == null){
+        status.textContent = `No archive data for ${dateStr} yet — the archive typically lags about 5 days behind today.`;
+        return;
+      }
+
+      status.textContent = "";
+      $("historyTableBody").innerHTML = `<tr>${fmtLogRow(stats)}<td><button id="historyAddBtn" title="Add to Daily Log">+ Add to Log</button></td></tr>`;
+      table.hidden = false;
+      $("historyAddBtn").addEventListener("click", () => {
+        weatherLog = weatherLog.filter(e => e.date !== stats.date);
+        weatherLog.push({ ...stats, isPartial: false, capturedAt: new Date().toISOString() });
+        weatherLog.sort((a, b) => b.date.localeCompare(a.date));
+        saveWeatherLog();
+        renderLogTable();
+        status.textContent = `Added ${dateStr} to the Daily Log.`;
+      });
+    } catch(err){
+      console.error(err);
+      status.textContent = "Couldn't reach the archive — try again in a moment.";
+    }
   }
 
   // ---------- Race card (post-time forecasts, in-memory only) ----------
@@ -1566,6 +1966,7 @@
     applyForecastStep(+slider.value);
 
     renderRaceCard(data);
+    maybeAutoLogYesterday(data);
   }
 
   function tickClock(){
@@ -1610,6 +2011,36 @@
       status.textContent = `Couldn't parse any lines — try a format like "1 1:05 PM".`;
     }
   });
+
+  $("logTabBtnDaily").addEventListener("click", () => {
+    $("logTabBtnDaily").classList.add("active");
+    $("logTabBtnHistory").classList.remove("active");
+    $("logTabDaily").hidden = false;
+    $("logTabHistory").hidden = true;
+  });
+  $("logTabBtnHistory").addEventListener("click", () => {
+    $("logTabBtnHistory").classList.add("active");
+    $("logTabBtnDaily").classList.remove("active");
+    $("logTabHistory").hidden = false;
+    $("logTabDaily").hidden = true;
+  });
+  $("logNowBtn").addEventListener("click", logSnapshotNow);
+  $("historyLookupBtn").addEventListener("click", () => {
+    const val = $("historyDateInput").value;
+    if (!val) { $("historyStatus").textContent = "Pick a date first."; return; }
+    lookupHistoricalDay(val);
+  });
+
+  (() => {
+    // Archive data lags ~5 days; cap the picker there so a lookup doesn't
+    // just fail for dates that aren't published yet. Min is one year back.
+    const { date: todayStr } = nowInTrackTZ();
+    $("historyDateInput").max = shiftDateStr(todayStr, -5);
+    $("historyDateInput").min = shiftDateStr(todayStr, -365);
+  })();
+
+  weatherLog = loadWeatherLog();
+  renderLogTable();
 
   initWindFlow();
   initRadarMap();
