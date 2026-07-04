@@ -756,6 +756,7 @@
       </div>
       <div class="nyra-frame-wrap">
         <iframe
+          id="nyraFrame"
           src="https://tr-cdn.nyra.com/direct/scratches/SARscratch.html"
           loading="lazy"
           title="Saratoga scratches, official track conditions, and turf rail settings from NYRA">
@@ -1390,6 +1391,16 @@
     renderTrackPlayAnalysis(idx, step);
   }
 
+  // ---------- NYRA scratches/rail iframe ----------
+  // A plain <iframe> only loads once, so without this it would show a stale
+  // snapshot until the browser tab itself is reloaded. Cache-busting the src
+  // on the same interval as the weather refresh keeps it genuinely live.
+  const NYRA_SCRATCH_URL = "https://tr-cdn.nyra.com/direct/scratches/SARscratch.html";
+  function refreshNyraFrame(){
+    const frame = $("nyraFrame");
+    if (frame) frame.src = `${NYRA_SCRATCH_URL}?_=${Date.now()}`;
+  }
+
   // ---------- Radar (RainViewer tiles over an OpenStreetMap base) ----------
   let radarMap = null;
   let radarFrames = []; // [{time: ms, url: tile template}], oldest → newest
@@ -1607,6 +1618,7 @@
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(loadRadarFrames, REFRESH_MS);
+  setInterval(refreshNyraFrame, REFRESH_MS);
 })();
 </script>
 </body>
