@@ -6,8 +6,6 @@
 <title>GiddyUpBets — Command Center</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --ink: #000000;
@@ -332,43 +330,29 @@
   .tile.alert{ border-color: var(--silk-red); }
   .tile.alert .tvalue{ color: var(--silk-red); }
 
-  /* ---------- Radar panel ---------- */
-  .radar-panel{
-    display: block;
+  /* ---------- Radar & storm forecast (Windy.com embed, two modes) ---------- */
+  .radar-panel{ display: block; }
+  .radar-mode-toggle{
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
   }
-  #radarMap{
-    width: 100%;
-    height: 200px;
-    border-radius: 8px;
-    border: 1px solid var(--panel-border);
-    background: #0a0a0a;
-  }
-  .radar-readout{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 11px;
-    color: var(--parchment-dim);
-    margin-top: 8px;
-  }
-  /* Re-skin Leaflet's default light-theme chrome to match the dashboard */
-  .leaflet-container{ background: #0a0a0a; font-family: 'IBM Plex Sans', sans-serif; }
-  .leaflet-control-zoom a{
-    background: var(--panel-2) !important;
-    color: var(--parchment) !important;
-    border-color: var(--panel-border) !important;
-  }
-  .leaflet-control-zoom a:hover{ background: var(--panel-border) !important; }
-  .leaflet-control-attribution{
-    background: rgba(15,15,15,0.75) !important;
-    color: var(--parchment-dim) !important;
-  }
-  .leaflet-control-attribution a{ color: var(--sky) !important; }
-  .leaflet-popup-content-wrapper, .leaflet-popup-tip{
+  .radar-mode-btn{
     background: var(--panel-2);
-    color: var(--parchment);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment-dim);
+    font-family:'Oswald', sans-serif;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 7px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
   }
-
-  /* ---------- Futurecast (Windy.com embed) ---------- */
-  .futurecast-panel{ display: block; }
+  .radar-mode-btn:hover{ border-color: var(--tote-amber); }
+  .radar-mode-btn.active{ background: var(--tote-amber); border-color: var(--tote-amber); color: var(--ink); }
   .futurecast-frame-wrap{
     position: relative;
     width: 100%;
@@ -989,27 +973,23 @@
 
     <div class="tile radar-panel">
       <div class="panel-title" style="margin-bottom:10px;">
-        Radar — Saratoga Race Course
-        <span class="tag" id="radarTag">LIVE</span>
+        Radar &amp; Storm Forecast — Saratoga
+        <span class="tag" id="radarModeTag">NOW · RADAR</span>
       </div>
-      <div id="radarMap"></div>
-      <div class="radar-readout" id="radarReadout">Loading radar…</div>
-    </div>
-
-    <div class="tile futurecast-panel">
-      <div class="panel-title" style="margin-bottom:10px;">
-        Futurecast — Regional Precip
-        <span class="tag">WINDY.COM</span>
+      <div class="radar-mode-toggle">
+        <button type="button" class="radar-mode-btn active" data-mode="radar">Now — Radar</button>
+        <button type="button" class="radar-mode-btn" data-mode="rain">Forecast — Storms</button>
       </div>
       <div class="futurecast-frame-wrap">
         <iframe
-          src="https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1"
+          id="radarFrame"
+          src="https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=9&level=surface&overlay=radar&product=radar&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1"
           loading="lazy"
-          title="Windy.com multi-hour precipitation forecast near Saratoga Race Course">
+          title="Saratoga radar and storm forecast">
         </iframe>
       </div>
-      <div class="futurecast-readout">
-        Multi-hour model forecast (ECMWF), with Windy's own timeline — separate from the live RainViewer radar above, which only covers the near-term.
+      <div class="futurecast-readout" id="radarModeReadout">
+        Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.
       </div>
     </div>
   </div>
@@ -1905,7 +1885,6 @@
       $("rainRate").textContent = `Projected rate ${(step.precip ?? 0).toFixed(2)} in/hr`;
     }
 
-    applyRadarForStep(idx, step);
     renderTrackPlayAnalysis(idx, step);
   }
 
@@ -1919,78 +1898,30 @@
     if (frame) frame.src = `${NYRA_SCRATCH_URL}?_=${Date.now()}`;
   }
 
-  // ---------- Radar (RainViewer tiles over an OpenStreetMap base) ----------
-  let radarMap = null;
-  let radarFrames = []; // [{time: ms, url: tile template}], oldest → newest
-  let radarLayer = null;
+  // ---------- Radar & storm forecast (Windy.com embed, two modes) ----------
+  // Consolidated from two separate widgets (a RainViewer/Leaflet radar map +
+  // a standalone Windy forecast embed) into one: same iframe, we just swap
+  // its src between Windy's real-radar product and its model-based rain
+  // forecast product. Real radar has no far-future view (same underlying
+  // limit RainViewer had), and the forecast product is model data, not
+  // observed radar — the readout under the map says which one you're on.
+  const RADAR_MODE_URLS = {
+    radar: "https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=9&level=surface&overlay=radar&product=radar&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1",
+    rain: "https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1",
+  };
+  const RADAR_MODE_COPY = {
+    radar: "Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.",
+    rain: "Multi-day precipitation forecast (ECMWF model) — good for spotting storms that might come through, less precise than radar for \"right now.\"",
+  };
+  const RADAR_MODE_TAGS = { radar: "NOW · RADAR", rain: "FORECAST · STORMS" };
 
-  function initRadarMap(){
-    if (typeof L === "undefined") return; // CDN blocked/offline — radar panel just stays on its loading message
-    radarMap = L.map("radarMap", { attributionControl: true, zoomControl: true }).setView([LAT, LON], 8);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors, radar &copy; RainViewer",
-      maxZoom: 12,
-    }).addTo(radarMap);
-    L.marker([LAT, LON]).addTo(radarMap).bindPopup("Saratoga Race Course");
-  }
-
-  async function loadRadarFrames(){
-    try{
-      const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-      const host = data.host;
-      const past = data.radar?.past ?? [];
-      const nowcast = data.radar?.nowcast ?? [];
-      radarFrames = [...past, ...nowcast].map(f => ({
-        time: f.time * 1000,
-        url: `${host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
-      }));
-      applyRadarForStep(+$("forecastSlider").value, forecastSteps[+$("forecastSlider").value]);
-    } catch(err){
-      console.error(err);
-      $("radarReadout").textContent = "Radar unavailable — couldn't reach RainViewer";
-    }
-  }
-
-  function nearestRadarFrame(targetMs){
-    if (!radarFrames.length) return null;
-    return radarFrames.reduce((best, f) =>
-      Math.abs(f.time - targetMs) < Math.abs(best.time - targetMs) ? f : best
-    );
-  }
-
-  // RainViewer's free nowcast only extrapolates ~30-60 min ahead — real limit of radar
-  // forecasting, not a bug. Past that we hold on the latest frame and say so.
-  function applyRadarForStep(idx, step){
-    if (!radarMap || !radarFrames.length) return;
-    const targetMs = step ? new Date(step.time).getTime() : Date.now();
-    const frame = nearestRadarFrame(targetMs);
-    if (!frame) return;
-
-    if (radarLayer) radarMap.removeLayer(radarLayer);
-    radarLayer = L.tileLayer(frame.url, { opacity: 0.75, zIndex: 5 }).addTo(radarMap);
-
-    const frameLabel = new Date(frame.time).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit', timeZone:'America/New_York' });
-    const tag = $("radarTag");
-    const readout = $("radarReadout");
-    const maxFrameMs = radarFrames[radarFrames.length - 1].time;
-    const beyondRange = targetMs > maxFrameMs + 5 * 60 * 1000;
-
-    if (idx === 0){
-      tag.textContent = "LIVE";
-      tag.classList.remove("projected");
-      readout.textContent = `Radar frame: ${frameLabel}`;
-    } else if (beyondRange){
-      tag.textContent = "N/A";
-      tag.classList.add("projected");
-      readout.textContent = `Radar nowcast only reaches ~1h ahead — showing latest frame (${frameLabel})`;
-    } else {
-      const mins = idx * 30;
-      tag.textContent = mins < 60 ? `+${mins}m` : `+${(mins / 60).toFixed(mins % 60 ? 1 : 0)}h`;
-      tag.classList.add("projected");
-      readout.textContent = `Projected radar: ${frameLabel}`;
-    }
+  function setRadarMode(mode){
+    $("radarFrame").src = RADAR_MODE_URLS[mode];
+    $("radarModeTag").textContent = RADAR_MODE_TAGS[mode];
+    $("radarModeReadout").textContent = RADAR_MODE_COPY[mode];
+    document.querySelectorAll(".radar-mode-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
   }
 
   async function fetchWeather(){
@@ -2154,13 +2085,14 @@
     }
   });
 
+  document.querySelectorAll(".radar-mode-btn").forEach(btn => {
+    btn.addEventListener("click", () => setRadarMode(btn.dataset.mode));
+  });
+
   initWindFlow();
-  initRadarMap();
-  loadRadarFrames();
   fetchWeather();
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
-  setInterval(loadRadarFrames, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
 })();
