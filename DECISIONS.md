@@ -6,6 +6,27 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## AI Racing Summary: rule-based template filling, not a live LLM call
+**Date:** 2026-07-05
+**Decision:** Added a highlighted "briefing" callout near the top of the dashboard, labeled
+**Automated — Rule-Based**, that generates 2-4 sentences from data already computed elsewhere on
+the page (current wind + a last-~3h-vs-prior-~3h trend read, the existing headwind/tailwind-to-the-
+stretch math, dirt/turf condition + Drying/Wetting/Holding trend). Sentence choice is gated by
+numeric thresholds against a fixed set of templates — no external API call, no LLM in the loop.
+**Why:** The point was "AI-sounding" commentary the user could trust, not a black box. A rule-based
+generator means every sentence is traceable to a specific number already on screen and testable in
+isolation (verified against ~6 synthetic scenarios — increasing wind with a future headwind onset,
+already-headwind-and-strengthening, easing headwind, calm, rain-but-still-fast, wetting trend,
+tailwind — before wiring it into `render()`, per the project's stage-then-verify pattern). Two
+data gaps shaped the wording: there's no race post-time schedule (Race Card was removed, see below),
+so a future headwind is described by an actual clock time from the Wind Forecast Scrubber's steps
+instead of "Race X"; and there's no geographic rain data, so rain is described as "in the area"
+rather than inventing a direction like "north of the course."
+**Alternatives considered:** A real LLM call (rejected — no backend to hold a key, and the user
+explicitly wanted rule-based-with-thresholds for now, matching how Track Play Analysis already
+works); inventing race-number or directional specifics to match the more vivid example phrasing
+(rejected — would state things the data doesn't actually support).
+
 ## Consolidate Radar + Futurecast into one panel
 **Date:** 2026-07-05
 **Decision:** Replaced two separate widgets (a RainViewer-tiles-on-Leaflet radar map, and a

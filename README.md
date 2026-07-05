@@ -11,6 +11,19 @@ with no build step, no server, and no paid APIs.
 
 ## What's fully working right now
 
+**AI Racing Summary**
+- A highlighted "briefing" callout near the top of the dashboard, clearly labeled **Automated —
+  Rule-Based**, that fills in 2-4 sentence templates from data already on the page: current wind
+  speed/direction, a wind-trend read (last ~3h vs. the prior ~3h of hourly data), the same
+  headwind/tailwind-to-the-stretch math the Track Play Analysis panel uses, and the dirt/turf
+  condition + Drying/Wetting/Holding trend.
+- Not a live AI/LLM call — every sentence is template text gated by thresholds, so it only ever
+  states what the underlying data supports. If wind is trending up, it'll project *when* (an actual
+  clock time from the Wind Forecast Scrubber's steps) it should turn into a stretch headwind rather
+  than naming a race number, since there's no race post-time schedule wired in; rain language stays
+  general ("in the area") rather than inventing a direction, since there's no geographic rain data.
+- Regenerates every time conditions refresh (auto or manual).
+
 **Live conditions**
 - Wind compass (rotating needle, true direction + speed) and an animated wind-flow overlay
   (Windy.com-style streaklines) drawn directly on the track photo, both driven by live wind data.
