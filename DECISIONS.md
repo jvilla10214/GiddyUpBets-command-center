@@ -6,6 +6,22 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Home-screen/favicon branding: horseshoe icon + web app manifest
+**Date:** 2026-07-05
+**Decision:** Added a real icon set (`assets/favicon-32.png`, `assets/icon-192.png`,
+`assets/icon-512.png`, `assets/apple-touch-icon.png`) generated from a horseshoe graphic the user
+supplied, padded to a square black-background canvas (matching the site's existing dark theme, and
+deliberately opaque rather than transparent — iOS's own guidance is to supply apple-touch-icons
+without alpha, since it doesn't composite transparency the way you'd expect), plus a `manifest.json`
+(name/short_name/theme_color/icons) so "Add to Home Screen" on phone and "Install" on desktop pick
+up the horseshoe instead of a generated default letter tile.
+**Why:** There was no favicon, apple-touch-icon, or manifest at all before this, so every platform
+fell back to auto-generating a plain letter icon from the page title. This is a static file with no
+build step, so the icons are pre-generated once (via `sips`, no new tooling/dependency added) rather
+than generated at request time.
+**Alternatives considered:** None seriously — this is standard boilerplate for any static site that
+wants a real home-screen icon, no architectural tradeoff to weigh.
+
 ## NWS active-alerts API added as a new "Severe Wx" alert category
 **Date:** 2026-07-05
 **Decision:** Added a `severe` category to the existing Alert Feed, sourced from the National
