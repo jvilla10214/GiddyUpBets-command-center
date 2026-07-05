@@ -1,97 +1,135 @@
 # GiddyUpBets Command Center
 
-A single-file, no-server dashboard: live wind/temp/rain conditions for Saratoga Race Course,
-with a wind compass overlaid on your track map. Pulls from [Open-Meteo](https://open-meteo.com)
-(free, no API key, refreshes every 5 minutes).
+A single-file, no-backend weather and track-condition dashboard for Saratoga Race Course. It pulls
+live conditions, short- and long-range forecasts, radar, and official NYRA scratches/rail data into
+one screen, layers a rule-based handicapping read on top of the wind and track condition, and keeps
+a running local log of daily conditions plus a live alert feed — all from a single `index.html` file
+with no build step, no server, and no paid APIs.
 
-## Run it
+**Live:** https://jvilla10214.github.io/GiddyUpBets-command-center/
+**Repo:** https://github.com/jvilla10214/GiddyUpBets-command-center
 
-Just open `index.html` in a browser — double-click it, or in VS Code use the
-**Live Server** extension (right-click `index.html` → "Open with Live Server")
-so it behaves the same as it will once deployed.
+## What's fully working right now
 
-No `pip install`, no `npm install`, no build step.
+**Live conditions**
+- Wind compass (rotating needle, true direction + speed) and an animated wind-flow overlay
+  (Windy.com-style streaklines) drawn directly on the track photo, both driven by live wind data.
+- Temperature (with feels-like), wind gusts, rainfall (current rate + last 6h/24h/48h + today's
+  total), humidity, cloud cover, barometric pressure, and a plain-language conditions description.
+- Auto-refreshes every 5 minutes, with a visible countdown, manual refresh button, and a
+  connection-status pill that turns red and auto-retries if a fetch fails.
 
-## Add your real track photo
+**Track condition**
+- Two independent condition badges — **Main Track (Dirt)** (Fast/Good/Muddy/Sloppy) and **Turf
+  Course** (Firm/Good/Yielding/Soft) — each a heuristic off rainfall, weighted differently (dirt
+  reacts to the instant rate + today's total; turf leans on rolling 24h/48h totals since turf drains
+  slower and stays soft longer).
+- A Drying/Wetting/Holding trend indicator next to each, from comparing the last 6h of rain against
+  the prior 6h, plus current wind/sun.
+- A **Track Conditions & Rail — NYRA Scratches** panel embedding NYRA's own live scratches page
+  (official track/turf condition, which races run on which turf course, and rail settings in feet) —
+  the real stewards' call, shown right next to our heuristic for comparison.
 
-Right now the track is a drawn placeholder SVG oval so the dashboard works out of the box.
-To use your actual saved image:
+**Forecasting**
+- **Wind Forecast Scrubber** — a slider from "Now" to +6h in 30-minute steps that re-projects the
+  compass, track wind-flow overlay, gusts, temp, and rain rate using Open-Meteo's 15-minute
+  forecast data.
+- **Track Play Analysis** — a rule-based (not AI/LLM) read of wind vs. the actual stretch-run
+  geometry (headwind/tailwind/crosswind on the homestretch and backstretch), combined with track
+  condition, written out as a plain-English handicapping note. Clearly labeled heuristic.
+- **Radar & Storm Forecast** — one consolidated panel with two views: live weather radar ("Now") and
+  a multi-day ECMWF precipitation forecast ("Forecast — Storms"), toggled with two buttons, so you
+  can see both what's happening right now and what might come through later.
+- **Next 8 Hours** ticker — hourly temp/feels-like/rain probability/wind strip.
 
-1. Drop your image into `assets/track.jpg` (any name/extension is fine, just update the path below).
-2. In `index.html`, find this block near the top of the `track-wrap` div:
-   ```html
-   <!-- <img class="track-photo" src="assets/track.jpg" alt="Saratoga Race Course"> -->
+**Logging & history**
+- **Track Condition & Weather Log** — automatically logs the most recently *completed* day (high/low
+  temp, average wind + peak gust + prevailing direction, rain total, dirt + turf condition,
+  conditions text) once it's over, or on demand via "Log Today's Snapshot Now" (flagged as partial
+  since the day isn't finished). This is the data foundation an eventual bias tracker will read from.
+- **Historical Lookup** — pull any date from the last year live from Open-Meteo's free archive API,
+  with a button to add it to the permanent log.
+
+**Alerts**
+- A bell icon in the header with an unread-count badge opens a dropdown **Alert Feed**, filterable
+  by category (All / Weather / Bias).
+- **Weather alerts** fire automatically on real threshold *crossings* (not every refresh while a
+  condition holds): wind or gusts crossing 15 and 25 mph, rain starting/stopping, today's rainfall
+  crossing 0.25" and 0.5", and the dirt condition tier changing.
+- **Bias alerts** fire whenever the Daily Log gains or updates an entry.
+- Capped at the 50 most recent alerts, newest first.
+
+## What's stubbed out or planned but not built yet
+
+- **Scratch and Odds alerts** — the alert system already has `scratch` and `odds` categories
+  defined (icon/label/color) in `ALERT_TYPES`, but with `enabled: false` and no data source, so
+  their filter buttons don't render yet. Wiring one up later is a matter of plugging in a feed and
+  flipping the flag — no UI restructuring needed. (Scratches specifically are a hard problem: see
+  `DECISIONS.md` for why Equibase isn't a usable free source.)
+- **Shared/cross-device storage** — the Daily Log and Alert Feed currently live in `localStorage`
+  only (see Known Limitations). Firebase Firestore has been chosen as the direction for making this
+  shared across visitors/devices, but setup was interrupted mid-way and isn't wired in yet.
+- **Multi-track support** — the dashboard is hardcoded to Saratoga. A `TRACKS` object + a track
+  selector in the header is the natural next step (swap `LAT`/`LON` and the track photo per track).
+- **Bias tracker** — the Daily Log is explicitly built as the data foundation for this, but the
+  actual bias-analysis feature (correlating logged conditions with how races/track bias actually
+  played out) doesn't exist yet.
+
+## Known limitations
+
+- **`localStorage` only, no backend.** The Daily Log, Alert Feed, and alert dedupe state all live in
+  the visitor's own browser. They don't sync across devices, aren't visible to anyone else viewing
+  the site, and are gone if the browser's site data is cleared. This is a static file with no
+  server — there's nowhere else for this to live yet.
+- **Single track, hardcoded.** Saratoga's coordinates (`LAT`/`LON`) and photo are constants in the
+  script, not configurable from the UI.
+- **Track condition / turf split are heuristic estimates, not official calls.** They're clearly
+  labeled as such everywhere they appear, and the NYRA panel next to them is the real source of
+  truth when the two disagree.
+- **Radar "Now" mode can't look far ahead** — real weather radar physically can't forecast days out;
+  that's what the "Forecast — Storms" toggle is for, and it's model data (ECMWF), not observed
+  radar, so it's less precise about "right now."
+- **Historical Lookup lags ~5 days.** Open-Meteo's archive (ERA5 reanalysis) isn't available for the
+  most recent few days yet — the date picker is capped accordingly.
+- **Wind Forecast Scrubber only projects 6 hours ahead**, limited by how far out we pull 15-minute
+  resolution data.
+- **No authentication.** The site (and anything added to it later) is fully public.
+
+## How to run it locally
+
+This is a static file — no `npm install`, no `pip install`, no build step. Two ways to run it:
+
+1. **Quickest look:** double-click `index.html` to open it directly in a browser. Works for basic
+   viewing, but some browsers restrict embedded iframes (NYRA, Windy) differently under a `file://`
+   URL than a real server would.
+2. **Recommended (matches production behavior):** serve it locally, e.g.
+   ```bash
+   python3 -m http.server 8000
    ```
-   Uncomment it (remove the `<!--` and `-->`) and set `src` to your file's path.
-3. Optional: delete or comment out the `<svg id="trackSvg">...</svg>` block right below it,
-   since the photo will sit on top of it either way (z-index isn't required — the `<img>`
-   is absolutely positioned to fully cover the SVG).
+   then open `http://localhost:8000`. In VS Code, the **Live Server** extension works the same way
+   (right-click `index.html` → "Open with Live Server").
 
-The wind compass dial in the bottom-right corner sits on top of whichever track visual you use,
-so it'll overlay correctly on your real photo automatically.
+## Setup notes
 
-## Add your logo
+- **No API keys, anywhere.** Every data source used is free and keyless:
+  - [Open-Meteo](https://open-meteo.com) — current conditions, hourly/15-min/daily forecast, and
+    the historical archive API.
+  - [Windy.com](https://www.windy.com) embed — live radar and multi-day precipitation forecast.
+  - NYRA's own site — live scratches/track-condition/rail iframe, embedded directly (the same iframe
+    NYRA uses on their own page).
+- **Refresh rate** is set in the script:
+  ```js
+  const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+  ```
+  Open-Meteo's free tier is generous, but don't go below ~1 minute on a public-facing page.
+- **Deploying:** this repo auto-deploys to GitHub Pages on every push to `main` (usually live within
+  a minute or two). The repo has a `.nojekyll` file — don't remove it, or Pages builds can start
+  failing intermittently again (see `DECISIONS.md`). To point this at a different host instead:
+  it's just `index.html` + `assets/`, so it can be embedded as a page/section on an existing site,
+  dropped into an `<iframe>`, or hosted anywhere static files work (Netlify, Vercel, S3, etc.).
 
-The header ships with a commented-out logo slot sitting right over the "Command Center" text:
+## See also
 
-```html
-<!-- <img class="brand-logo" src="assets/logo.png" alt="GiddyUpBets"> -->
-```
-
-1. Drop your logo into `assets/logo.png` (any name/extension is fine, just update the `src`).
-   A transparent PNG or SVG works best against the dark header.
-2. Uncomment the `<img>` tag. It's absolutely positioned over the "Command Center" label,
-   so once it's in place you can delete that text `<div>` if you don't want it peeking out
-   from behind a transparent logo.
-
-## Switching to a different track (or adding a dropdown later)
-
-The coordinates are set at the top of the `<script>` block:
-
-```js
-const LAT = 43.0723, LON = -73.7859; // Saratoga Race Course
-```
-
-When you're ready for multiple tracks, the cleanest next step is turning this into a small
-JS object, e.g.:
-
-```js
-const TRACKS = {
-  saratoga:  { name: "Saratoga Race Course", lat: 43.0723, lon: -73.7859, img: "assets/saratoga.jpg" },
-  belmont:   { name: "Belmont Park",         lat: 40.7181, lon: -73.7226, img: "assets/belmont.jpg" },
-  churchill: { name: "Churchill Downs",      lat: 38.2039, lon: -85.7695, img: "assets/churchill.jpg" },
-};
-```
-...with a `<select>` in the header that calls `fetchWeather()` with the chosen track's lat/lon.
-I can wire this up whenever you're ready — just say the word.
-
-## What's included
-
-- **Wind compass** — rotating needle (true wind direction) + live speed reading, overlaid on the track.
-- **Temperature** tile with "feels like."
-- **Wind gusts** tile (separate from sustained speed).
-- **Rainfall** tile — today's total + current hourly rate, flags red past 0.5".
-- **Humidity, cloud cover, pressure, conditions text** (e.g. "Light rain").
-- **Track condition estimate** (Fast / Good / Muddy / Sloppy) — a simple heuristic off rainfall,
-  clearly labeled as an estimate, not an official call.
-- **8-hour ticker** — scrolling strip of upcoming temp / rain probability / wind.
-- **Auto-refresh** every 5 minutes, with a visible countdown and manual refresh button.
-- **Connection status pill** — turns red if a fetch fails, and it auto-retries on the next cycle.
-
-## Adjusting refresh rate
-
-In `<script>`:
-```js
-const REFRESH_MS = 5 * 60 * 1000; // change 5 to however many minutes you want
-```
-Open-Meteo's free tier is generous, but don't go below ~1 minute on a public-facing page.
-
-## Deploying to your site
-
-This is a static file — it can be:
-- Embedded directly as a page/section on GiddyUpBets (upload `index.html` + `assets/` folder).
-- Dropped into an `<iframe>` on an existing page.
-- Hosted for free on GitHub Pages, Netlify, or Vercel if you want it at its own URL.
-
-No backend required unless/until you add things like paid odds feeds or your own database —
-happy to help with that step when you get there.
+- `DECISIONS.md` — running log of why key architectural/data-source choices were made, so they
+  don't get relitigated from scratch. Check it before proposing a different data source, storage
+  approach, or platform for something already decided here.
