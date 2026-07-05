@@ -6,6 +6,29 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## NWS active-alerts API added as a new "Severe Wx" alert category
+**Date:** 2026-07-05
+**Decision:** Added a `severe` category to the existing Alert Feed, sourced from the National
+Weather Service's free, keyless `api.weather.gov/alerts/active?point=<lat>,<lon>` endpoint for
+Saratoga's coordinates. Only alerts NWS itself rates Moderate severity or higher are surfaced
+(Minor/Unknown — e.g. Air Quality Alert — are filtered out). Alerts are diffed against a persisted
+"last seen" list (`localStorage`, same edge-triggered pattern as the existing weather-alert
+threshold crossings) so an alert fires once when it becomes active and once more when NWS lifts it,
+rather than re-firing on every 5-minute poll. Fetched alongside the existing Open-Meteo call inside
+`fetchWeather()`, in its own try/catch so a hiccup on the NWS side never breaks the weather display.
+**Why:** This is the actual government call that triggers real-world race delays (severe
+thunderstorms/lightning, excessive heat) — more authoritative for that purpose than our own
+threshold-crossing wind/rain alerts, which are just heuristic reads of raw Open-Meteo numbers.
+Confirmed via direct `curl` before building: the endpoint is CORS-open
+(`access-control-allow-origin: *`), needs no API key, and returns a clean GeoJSON feature list with
+a stable `id`, `event`, `severity`, and `expires` per alert — everything needed for dedupe and
+display without scraping or a proxy.
+**Alternatives considered:** Deriving "severe weather" purely from Open-Meteo's WMO weather codes
+(rejected — WMO codes describe current conditions, not government-issued watches/warnings, so
+there's no way to know a Severe Thunderstorm Warning or Excessive Heat Warning is in effect from
+weather codes alone); surfacing every NWS severity tier including Minor/Unknown (rejected — floods
+the feed with routine advisories like Air Quality Alerts that don't affect racing).
+
 ## AI Racing Summary: rule-based template filling, not a live LLM call
 **Date:** 2026-07-05
 **Decision:** Added a highlighted "briefing" callout near the top of the dashboard, labeled

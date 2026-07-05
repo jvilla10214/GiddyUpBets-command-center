@@ -65,10 +65,15 @@ with no build step, no server, and no paid APIs.
 
 **Alerts**
 - A bell icon in the header with an unread-count badge opens a dropdown **Alert Feed**, filterable
-  by category (All / Weather / Bias).
+  by category (All / Weather / Severe Wx / Bias).
 - **Weather alerts** fire automatically on real threshold *crossings* (not every refresh while a
   condition holds): wind or gusts crossing 15 and 25 mph, rain starting/stopping, today's rainfall
   crossing 0.25" and 0.5", and the dirt condition tier changing.
+- **Severe Wx alerts** pull from the National Weather Service's official active-alerts API
+  (api.weather.gov) for Saratoga's coordinates — the actual government source that triggers
+  real-world race delays (severe thunderstorms, lightning, excessive heat), not our own heuristic.
+  Only Moderate-severity-and-up alerts surface (Minor/Unknown, e.g. routine air-quality advisories,
+  are filtered out); an alert fires once when it becomes active and again when NWS lifts it.
 - **Bias alerts** fire whenever the Daily Log gains or updates an entry.
 - Capped at the 50 most recent alerts, newest first.
 
@@ -130,6 +135,8 @@ This is a static file — no `npm install`, no `pip install`, no build step. Two
   - [Windy.com](https://www.windy.com) embed — live radar and multi-day precipitation forecast.
   - NYRA's own site — live scratches/track-condition/rail iframe, embedded directly (the same iframe
     NYRA uses on their own page).
+  - [National Weather Service API](https://api.weather.gov) — official active severe-weather
+    alerts for Saratoga's coordinates.
 - **Refresh rate** is set in the script:
   ```js
   const REFRESH_MS = 5 * 60 * 1000; // 5 minutes

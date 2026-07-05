@@ -775,6 +775,7 @@
     margin-top: 4px;
   }
   .alert-row.alert-weather .alert-dot{ background: var(--tote-amber); box-shadow: 0 0 6px var(--tote-amber); }
+  .alert-row.alert-severe .alert-dot{ background: var(--silk-red); box-shadow: 0 0 6px var(--silk-red); }
   .alert-row.alert-bias .alert-dot{ background: var(--rail-green); box-shadow: 0 0 6px var(--rail-green); }
   .alert-body{ min-width: 0; }
   .alert-message{
@@ -792,6 +793,7 @@
     letter-spacing: 0.5px;
   }
   .alert-row.alert-weather .alert-category{ color: var(--tote-amber); }
+  .alert-row.alert-severe .alert-category{ color: var(--silk-red); }
   .alert-row.alert-bias .alert-category{ color: var(--rail-green); }
 
   footer{
@@ -1423,10 +1425,11 @@
   // Scratch/odds are defined here so the UI filter structure is ready, but
   // they have no data source yet — deliberately left unpopulated.
   const ALERT_TYPES = {
-    weather: { label: "Weather", colorVar: "--tote-amber", enabled: true },
-    bias:    { label: "Bias",    colorVar: "--rail-green",  enabled: true },
-    scratch: { label: "Scratch", colorVar: "--silk-red",    enabled: false },
-    odds:    { label: "Odds",    colorVar: "--sky",         enabled: false },
+    weather: { label: "Weather",  colorVar: "--tote-amber", enabled: true },
+    severe:  { label: "Severe Wx", colorVar: "--silk-red",  enabled: true },
+    bias:    { label: "Bias",     colorVar: "--rail-green", enabled: true },
+    scratch: { label: "Scratch",  colorVar: "--silk-red",   enabled: false },
+    odds:    { label: "Odds",     colorVar: "--sky",        enabled: false },
   };
 
   const ALERT_FEED_KEY = "giddyupbets_alert_feed_v1";
@@ -1619,6 +1622,72 @@
       "bias",
       `${fmtLogDateShort(entry.date)} logged — Dirt: ${entry.dirtConditionLabel}, Turf: ${entry.turfConditionLabel}, Rain: ${entry.rainTotal.toFixed(2)} in`
     ));
+  }
+
+  // ---------- NWS severe weather alerts ----------
+  // api.weather.gov is the official U.S. government severe-weather source — free,
+  // keyless, CORS-open (verified: `access-control-allow-origin: *`), and the
+  // actual real-world trigger for race delays (lightning/severe storms, excessive
+  // heat) — unlike the wind/rain alerts above, which are just our own threshold
+  // reads of raw Open-Meteo numbers, this is the government's own official call.
+  const NWS_ALERTS_URL = `https://api.weather.gov/alerts/active?point=${LAT},${LON}`;
+  const NWS_SEEN_KEY = "giddyupbets_nws_seen_alerts_v1";
+
+  function loadSeenNwsAlerts(){
+    try{
+      const raw = localStorage.getItem(NWS_SEEN_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("NWS alert state failed to load", err);
+      return [];
+    }
+  }
+  function saveSeenNwsAlerts(list){
+    try{ localStorage.setItem(NWS_SEEN_KEY, JSON.stringify(list)); }
+    catch(err){ console.error("NWS alert state failed to save", err); }
+  }
+  let seenNwsAlerts = loadSeenNwsAlerts();
+
+  // Pure parser (no fetch, no DOM) so it can be checked directly against sample
+  // API responses. NWS rates every alert Extreme/Severe/Moderate/Minor/Unknown —
+  // Minor/Unknown are routine advisories (e.g. Air Quality Alert), so only
+  // Moderate-and-up make the feed to keep this high-signal.
+  function classifyNwsAlerts(features){
+    return (features ?? [])
+      .map(f => f.properties)
+      .filter(p => p?.severity && p.severity !== "Minor" && p.severity !== "Unknown")
+      .map(p => ({ id: p.id, event: p.event, severity: p.severity, expires: p.expires }));
+  }
+
+  // Diffs this poll's active alerts against the last-seen set (persisted, same
+  // edge-triggered pattern as detectWeatherAlerts above): newly-appeared alerts
+  // push an "in effect" message, alerts that dropped out of the active list
+  // push an "ended" message using the name we already had stored for them.
+  async function fetchNwsAlerts(){
+    try{
+      const res = await fetch(NWS_ALERTS_URL, { headers: { Accept: "application/geo+json" } });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const active = classifyNwsAlerts(data.features);
+      const activeIds = active.map(a => a.id);
+
+      active.forEach(a => {
+        if (!seenNwsAlerts.some(s => s.id === a.id)){
+          pushAlert(makeAlert("severe", `${a.event} in effect (${a.severity}) — until ${fmtTime(a.expires)}`));
+        }
+      });
+      seenNwsAlerts.forEach(s => {
+        if (!activeIds.includes(s.id)){
+          pushAlert(makeAlert("severe", `${s.event} has ended`));
+        }
+      });
+
+      seenNwsAlerts = active;
+      saveSeenNwsAlerts(seenNwsAlerts);
+    } catch(err){
+      console.error("NWS alerts fetch failed", err);
+    }
   }
 
   // ---------- Track play analysis (rule-based heuristic, no LLM) ----------
@@ -2070,6 +2139,7 @@
       render(data);
       setStatus(true, "Live");
       $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'});
+      fetchNwsAlerts(); // separate free-standing API — a hiccup here shouldn't affect the weather status pill
     } catch(err){
       console.error(err);
       setStatus(false, "Connection issue — retrying");
