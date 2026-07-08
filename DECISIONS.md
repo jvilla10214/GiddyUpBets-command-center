@@ -6,6 +6,46 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Odds/entries/morning-line: no free source found, live embed attempted and reverted
+**Date:** 2026-07-09
+**Decision:** No odds, entries, or morning-line feature was added. Every source checked either
+blocks automated access outright or actively blocks embedding:
+- **Live/current pari-mutuel odds**: don't exist as free data anywhere — they're proprietary
+  tote-system output (AmTote/United Tote), commercially licensed. NYRA's own CDN odds/toteboard
+  paths (`tr-cdn.nyra.com/direct/odds/...`, mirroring the scratches URL pattern that *is* open)
+  return 403. NYRA Bets (NYRA's official ADW) is a login-gated app with no public data.
+- **FanOdds.com**: blocked to automated fetch (403 via `curl` *and* a separate fetch tool, so not
+  curl-fingerprint-specific) and explicitly sets `X-Frame-Options: DENY` / `frame-ancestors 'none'`
+  — can't be fetched or embedded. Its CSP `report-uri` points at `puntapi.com`, a commercial racing
+  data platform, explaining the wall. `racing-odds.com` is the same story (403).
+- **DRF entries/morning-line** (`drf.com/race-entries/track/SAR/country/USA/date/MM-DD-YYYY`):
+  looked viable on paper — CORS-open, no `X-Frame-Options` or `frame-ancestors` header — so an
+  iframe embed (same "embed live, don't scrape" pattern as the NYRA scratches panel) was actually
+  built and wired into a new sidebar page. It didn't work: the iframe consistently failed to load
+  with `net::ERR_ABORTED` on every attempt, in the live preview, not just in theory. No HTTP header
+  explains that — it's almost certainly a JavaScript frame-buster in DRF's React/webpack bundle
+  (the page is a client-rendered SPA, not static HTML, so this couldn't have been caught by
+  inspecting the raw HTML/headers alone). The feature was reverted rather than ship a panel that's
+  permanently blank.
+- **NYRA's own entries page** (`nyra.com/saratoga/racing/entries/`) does contain real morning-line
+  data, server-rendered in the raw HTML (sourced from Equibase, under NYRA's own license) — but it
+  sets `X-Frame-Options: SAMEORIGIN` (blocks embedding from any other origin) and has no
+  `Access-Control-Allow-Origin` header (blocks `fetch()` too). Dead end via both methods.
+**Why this matters for future work:** the "embed live, don't scrape" pattern that worked for NYRA
+scratches doesn't generalize — it worked there because NYRA's CDN scratches page specifically has no
+`X-Frame-Options`/CSP restriction *and* no JS frame-buster. Every odds/entries source checked either
+blocks at the HTTP layer or blocks via JS at the page layer, and a clean CORS/header check isn't
+suffient to predict the JS case — it has to be tested with an actual embed, which is what caught the
+DRF case here. Revisit only if a specific new source is proposed with a reason to believe it's
+actually embeddable (verify live before committing to the feature, not just via `curl` headers).
+**Alternatives considered:** A paid odds/tote-data API (out of scope — user has consistently wanted
+free-only sources, matching every other data-source decision in this file); scraping via a headless
+browser to defeat the frame-buster (rejected — same category of "deliberately routing around a
+site's access model" already rejected for Equibase, and DRF's frame-buster is exactly that kind of
+deliberate anti-embedding measure, not an oversight).
+
+---
+
 ## Split Historical Weather Data and Bias Tracker into their own sidebar pages
 **Date:** 2026-07-08
 **Decision:** The "Track Condition & Weather Log" panel (previously a 3-tab panel — Daily Log,
