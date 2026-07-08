@@ -9,6 +9,14 @@ with no build step, no server, and no paid APIs.
 **Live:** https://jvilla10214.github.io/GiddyUpBets-command-center/
 **Repo:** https://github.com/jvilla10214/GiddyUpBets-command-center
 
+## Layout
+
+A persistent left icon-rail (not a hamburger menu — always visible, same on mobile and desktop)
+switches between pages: **Dashboard** (everything below) and **News Wire**. It's a plain
+show/hide toggle over static DOM, config-driven (`SIDEBAR_PAGES` in the script), so adding another
+page later is a new sidebar button plus one array entry — no restructuring. More pages (e.g. the
+floated future Calendar/archive page) can slot in the same way.
+
 ## What's fully working right now
 
 **AI Racing Summary**
@@ -83,11 +91,12 @@ with no build step, no server, and no paid APIs.
 - **Bias alerts** fire whenever the Daily Log or Bias Tracker gains or updates an entry.
 - Capped at the 50 most recent alerts, newest first.
 
-**Racing News Wire**
-- A right-column panel pulling general racing-industry news from three free RSS feeds — DRF,
-  Thoroughbred Daily News, and America's Best Racing — merged, sorted newest-first, capped at 30
-  items, refreshing every 15 minutes. DRF's feed exposes CORS directly; TDN and ABR don't, so those
-  two route through rss2json.com (free, keyless) to be readable from the browser.
+**Racing News Wire** (its own sidebar page)
+- A dedicated page (left sidebar → News Wire) pulling general racing-industry news from three free
+  RSS feeds — DRF, Thoroughbred Daily News, and America's Best Racing — merged, sorted newest-first,
+  capped at 30 items in a card grid, refreshing every 15 minutes. DRF's feed exposes CORS directly;
+  TDN and ABR don't, so those two route through rss2json.com (free, keyless) to be readable from the
+  browser.
 - Deliberately **not** filtered to Saratoga-only (would sit empty for long stretches outside major
   local stories) — items mentioning Saratoga by name are flagged instead, so they still stand out
   inside the general wire.

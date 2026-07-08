@@ -158,13 +158,71 @@
   }
 
   /* ---------- Layout ---------- */
+  .app-shell{
+    display:flex;
+    align-items:flex-start;
+    gap: 18px;
+  }
+  .sidebar{
+    flex: 0 0 84px;
+    display:flex;
+    flex-direction:column;
+    gap: 6px;
+    position: sticky;
+    top: 20px;
+  }
+  .sidebar-btn{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap: 6px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 14px 4px;
+    cursor:pointer;
+    color: var(--parchment-dim);
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    text-align:center;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .sidebar-btn svg{ width:22px; height:22px; flex-shrink:0; }
+  .sidebar-btn:hover{ color: var(--parchment); border-color: var(--parchment-dim); }
+  .sidebar-btn.active{ color: var(--tote-amber); border-color: var(--tote-amber); background: rgba(240,180,41,0.08); }
+  .page{ display:none; flex:1; min-width:0; }
+  .page.active{ display:block; }
+  @media (max-width: 900px){
+    /* align-items:flex-start (needed so the sidebar doesn't stretch to the
+       content's height in the desktop row layout) becomes shrink-to-fit on
+       the now-vertical cross axis once stacked, letting .page grow to its
+       widest descendant instead of clamping to the viewport — stretch fixes it. */
+    .app-shell{ flex-direction:column; align-items:stretch; }
+    .sidebar{
+      flex-direction:row;
+      position:static;
+      overflow-x:auto;
+      width:100%;
+    }
+    .sidebar-btn{ flex: 0 0 auto; min-width: 76px; }
+  }
+
   .grid{
     display:grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
     gap: 18px;
+    width: 100%;
+    min-width: 0;
   }
   @media (max-width: 900px){
-    .grid{ grid-template-columns: 1fr; }
+    /* Nested inside the .page flex item now (sidebar layout), so 1fr needs an
+       explicit definite width to resolve against — without it the track falls
+       back to sizing against its widest child's max-content (e.g. the log
+       table) and overflows the actual box instead of shrinking to it. */
+    .grid{ grid-template-columns: minmax(0, 1fr); }
   }
 
   .panel{
@@ -413,6 +471,16 @@
     overflow-y:auto;
     margin-top: 4px;
   }
+  /* Full News Wire page has room to breathe — a two-column card grid instead
+     of the cramped single-column list the narrow sidebar tile used. */
+  .news-wire-list-full{
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    max-height: none;
+    overflow-y: visible;
+    gap: 10px;
+  }
+  .news-wire-list-full .news-item{ height:100%; }
   .news-wire-empty{
     color: var(--parchment-dim);
     font-family:'IBM Plex Mono', monospace;
@@ -972,6 +1040,31 @@
   </div>
 </header>
 
+<div class="app-shell">
+  <nav class="sidebar" id="sidebar">
+    <button type="button" class="sidebar-btn active" data-page="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/>
+        <rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/>
+        <rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      Dashboard
+    </button>
+    <button type="button" class="sidebar-btn" data-page="news">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 4h13a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4"/>
+        <path d="M4 4v16"/>
+        <path d="M8 8h7"/>
+        <path d="M8 12h7"/>
+        <path d="M8 16h4"/>
+      </svg>
+      News Wire
+    </button>
+  </nav>
+
+  <div class="page active" id="page-dashboard">
+
 <div class="grid">
   <!-- LEFT: Track + wind -->
   <div class="panel">
@@ -1153,20 +1246,6 @@
         Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.
       </div>
     </div>
-
-    <div class="tile news-wire-panel">
-      <div class="panel-title" style="margin-bottom:10px;">
-        Racing News Wire
-        <span class="tag" id="newsWireTag">LOADING</span>
-      </div>
-      <div class="news-wire-list" id="newsWireList">
-        <div class="news-wire-empty">Loading racing news…</div>
-      </div>
-      <div class="news-wire-disclaimer">
-        Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just
-        Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
-      </div>
-    </div>
   </div>
 
 </div>
@@ -1276,6 +1355,26 @@
     than a rolling window. Bias Tracker entries are your own manual read of how a card played — not derived from any
     data feed.
   </div>
+</div>
+
+  </div>
+
+  <div class="page" id="page-news">
+    <div class="panel news-wire-page-panel">
+      <div class="panel-title">
+        Racing News Wire
+        <span class="tag" id="newsWireTag">LOADING</span>
+      </div>
+      <div class="news-wire-list news-wire-list-full" id="newsWireList">
+        <div class="news-wire-empty">Loading racing news…</div>
+      </div>
+      <div class="news-wire-disclaimer">
+        Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just
+        Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <footer>
@@ -2620,6 +2719,23 @@
     $("countdown").textContent = `${m}:${s}`;
     if (secondsLeft <= 0) fetchWeather();
   }
+
+  // ---------- Sidebar page navigation ----------
+  // Config-driven like LOG_TABS below — adding another sidebar page later
+  // (e.g. the Calendar/archive page floated for future work) is just another
+  // button in the sidebar HTML plus one more entry here, no restructuring.
+  const SIDEBAR_PAGES = ["dashboard", "news"];
+  function setActivePage(pageId){
+    SIDEBAR_PAGES.forEach(p => {
+      $(`page-${p}`).classList.toggle("active", p === pageId);
+    });
+    document.querySelectorAll(".sidebar-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.page === pageId);
+    });
+  }
+  document.querySelectorAll(".sidebar-btn").forEach(btn => {
+    btn.addEventListener("click", () => setActivePage(btn.dataset.page));
+  });
 
   $("refreshBtn").addEventListener("click", fetchWeather);
   $("forecastSlider").addEventListener("input", (e) => applyForecastStep(+e.target.value));

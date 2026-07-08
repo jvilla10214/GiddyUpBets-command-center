@@ -6,6 +6,44 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Sidebar navigation: persistent icon-rail, not a hamburger menu, and moved News Wire to its own page
+**Date:** 2026-07-08
+**Decision:** Restructured the page around a left sidebar (`.app-shell` = `.sidebar` + one `.page`
+per section) instead of one long scrolling page. Two pages exist today — Dashboard (everything that
+was already there, minus News Wire) and News Wire (moved out, and given a full-page two-column card
+grid instead of the cramped 380px-tall single-column list it had as a right-column tile). The
+sidebar is a permanent icon-rail — same on mobile and desktop, not a collapsible hamburger drawer —
+config-driven (`SIDEBAR_PAGES` array), same show/hide-over-static-DOM pattern already used for the
+Daily Log/Historical Lookup/Bias Tracker tabs.
+**Why:** User request, framed around the "Bloomberg terminal / one-stop shop" direction — a
+permanent nav rail matches how real trading terminals work and reads as "sections of one workspace"
+rather than "tabs you might miss." It also sets up the infrastructure for the Calendar/email-archive
+page floated earlier as a future idea: that's just another sidebar button and `.page` div, no
+architectural rework needed. A hamburger-style collapsible drawer was the alternative but was
+rejected as unnecessary complexity — with only 2-3 pages, a small persistent rail costs little
+screen space and needs no open/close state to manage.
+**Gotcha hit and fixed while building this:** wrapping the existing `.grid` inside a flex item
+(`.page` inside `.app-shell`) broke mobile layout with real horizontal overflow, from two separate
+flexbox/grid intrinsic-sizing issues stacked on top of each other — worth documenting since it'll
+bite again if this shell is restructured further: (1) `.app-shell` used `align-items: flex-start`
+(needed on desktop so the sidebar doesn't stretch to the content column's height), but at the
+mobile breakpoint where `flex-direction` switches to `column`, `flex-start` on the now-vertical
+cross-axis means "shrink-to-fit content" instead of "stretch to container width" — fixed by
+overriding to `align-items: stretch` inside the same `max-width: 900px` media query. (2) Even with
+`.page` correctly clamped, `.grid`'s `1fr` track (under `max-width: 900px`) was resolving to its
+widest child's max-content size (e.g. the 10-column log table) rather than the container's actual
+width, because an `fr` track needs a *definite* container size to resolve against and one wasn't
+reliably available through the new flex ancestor chain — fixed with `minmax(0, 1fr)` instead of
+bare `1fr` (forces the track's minimum to 0 so it can shrink below content size) plus an explicit
+`width: 100%; min-width: 0;` on `.grid` itself. Caught via `document.documentElement.scrollWidth` vs
+`clientWidth` in the live preview, not visually — the emulated mobile viewport in this session's
+preview tool didn't reliably reflect resizes in `window.innerWidth` reads, so numeric DOM
+measurements were the trustworthy signal, not screenshots alone.
+**Alternatives considered:** None seriously for the nav pattern itself (hamburger drawer was the
+only real alternative, addressed above). For the overflow bug, no alternative fixes were considered
+since `minmax(0, 1fr)` + explicit width is the standard, narrowly-scoped fix for this exact
+grid/flexbox interaction.
+
 ## Racing News Wire: general industry news + Saratoga flagging, not Saratoga-only filtering
 **Date:** 2026-07-08
 **Decision:** Added a right-column panel pulling merged, newest-first RSS from three sources — DRF
