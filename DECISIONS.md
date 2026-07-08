@@ -6,6 +6,54 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Racing News Wire: general industry news + Saratoga flagging, not Saratoga-only filtering
+**Date:** 2026-07-08
+**Decision:** Added a right-column panel pulling merged, newest-first RSS from three sources — DRF
+(fetched directly, CORS-open), Thoroughbred Daily News, and America's Best Racing (both routed
+through rss2json.com, a free keyless RSS-to-JSON bridge, since neither exposes CORS). Capped at 30
+items, refreshes every 15 minutes. The wire shows general racing-industry news; items mentioning
+"Saratoga" in the title are visually flagged rather than the feed being filtered to Saratoga-only.
+Title/link from every item are rendered via DOM APIs (`textContent`, a real `<a>` element with the
+href set as a property) instead of `innerHTML` string interpolation, and links are restricted to
+`http(s)://` — both guard against a compromised or malformed feed injecting markup or a
+`javascript:` URI, since these are externally-controlled strings.
+**Why:** Paulick Report and BloodHorse (the two outlets originally proposed) turned out to have
+dropped public RSS in recent site redesigns (confirmed via direct `curl` — 404s on every path
+tried), so the source list was substituted for three that actually work. Saratoga-only filtering was
+considered but rejected: on a slow news day the wire would just sit empty, which defeats the point
+of a "wire" the user glances at regularly; flagging keeps it populated while still surfacing local
+relevance. Using rss2json for TDN/ABR is a different situation from the Equibase/NYRA CORS walls
+documented elsewhere in this file — RSS is explicitly published for outside programs to consume, not
+gated behind bot detection, so bridging the missing CORS header isn't circumventing anything.
+**Alternatives considered:** A CORS proxy instead of rss2json (rejected — rss2json is purpose-built
+for exactly this browser-can't-read-RSS problem and returns clean JSON instead of raw XML to parse);
+building a dedicated "trainer quotes" scraper as a separate feature (rejected — no clean free source
+for that specifically; it's already a subset of normal coverage inside DRF/TDN/ABR, so a separate
+scraper would be redundant with the general wire).
+
+## Bias Tracker: manual entry, per-racing-day, joined against the Daily Log by date
+**Date:** 2026-07-08
+**Decision:** Added a third tab ("Bias Tracker") alongside Daily Log/Historical Lookup in the
+Track Condition & Weather Log panel. Entries are hand-entered (date, a running-style-bias dropdown,
+an optional rail note, free-form notes) and stored in `localStorage` (`giddyupbets_bias_log_v1`),
+one entry per date — same grain and same load/save/upsert pattern already used for the Daily Log.
+Each rendered row looks up that date's Dirt/Turf condition from `weatherLog` and displays it inline,
+so conditions and how-it-played sit side by side without needing to flip tabs. Saving a note pushes
+a `bias`-category alert, same as an auto-logged day.
+**Why:** There's no free, automated source for "how a card actually played" — real bias reads
+(who could and couldn't make the lead work, whether the rail was live or dead) are an inherently
+qualitative, human judgment call, not something scraped or pulled from an API. The Daily Log was
+explicitly built as the data foundation for this feature (see its original 2026-07-03 entry below)
+specifically so this join-by-date would be trivial once bias entry existed. Per-day (not per-race)
+grain was chosen because the app doesn't track a race schedule/post-time list — that feature (the
+paste-in Race Card) was removed on 2026-07-04 — and per-day matches how the Daily Log already works,
+so no new date/race-identity concept had to be introduced.
+**Alternatives considered:** Extending the existing Daily Log table with extra bias columns instead
+of a separate tab (rejected — that table is already 10 columns wide; a dedicated tab keeps each
+table focused while still cross-referencing by date); per-race granularity (rejected — would require
+rebuilding some form of race/post-time list, which was deliberately removed and is out of scope
+right now).
+
 ## Home-screen/favicon branding: horseshoe icon + web app manifest
 **Date:** 2026-07-05
 **Decision:** Added a real icon set (`assets/favicon-32.png`, `assets/icon-192.png`,

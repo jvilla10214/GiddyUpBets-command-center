@@ -404,6 +404,64 @@
     line-height: 1.5;
   }
 
+  /* ---------- Racing News Wire ---------- */
+  .news-wire-list{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    max-height: 380px;
+    overflow-y:auto;
+    margin-top: 4px;
+  }
+  .news-wire-empty{
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    padding: 8px 0;
+  }
+  .news-item{
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+    padding: 8px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+  }
+  .news-item.saratoga{ border-left: 3px solid var(--tote-amber); }
+  .news-item-meta{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .news-item-source{ color: var(--sky); }
+  .news-item-saratoga-flag{
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.12);
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .news-item a{
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--parchment);
+    text-decoration: none;
+  }
+  .news-item a:hover{ color: var(--tote-amber); text-decoration: underline; }
+  .news-wire-disclaimer{
+    margin-top: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    line-height: 1.5;
+  }
+
   /* ---------- NYRA scratches / rail / track conditions embed ---------- */
   .nyra-panel{ margin-top: 18px; }
   .nyra-frame-wrap{
@@ -545,6 +603,68 @@
     margin-bottom: 16px;
     border-bottom: 1px solid var(--panel-border);
   }
+  .bias-form{
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .bias-form.open{ display: flex; }
+  .bias-form-row{ display:flex; gap: 12px; flex-wrap: wrap; }
+  .bias-form label{
+    display:flex; flex-direction:column; gap:4px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex: 1 1 160px;
+  }
+  .bias-form input, .bias-form select, .bias-form textarea{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+  }
+  .bias-form input:focus, .bias-form select:focus, .bias-form textarea:focus{ border-color: var(--tote-amber); }
+  .bias-form textarea{ resize: vertical; min-height: 60px; font-family: 'IBM Plex Sans', sans-serif; }
+  .bias-form-actions{ display:flex; gap: 10px; }
+  .bias-form-actions button{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: none;
+  }
+  #biasSaveBtn{ background: var(--tote-amber); color: var(--ink); }
+  #biasSaveBtn:hover{ background: #ffc94d; }
+  #biasCancelBtn{ background: none; border: 1px solid var(--panel-border); color: var(--parchment-dim); }
+  #biasCancelBtn:hover{ border-color: var(--parchment-dim); }
+  .bias-tag{
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+  .bias-speed{ background: rgba(240,180,41,0.15); color: var(--tote-amber); }
+  .bias-closer{ background: rgba(111,168,201,0.15); color: var(--sky); }
+  .bias-neutral{ background: rgba(169,164,150,0.15); color: var(--parchment-dim); }
+  .bias-mixed{ background: rgba(192,120,48,0.15); color: var(--clay); }
+  .bias-notes-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
   .log-tab{
     background: none;
     border: none;
@@ -1033,6 +1153,20 @@
         Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.
       </div>
     </div>
+
+    <div class="tile news-wire-panel">
+      <div class="panel-title" style="margin-bottom:10px;">
+        Racing News Wire
+        <span class="tag" id="newsWireTag">LOADING</span>
+      </div>
+      <div class="news-wire-list" id="newsWireList">
+        <div class="news-wire-empty">Loading racing news…</div>
+      </div>
+      <div class="news-wire-disclaimer">
+        Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just
+        Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
+      </div>
+    </div>
   </div>
 
 </div>
@@ -1046,6 +1180,7 @@
   <div class="log-tabs">
     <button type="button" class="log-tab active" id="logTabBtnDaily">Daily Log</button>
     <button type="button" class="log-tab" id="logTabBtnHistory">Historical Lookup</button>
+    <button type="button" class="log-tab" id="logTabBtnBias">Bias Tracker</button>
   </div>
 
   <div class="log-tab-panel" id="logTabDaily">
@@ -1087,10 +1222,59 @@
     </div>
   </div>
 
+  <div class="log-tab-panel" id="logTabBias" hidden>
+    <div class="log-controls">
+      <button type="button" id="addBiasBtn">+ Add Bias Note</button>
+      <span class="log-note">Your own read of how a card actually played, entered after racing — there's no free
+        automated source for this, so it's manual by design. Dirt/Turf columns are pulled from the matching Daily
+        Log entry for that date so you can compare at a glance.</span>
+    </div>
+
+    <div class="bias-form" id="biasForm">
+      <div class="bias-form-row">
+        <label>Date
+          <input type="date" id="biasDateInput">
+        </label>
+        <label>Running-Style Bias
+          <select id="biasStyleInput">
+            <option value="Speed-favoring">Speed-favoring</option>
+            <option value="Neutral / No Bias">Neutral / No Bias</option>
+            <option value="Closer-favoring">Closer-favoring</option>
+            <option value="Mixed / Inconsistent">Mixed / Inconsistent</option>
+          </select>
+        </label>
+        <label>Rail Note (optional)
+          <input type="text" id="biasRailInput" placeholder="e.g. dead rail, speed golden on the rail">
+        </label>
+      </div>
+      <label>Notes
+        <textarea id="biasNotesInput" placeholder="Free-form observations about how the card played…"></textarea>
+      </label>
+      <div class="bias-form-actions">
+        <button type="button" id="biasSaveBtn">Save</button>
+        <button type="button" id="biasCancelBtn">Cancel</button>
+      </div>
+    </div>
+
+    <div class="log-table-wrap">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Dirt</th><th>Turf</th><th>Bias</th><th>Rail</th><th>Notes</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="biasTableBody">
+          <tr><td colspan="7" class="log-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="log-disclaimer">
-    Daily Log is stored locally in this browser only (no backend, no sync across devices) — the data foundation for
-    the upcoming bias tracker. Track condition columns use the same dirt/turf heuristics as the live badges above,
-    adapted to a full day rather than a rolling window.
+    Daily Log and Bias Tracker are stored locally in this browser only (no backend, no sync across devices yet).
+    Track condition columns use the same dirt/turf heuristics as the live badges above, adapted to a full day rather
+    than a rolling window. Bias Tracker entries are your own manual read of how a card played — not derived from any
+    data feed.
   </div>
 </div>
 
@@ -1209,6 +1393,76 @@
   const LOG_STORAGE_KEY = "giddyupbets_weather_log_v1";
   const ARCHIVE_API_BASE = "https://archive-api.open-meteo.com/v1/archive";
   let weatherLog = [];
+
+  // ---------- Bias Tracker ----------
+  // There's no free automated source for "how the track actually played" —
+  // that's an inherently qualitative, human read, so this is manual entry by
+  // design (unlike everything else in this app, which is auto-fetched). Keyed
+  // by date, same grain as the Daily Log, so the two can be joined for display.
+  const BIAS_LOG_KEY = "giddyupbets_bias_log_v1";
+  const BIAS_STYLE_CLASS = {
+    "Speed-favoring": "bias-speed",
+    "Neutral / No Bias": "bias-neutral",
+    "Closer-favoring": "bias-closer",
+    "Mixed / Inconsistent": "bias-mixed",
+  };
+  let biasLog = [];
+
+  function loadBiasLog(){
+    try{
+      const raw = localStorage.getItem(BIAS_LOG_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("Bias log failed to load", err);
+      return [];
+    }
+  }
+  function saveBiasLog(){
+    try{ localStorage.setItem(BIAS_LOG_KEY, JSON.stringify(biasLog)); }
+    catch(err){ console.error("Bias log failed to save", err); }
+  }
+
+  function upsertBiasEntry(entry){
+    biasLog = biasLog.filter(e => e.date !== entry.date);
+    biasLog.push(entry);
+    biasLog.sort((a, b) => b.date.localeCompare(a.date));
+    saveBiasLog();
+    renderBiasTable();
+    pushAlert(makeAlert("bias", `${fmtLogDateShort(entry.date)} bias noted: ${entry.runningStyleBias}${entry.railNote ? " — Rail: " + entry.railNote : ""}`));
+  }
+  function removeBiasEntry(dateStr){
+    biasLog = biasLog.filter(e => e.date !== dateStr);
+    saveBiasLog();
+    renderBiasTable();
+  }
+
+  function renderBiasTable(){
+    const tbody = $("biasTableBody");
+    tbody.innerHTML = "";
+    if (!biasLog.length){
+      tbody.innerHTML = `<tr><td colspan="7" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
+      return;
+    }
+    biasLog.forEach(entry => {
+      const matchingLog = weatherLog.find(e => e.date === entry.date);
+      const tr = document.createElement("tr");
+      const styleClass = BIAS_STYLE_CLASS[entry.runningStyleBias] ?? "bias-neutral";
+      tr.innerHTML = `
+        <td>${entry.date}</td>
+        <td>${matchingLog?.dirtConditionLabel ?? "—"}</td>
+        <td>${matchingLog?.turfConditionLabel ?? "—"}</td>
+        <td><span class="bias-tag ${styleClass}">${entry.runningStyleBias}</span></td>
+        <td>${entry.railNote || "—"}</td>
+        <td class="bias-notes-cell">${entry.notes || "—"}</td>
+        <td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+    tbody.querySelectorAll(".log-remove").forEach(btn => {
+      btn.addEventListener("click", () => removeBiasEntry(btn.dataset.date));
+    });
+  }
 
   function shiftDateStr(dateStr, deltaDays){
     const d = new Date(`${dateStr}T00:00:00Z`);
@@ -1693,6 +1947,120 @@
     } catch(err){
       console.error("NWS alerts fetch failed", err);
     }
+  }
+
+  // ---------- Racing News Wire ----------
+  // General racing-industry news, not Saratoga-filtered — narrowing to
+  // Saratoga-only would leave the wire empty for long stretches outside major
+  // local stories, so Saratoga-mentioning items are flagged instead of
+  // filtering everything else out. DRF's feed exposes CORS directly
+  // (verified via curl); TDN and America's Best Racing don't, so those two
+  // route through rss2json.com (free, keyless) to be readable from the
+  // browser — a different situation from the Equibase/NYRA CORS walls
+  // elsewhere in this app, since RSS is explicitly published for outside
+  // programs to consume, not gated behind bot detection.
+  const NEWS_REFRESH_MS = 15 * 60 * 1000; // news moves slower than weather
+  const NEWS_ITEM_CAP = 30;
+  const NEWS_SOURCES = [
+    { name: "DRF", kind: "direct", url: "https://www.drf.com/rss.xml" },
+    { name: "TDN", kind: "bridge", url: "https://www.thoroughbreddailynews.com/feed/" },
+    { name: "ABR", kind: "bridge", url: "https://www.americasbestracing.net/rss" },
+  ];
+
+  function parseRssXml(xmlText){
+    const doc = new DOMParser().parseFromString(xmlText, "application/xml");
+    if (doc.querySelector("parsererror")) return [];
+    return [...doc.querySelectorAll("item")].map(item => ({
+      title: item.querySelector("title")?.textContent?.trim() ?? "",
+      link: item.querySelector("link")?.textContent?.trim() ?? "",
+      pubDate: item.querySelector("pubDate")?.textContent?.trim() ?? "",
+    }));
+  }
+
+  function newsItemTimestamp(pubDate){
+    const ms = pubDate ? Date.parse(pubDate) : NaN;
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+
+  // One source failing (rss2json hiccup, a feed going temporarily down) only
+  // drops that source's items — it shouldn't blank the whole wire.
+  async function fetchNewsSource(source){
+    try{
+      if (source.kind === "direct"){
+        const res = await fetch(source.url);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const xml = await res.text();
+        return parseRssXml(xml).map(it => ({ ...it, source: source.name, ts: newsItemTimestamp(it.pubDate) }));
+      }
+      const bridgeUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(source.url)}`;
+      const res = await fetch(bridgeUrl);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      if (data.status !== "ok") throw new Error("rss2json status: " + data.status);
+      return (data.items ?? []).map(it => ({
+        title: it.title, link: it.link, pubDate: it.pubDate,
+        source: source.name, ts: newsItemTimestamp(it.pubDate),
+      }));
+    } catch(err){
+      console.error(`News source ${source.name} failed`, err);
+      return [];
+    }
+  }
+
+  function isSaratogaItem(item){
+    return /saratoga/i.test(item.title);
+  }
+
+  function renderNewsWire(items){
+    const list = $("newsWireList");
+    const tag = $("newsWireTag");
+    tag.textContent = items.length ? `${items.length} ITEMS` : "NO ITEMS";
+    list.innerHTML = "";
+    if (!items.length){
+      list.innerHTML = `<div class="news-wire-empty">Couldn't reach any racing news sources right now.</div>`;
+      return;
+    }
+    items.forEach(item => {
+      // title/link come from external RSS feeds — built via DOM APIs (textContent,
+      // a real <a> element) rather than innerHTML string interpolation, so a feed
+      // can't inject markup/attributes into the page.
+      const saratoga = isSaratogaItem(item);
+      const div = document.createElement("div");
+      div.className = "news-item" + (saratoga ? " saratoga" : "");
+
+      const meta = document.createElement("div");
+      meta.className = "news-item-meta";
+      const sourceSpan = document.createElement("span");
+      sourceSpan.className = "news-item-source";
+      sourceSpan.textContent = item.source;
+      const timeSpan = document.createElement("span");
+      timeSpan.textContent = item.ts ? fmtRelativeTime(new Date(item.ts).toISOString()) : "—";
+      meta.append(sourceSpan, timeSpan);
+      if (saratoga){
+        const flag = document.createElement("span");
+        flag.className = "news-item-saratoga-flag";
+        flag.textContent = "Saratoga";
+        meta.appendChild(flag);
+      }
+
+      const link = document.createElement("a");
+      link.href = item.link;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = item.title;
+
+      div.append(meta, link);
+      list.appendChild(div);
+    });
+  }
+
+  async function fetchNewsWire(){
+    const results = await Promise.all(NEWS_SOURCES.map(fetchNewsSource));
+    const merged = results.flat()
+      .filter(it => it.title && /^https?:\/\//i.test(it.link ?? "")) // guards against a feed slipping in a javascript: URI
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, NEWS_ITEM_CAP);
+    renderNewsWire(merged);
   }
 
   // ---------- Track play analysis (rule-based heuristic, no LLM) ----------
@@ -2256,18 +2624,20 @@
   $("refreshBtn").addEventListener("click", fetchWeather);
   $("forecastSlider").addEventListener("input", (e) => applyForecastStep(+e.target.value));
 
-  $("logTabBtnDaily").addEventListener("click", () => {
-    $("logTabBtnDaily").classList.add("active");
-    $("logTabBtnHistory").classList.remove("active");
-    $("logTabDaily").hidden = false;
-    $("logTabHistory").hidden = true;
-  });
-  $("logTabBtnHistory").addEventListener("click", () => {
-    $("logTabBtnHistory").classList.add("active");
-    $("logTabBtnDaily").classList.remove("active");
-    $("logTabHistory").hidden = false;
-    $("logTabDaily").hidden = true;
-  });
+  const LOG_TABS = [
+    { btn: "logTabBtnDaily", panel: "logTabDaily" },
+    { btn: "logTabBtnHistory", panel: "logTabHistory" },
+    { btn: "logTabBtnBias", panel: "logTabBias" },
+  ];
+  function setActiveLogTab(activeBtnId){
+    LOG_TABS.forEach(({ btn, panel }) => {
+      const isActive = btn === activeBtnId;
+      $(btn).classList.toggle("active", isActive);
+      $(panel).hidden = !isActive;
+    });
+  }
+  LOG_TABS.forEach(({ btn }) => $(btn).addEventListener("click", () => setActiveLogTab(btn)));
+
   $("logNowBtn").addEventListener("click", logSnapshotNow);
   $("historyLookupBtn").addEventListener("click", () => {
     const val = $("historyDateInput").value;
@@ -2281,10 +2651,38 @@
     const { date: todayStr } = nowInTrackTZ();
     $("historyDateInput").max = shiftDateStr(todayStr, -5);
     $("historyDateInput").min = shiftDateStr(todayStr, -365);
+    $("biasDateInput").max = todayStr;
   })();
+
+  $("addBiasBtn").addEventListener("click", () => {
+    const { date: todayStr } = nowInTrackTZ();
+    $("biasDateInput").value = shiftDateStr(todayStr, -1); // default to yesterday's completed card
+    $("biasStyleInput").value = "Neutral / No Bias";
+    $("biasRailInput").value = "";
+    $("biasNotesInput").value = "";
+    $("biasForm").classList.add("open");
+  });
+  $("biasCancelBtn").addEventListener("click", () => {
+    $("biasForm").classList.remove("open");
+  });
+  $("biasSaveBtn").addEventListener("click", () => {
+    const date = $("biasDateInput").value;
+    if (!date){ $("biasDateInput").focus(); return; }
+    upsertBiasEntry({
+      date,
+      runningStyleBias: $("biasStyleInput").value,
+      railNote: $("biasRailInput").value.trim(),
+      notes: $("biasNotesInput").value.trim(),
+      capturedAt: new Date().toISOString(),
+    });
+    $("biasForm").classList.remove("open");
+  });
 
   weatherLog = loadWeatherLog();
   renderLogTable();
+
+  biasLog = loadBiasLog();
+  renderBiasTable();
 
   alertFeed = loadAlertFeed();
   alertState = loadAlertState();
@@ -2317,10 +2715,12 @@
 
   initWindFlow();
   fetchWeather();
+  fetchNewsWire();
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
+  setInterval(fetchNewsWire, NEWS_REFRESH_MS);
 })();
 </script>
 </body>

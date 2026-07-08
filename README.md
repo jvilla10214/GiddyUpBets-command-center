@@ -59,9 +59,15 @@ with no build step, no server, and no paid APIs.
 - **Track Condition & Weather Log** — automatically logs the most recently *completed* day (high/low
   temp, average wind + peak gust + prevailing direction, rain total, dirt + turf condition,
   conditions text) once it's over, or on demand via "Log Today's Snapshot Now" (flagged as partial
-  since the day isn't finished). This is the data foundation an eventual bias tracker will read from.
+  since the day isn't finished). This is the data foundation the Bias Tracker reads from.
 - **Historical Lookup** — pull any date from the last year live from Open-Meteo's free archive API,
   with a button to add it to the permanent log.
+- **Bias Tracker** — a third tab alongside Daily Log/Historical Lookup for logging your own read of
+  how a card actually played (running-style bias, rail notes, free-form notes), one entry per
+  racing day. There's no free automated source for "how it played" — that's an inherently
+  qualitative/human read — so this is manual entry by design. Each row cross-references that same
+  date's Dirt/Turf condition from the Daily Log so you can compare at a glance. Saving a note pushes
+  a Bias alert, same as an auto-logged day.
 
 **Alerts**
 - A bell icon in the header with an unread-count badge opens a dropdown **Alert Feed**, filterable
@@ -74,8 +80,18 @@ with no build step, no server, and no paid APIs.
   real-world race delays (severe thunderstorms, lightning, excessive heat), not our own heuristic.
   Only Moderate-severity-and-up alerts surface (Minor/Unknown, e.g. routine air-quality advisories,
   are filtered out); an alert fires once when it becomes active and again when NWS lifts it.
-- **Bias alerts** fire whenever the Daily Log gains or updates an entry.
+- **Bias alerts** fire whenever the Daily Log or Bias Tracker gains or updates an entry.
 - Capped at the 50 most recent alerts, newest first.
+
+**Racing News Wire**
+- A right-column panel pulling general racing-industry news from three free RSS feeds — DRF,
+  Thoroughbred Daily News, and America's Best Racing — merged, sorted newest-first, capped at 30
+  items, refreshing every 15 minutes. DRF's feed exposes CORS directly; TDN and ABR don't, so those
+  two route through rss2json.com (free, keyless) to be readable from the browser.
+- Deliberately **not** filtered to Saratoga-only (would sit empty for long stretches outside major
+  local stories) — items mentioning Saratoga by name are flagged instead, so they still stand out
+  inside the general wire.
+- If one source fails, the other two still render — a single feed hiccup doesn't blank the panel.
 
 ## What's stubbed out or planned but not built yet
 
@@ -84,21 +100,20 @@ with no build step, no server, and no paid APIs.
   their filter buttons don't render yet. Wiring one up later is a matter of plugging in a feed and
   flipping the flag — no UI restructuring needed. (Scratches specifically are a hard problem: see
   `DECISIONS.md` for why Equibase isn't a usable free source.)
-- **Shared/cross-device storage** — the Daily Log and Alert Feed currently live in `localStorage`
-  only (see Known Limitations). Firebase Firestore has been chosen as the direction for making this
-  shared across visitors/devices, but setup was interrupted mid-way and isn't wired in yet.
+- **Shared/cross-device storage** — the Daily Log, Bias Tracker, and Alert Feed currently live in
+  `localStorage` only (see Known Limitations). Firebase Firestore has been chosen as the direction
+  for making this shared across visitors/devices; setup is paused mid-way (a Firebase project needs
+  to be created before the app-side wiring can be built and verified) — see `DECISIONS.md`.
 - **Multi-track support** — the dashboard is hardcoded to Saratoga. A `TRACKS` object + a track
   selector in the header is the natural next step (swap `LAT`/`LON` and the track photo per track).
-- **Bias tracker** — the Daily Log is explicitly built as the data foundation for this, but the
-  actual bias-analysis feature (correlating logged conditions with how races/track bias actually
-  played out) doesn't exist yet.
 
 ## Known limitations
 
-- **`localStorage` only, no backend.** The Daily Log, Alert Feed, and alert dedupe state all live in
-  the visitor's own browser. They don't sync across devices, aren't visible to anyone else viewing
-  the site, and are gone if the browser's site data is cleared. This is a static file with no
-  server — there's nowhere else for this to live yet.
+- **`localStorage` only, no backend.** The Daily Log, Bias Tracker, Alert Feed, and alert dedupe
+  state all live in the visitor's own browser. They don't sync across devices, aren't visible to
+  anyone else viewing the site, and are gone if the browser's site data is cleared. This is a static
+  file with no server — there's nowhere else for this to live yet (Firestore wiring is planned, see
+  `DECISIONS.md`).
 - **Single track, hardcoded.** Saratoga's coordinates (`LAT`/`LON`) and photo are constants in the
   script, not configurable from the UI.
 - **Track condition / turf split are heuristic estimates, not official calls.** They're clearly
@@ -137,6 +152,10 @@ This is a static file — no `npm install`, no `pip install`, no build step. Two
     NYRA uses on their own page).
   - [National Weather Service API](https://api.weather.gov) — official active severe-weather
     alerts for Saratoga's coordinates.
+  - [DRF](https://www.drf.com), [Thoroughbred Daily News](https://www.thoroughbreddailynews.com),
+    [America's Best Racing](https://www.americasbestracing.net) RSS feeds — Racing News Wire.
+    TDN/ABR route through [rss2json.com](https://rss2json.com) (free, keyless) since they don't
+    expose CORS themselves.
 - **Refresh rate** is set in the script:
   ```js
   const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
