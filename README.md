@@ -83,6 +83,13 @@ floated future Calendar/archive page) can slot in the same way.
   been logged (All Time / Last 30 Days / Last 14 Days), a dry-vs-wet dirt-condition cross-tab, and
   average wind speed per bias category. Pure aggregation over data already in `localStorage` — no
   external source, so unlike the weather/news/entries integrations, this can't break or go stale.
+- **Analyze Pasted Text** — paste race results or chart text from anywhere (Equibase, DRF, HRN, a
+  news recap) into the Add Bias Note form and click "Analyze Pasted Text" for a suggested
+  running-style bias, based on keyword-matching standard chart/trip-note language ("wire to wire,"
+  "rallied," "closed well," etc.). Since you paste it yourself, there's no fetch/proxy/bot-wall
+  involved — sidesteps the reliability problems that shelved automated entries/results import (see
+  DECISIONS.md). Shows exactly which phrases it matched and pre-fills the bias field and notes —
+  Save is still a manual, reviewed step, never an auto-fill.
 
 **Alerts**
 - A bell icon in the header with an unread-count badge opens a dropdown **Alert Feed**, filterable

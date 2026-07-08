@@ -6,6 +6,31 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Bias auto-suggest from user-pasted text, not a fetched/scraped source
+**Date:** 2026-07-09
+**Decision:** Added an "Analyze Pasted Text" step to the Bias Tracker's Add Bias Note form. The
+user pastes race results/chart text from wherever they read it (Equibase, DRF, HRN, a news recap —
+doesn't matter which), and a keyword heuristic (`scoreBiasText`) scans it for standard chart/trip-
+note phrases — "wire to wire," "never headed," "set the pace and drew off" as speed-favoring
+signals; "rallied," "closed well," "five wide," "came from off the pace" as closer-favoring signals
+— and suggests a running-style bias, pre-filling the form's dropdown and notes field with the
+matched phrases shown explicitly. The user still reviews and clicks Save themselves; nothing is
+auto-committed.
+**Why:** Directly follows two shelved attempts at automating this from a fetched source (DRF iframe
+embed — frame-busted; HRN via a free CORS proxy — confirmed unreliable from two independent
+networks). Since the user does the copying themselves, this has zero network dependency — no fetch,
+no CORS, no proxy, no bot wall — so none of those reliability problems apply. It also fits the
+project's standing "auto-suggest, not auto-fill" rule for anything qualitative (see the original
+Bias Tracker entry): a keyword match over natural-language chart prose is a heuristic, not a
+verified classification, so showing the matched evidence and requiring a manual Save keeps a human
+check on it, same as Track Play Analysis and the AI Racing Summary are labeled heuristic rather than
+authoritative.
+**Alternatives considered:** A real NLP/sentiment model (rejected — no free client-side option that
+fits the no-build-step constraint, and a keyword list is transparent/debuggable in a way a model
+isn't); auto-filling without a review step (rejected — same reasoning as the original Bias Tracker
+design, this is a judgment call, not a fact, and the phrase list will sometimes misread ambiguous
+or unusual chart language).
+
 ## Free public CORS proxies confirmed unreliable — Entries/Morning-Line and auto-suggested Bias Tracker results shelved
 **Date:** 2026-07-09
 **Decision:** No feature was built on top of the Horse Racing Nation scrape path. The plan (built

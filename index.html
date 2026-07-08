@@ -720,6 +720,22 @@
   #biasSaveBtn:hover{ background: #ffc94d; }
   #biasCancelBtn{ background: none; border: 1px solid var(--panel-border); color: var(--parchment-dim); }
   #biasCancelBtn:hover{ border-color: var(--parchment-dim); }
+  #biasAnalyzeBtn{ background: none; border: 1px solid var(--sky); color: var(--sky); }
+  #biasAnalyzeBtn:hover{ background: rgba(111,168,201,0.1); }
+  .bias-analyze-result{
+    margin-top: -4px;
+    margin-bottom: 4px;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--sky);
+    border-radius: 6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    line-height: 1.6;
+  }
+  .bias-analyze-result strong{ color: var(--parchment); }
   .bias-tag{
     font-size: 10.5px;
     padding: 2px 8px;
@@ -1437,6 +1453,14 @@
       </div>
 
       <div class="bias-form" id="biasForm">
+        <label>Paste Results / Chart Text (optional)
+          <textarea id="biasPasteInput" placeholder="Paste race results or chart text from anywhere (Equibase, DRF, HRN, a news recap…) — since you're pasting it yourself, there's no fetch or proxy involved. Click Analyze for a suggested bias read from the trip-note language."></textarea>
+        </label>
+        <div class="bias-form-actions">
+          <button type="button" id="biasAnalyzeBtn">Analyze Pasted Text</button>
+        </div>
+        <div class="bias-analyze-result" id="biasAnalyzeResult" hidden></div>
+
         <div class="bias-form-row">
           <label>Date
             <input type="date" id="biasDateInput">
@@ -1659,6 +1683,81 @@
     saveBiasLog();
     renderBiasTable();
     renderBiasTrends();
+  }
+
+  // ---------- Bias auto-suggest from pasted results/chart text ----------
+  // The user pastes this themselves (from wherever — Equibase, DRF, HRN, a
+  // news recap), so there's no fetch, no proxy, no bot wall — none of the
+  // reliability problems that shelved the automated entries/results paths.
+  // This is a keyword heuristic over standard chart/trip-note vocabulary, not
+  // a real NLP classifier — it surfaces exactly which phrases it matched (see
+  // renderBiasAnalysis) so the read is checkable, not a black box, and it
+  // only ever pre-fills the form fields — Save is still a manual, reviewed step.
+  const SPEED_BIAS_PHRASES = [
+    "wire to wire", "wire-to-wire", "gate to wire", "never headed", "never threatened",
+    "led throughout", "set the pace and drew off", "set the pace and held",
+    "pressed the pace and drew off", "clear early and held", "sprinted clear",
+    "held off", "geared down", "in hand throughout", "drew off",
+  ];
+  const CLOSER_BIAS_PHRASES = [
+    "rallied", "closed well", "closed strongly", "closed determinedly", "closing fast",
+    "came from off the pace", "came from last", "flew home", "circled the field",
+    "five wide", "six wide", "seven wide", "collared", "reeled in", "wore down",
+    "in the final strides", "in the final jump", "unhurried early",
+  ];
+
+  // Pure function (no DOM) so the phrase-matching logic can be checked
+  // directly against sample text.
+  function scoreBiasText(text){
+    const lower = text.toLowerCase();
+    const countPhrase = (p) => lower.split(p).length - 1;
+    const speedHits = SPEED_BIAS_PHRASES.map(p => ({ phrase: p, count: countPhrase(p) })).filter(h => h.count > 0);
+    const closerHits = CLOSER_BIAS_PHRASES.map(p => ({ phrase: p, count: countPhrase(p) })).filter(h => h.count > 0);
+    const speedTotal = speedHits.reduce((s, h) => s + h.count, 0);
+    const closerTotal = closerHits.reduce((s, h) => s + h.count, 0);
+
+    let suggestion = null;
+    if (speedTotal === 0 && closerTotal === 0){
+      suggestion = null; // no signal — let the caller decide what to do
+    } else if (speedTotal >= closerTotal * 2 && speedTotal > closerTotal){
+      suggestion = "Speed-favoring";
+    } else if (closerTotal >= speedTotal * 2 && closerTotal > speedTotal){
+      suggestion = "Closer-favoring";
+    } else {
+      suggestion = "Mixed / Inconsistent"; // present on both sides, no clear lean
+    }
+
+    return { speedHits, closerHits, speedTotal, closerTotal, suggestion };
+  }
+
+  function fmtPhraseHits(hits){
+    return hits.map(h => `"${h.phrase}"${h.count > 1 ? ` ×${h.count}` : ""}`).join(", ");
+  }
+
+  function renderBiasAnalysis(result){
+    const box = $("biasAnalyzeResult");
+    if (result.speedTotal === 0 && result.closerTotal === 0){
+      box.hidden = false;
+      box.textContent = "No clear speed/closer cues found in that text — left the bias field as-is. Read it yourself and pick manually.";
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = "";
+    const suggestLine = document.createElement("div");
+    const suggestStrong = document.createElement("strong");
+    suggestStrong.textContent = `Suggested: ${result.suggestion}`;
+    suggestLine.appendChild(suggestStrong);
+    box.appendChild(suggestLine);
+    if (result.speedHits.length){
+      const line = document.createElement("div");
+      line.textContent = `Speed cues: ${fmtPhraseHits(result.speedHits)}`;
+      box.appendChild(line);
+    }
+    if (result.closerHits.length){
+      const line = document.createElement("div");
+      line.textContent = `Closer cues: ${fmtPhraseHits(result.closerHits)}`;
+      box.appendChild(line);
+    }
   }
 
   function renderBiasTable(){
@@ -3041,10 +3140,27 @@
     $("biasStyleInput").value = "Neutral / No Bias";
     $("biasRailInput").value = "";
     $("biasNotesInput").value = "";
+    $("biasPasteInput").value = "";
+    $("biasAnalyzeResult").hidden = true;
     $("biasForm").classList.add("open");
   });
   $("biasCancelBtn").addEventListener("click", () => {
     $("biasForm").classList.remove("open");
+  });
+  $("biasAnalyzeBtn").addEventListener("click", () => {
+    const text = $("biasPasteInput").value.trim();
+    if (!text) return;
+    const result = scoreBiasText(text);
+    renderBiasAnalysis(result);
+    if (result.suggestion) $("biasStyleInput").value = result.suggestion;
+    const summary = result.speedTotal === 0 && result.closerTotal === 0
+      ? "Pasted text analyzed — no clear speed/closer cues found."
+      : `Auto-suggested from pasted text: ${result.suggestion}` +
+        (result.speedHits.length ? ` (speed: ${fmtPhraseHits(result.speedHits)})` : "") +
+        (result.closerHits.length ? ` (closer: ${fmtPhraseHits(result.closerHits)})` : "") +
+        ". Reviewed before saving.";
+    const existingNotes = $("biasNotesInput").value.trim();
+    $("biasNotesInput").value = existingNotes ? `${existingNotes}\n\n${summary}` : summary;
   });
   $("biasSaveBtn").addEventListener("click", () => {
     const date = $("biasDateInput").value;
