@@ -12,7 +12,9 @@ with no build step, no server, and no paid APIs.
 ## Layout
 
 A persistent left icon-rail (not a hamburger menu — always visible, same on mobile and desktop)
-switches between pages: **Dashboard** (everything below) and **News Wire**. It's a plain
+switches between four pages: **Dashboard** (live conditions, wind/compass, Track Play Analysis, AI
+Racing Summary, NYRA panel, Radar & Storm Forecast), **News Wire**, **Historical Weather Data**
+(Daily Log + Historical Lookup, as two tabs within that page), and **Bias Tracker**. It's a plain
 show/hide toggle over static DOM, config-driven (`SIDEBAR_PAGES` in the script), so adding another
 page later is a new sidebar button plus one array entry — no restructuring. More pages (e.g. the
 floated future Calendar/archive page) can slot in the same way.
@@ -63,19 +65,20 @@ floated future Calendar/archive page) can slot in the same way.
   can see both what's happening right now and what might come through later.
 - **Next 8 Hours** ticker — hourly temp/feels-like/rain probability/wind strip.
 
-**Logging & history**
-- **Track Condition & Weather Log** — automatically logs the most recently *completed* day (high/low
-  temp, average wind + peak gust + prevailing direction, rain total, dirt + turf condition,
-  conditions text) once it's over, or on demand via "Log Today's Snapshot Now" (flagged as partial
-  since the day isn't finished). This is the data foundation the Bias Tracker reads from.
-- **Historical Lookup** — pull any date from the last year live from Open-Meteo's free archive API,
-  with a button to add it to the permanent log.
-- **Bias Tracker** — a third tab alongside Daily Log/Historical Lookup for logging your own read of
-  how a card actually played (running-style bias, rail notes, free-form notes), one entry per
-  racing day. There's no free automated source for "how it played" — that's an inherently
-  qualitative/human read — so this is manual entry by design. Each row cross-references that same
-  date's Dirt/Turf condition from the Daily Log so you can compare at a glance. Saving a note pushes
-  a Bias alert, same as an auto-logged day.
+**Logging & history** (sidebar → Historical Weather Data)
+- **Daily Log** tab — automatically logs the most recently *completed* day (high/low temp, average
+  wind + peak gust + prevailing direction, rain total, dirt + turf condition, conditions text) once
+  it's over, or on demand via "Log Today's Snapshot Now" (flagged as partial since the day isn't
+  finished). This is the data foundation the Bias Tracker reads from.
+- **Historical Lookup** tab — pull any date from the last year live from Open-Meteo's free archive
+  API, with a button to add it to the permanent log.
+
+**Bias Tracker** (its own sidebar page)
+- Logs your own read of how a card actually played (running-style bias, rail notes, free-form
+  notes), one entry per racing day. There's no free automated source for "how it played" — that's an
+  inherently qualitative/human read — so this is manual entry by design. Each row cross-references
+  that same date's Dirt/Turf condition from the Daily Log (on the Historical Weather Data page) so
+  you can compare at a glance. Saving a note pushes a Bias alert, same as an auto-logged day.
 
 **Alerts**
 - A bell icon in the header with an unread-count badge opens a dropdown **Alert Feed**, filterable

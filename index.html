@@ -1061,6 +1061,21 @@
       </svg>
       News Wire
     </button>
+    <button type="button" class="sidebar-btn" data-page="historical">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 7v5l3 3"/>
+      </svg>
+      Historical Weather Data
+    </button>
+    <button type="button" class="sidebar-btn" data-page="bias">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 20V10"/>
+        <path d="M12 20V4"/>
+        <path d="M20 20v-7"/>
+      </svg>
+      Bias Tracker
+    </button>
   </nav>
 
   <div class="page active" id="page-dashboard">
@@ -1250,113 +1265,125 @@
 
 </div>
 
-<div class="panel log-panel">
-  <div class="panel-title">
-    Track Condition &amp; Weather Log
-    <span class="tag" id="logTag">0 ENTRIES</span>
   </div>
 
-  <div class="log-tabs">
-    <button type="button" class="log-tab active" id="logTabBtnDaily">Daily Log</button>
-    <button type="button" class="log-tab" id="logTabBtnHistory">Historical Lookup</button>
-    <button type="button" class="log-tab" id="logTabBtnBias">Bias Tracker</button>
-  </div>
-
-  <div class="log-tab-panel" id="logTabDaily">
-    <div class="log-controls">
-      <button type="button" id="logNowBtn">+ Log Today's Snapshot Now</button>
-      <span class="log-note">Automatically logs the most recently completed day once it's over.</span>
-    </div>
-    <div class="log-table-wrap">
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>Date</th><th>High</th><th>Low</th><th>Wind Avg</th><th>Peak Gust</th>
-            <th>Prevailing Dir</th><th>Rain</th><th>Dirt</th><th>Turf</th><th>Conditions</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="logTableBody">
-          <tr><td colspan="11" class="log-empty">Loading…</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="log-tab-panel" id="logTabHistory" hidden>
-    <div class="log-controls">
-      <input type="date" id="historyDateInput">
-      <button type="button" id="historyLookupBtn">Look Up</button>
-      <span class="log-note" id="historyStatus">Pulls any past date live from Open-Meteo's free archive — not saved unless you add it.</span>
-    </div>
-    <div class="log-table-wrap">
-      <table class="log-table" id="historyTable" hidden>
-        <thead>
-          <tr>
-            <th>Date</th><th>High</th><th>Low</th><th>Wind Avg</th><th>Peak Gust</th>
-            <th>Prevailing Dir</th><th>Rain</th><th>Dirt</th><th>Turf</th><th>Conditions</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="historyTableBody"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="log-tab-panel" id="logTabBias" hidden>
-    <div class="log-controls">
-      <button type="button" id="addBiasBtn">+ Add Bias Note</button>
-      <span class="log-note">Your own read of how a card actually played, entered after racing — there's no free
-        automated source for this, so it's manual by design. Dirt/Turf columns are pulled from the matching Daily
-        Log entry for that date so you can compare at a glance.</span>
-    </div>
-
-    <div class="bias-form" id="biasForm">
-      <div class="bias-form-row">
-        <label>Date
-          <input type="date" id="biasDateInput">
-        </label>
-        <label>Running-Style Bias
-          <select id="biasStyleInput">
-            <option value="Speed-favoring">Speed-favoring</option>
-            <option value="Neutral / No Bias">Neutral / No Bias</option>
-            <option value="Closer-favoring">Closer-favoring</option>
-            <option value="Mixed / Inconsistent">Mixed / Inconsistent</option>
-          </select>
-        </label>
-        <label>Rail Note (optional)
-          <input type="text" id="biasRailInput" placeholder="e.g. dead rail, speed golden on the rail">
-        </label>
+  <div class="page" id="page-historical">
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Historical Weather Data
+        <span class="tag" id="logTag">0 ENTRIES</span>
       </div>
-      <label>Notes
-        <textarea id="biasNotesInput" placeholder="Free-form observations about how the card played…"></textarea>
-      </label>
-      <div class="bias-form-actions">
-        <button type="button" id="biasSaveBtn">Save</button>
-        <button type="button" id="biasCancelBtn">Cancel</button>
+
+      <div class="log-tabs">
+        <button type="button" class="log-tab active" id="logTabBtnDaily">Daily Log</button>
+        <button type="button" class="log-tab" id="logTabBtnHistory">Historical Lookup</button>
+      </div>
+
+      <div class="log-tab-panel" id="logTabDaily">
+        <div class="log-controls">
+          <button type="button" id="logNowBtn">+ Log Today's Snapshot Now</button>
+          <span class="log-note">Automatically logs the most recently completed day once it's over.</span>
+        </div>
+        <div class="log-table-wrap">
+          <table class="log-table">
+            <thead>
+              <tr>
+                <th>Date</th><th>High</th><th>Low</th><th>Wind Avg</th><th>Peak Gust</th>
+                <th>Prevailing Dir</th><th>Rain</th><th>Dirt</th><th>Turf</th><th>Conditions</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="logTableBody">
+              <tr><td colspan="11" class="log-empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="log-tab-panel" id="logTabHistory" hidden>
+        <div class="log-controls">
+          <input type="date" id="historyDateInput">
+          <button type="button" id="historyLookupBtn">Look Up</button>
+          <span class="log-note" id="historyStatus">Pulls any past date live from Open-Meteo's free archive — not saved unless you add it.</span>
+        </div>
+        <div class="log-table-wrap">
+          <table class="log-table" id="historyTable" hidden>
+            <thead>
+              <tr>
+                <th>Date</th><th>High</th><th>Low</th><th>Wind Avg</th><th>Peak Gust</th>
+                <th>Prevailing Dir</th><th>Rain</th><th>Dirt</th><th>Turf</th><th>Conditions</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="log-disclaimer">
+        Daily Log is stored locally in this browser only (no backend, no sync across devices yet). Track condition
+        columns use the same dirt/turf heuristics as the live badges on the Dashboard, adapted to a full day rather
+        than a rolling window.
       </div>
     </div>
+  </div>
 
-    <div class="log-table-wrap">
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>Date</th><th>Dirt</th><th>Turf</th><th>Bias</th><th>Rail</th><th>Notes</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="biasTableBody">
-          <tr><td colspan="7" class="log-empty">Loading…</td></tr>
-        </tbody>
-      </table>
+  <div class="page" id="page-bias">
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Bias Tracker
+        <span class="tag">MANUAL ENTRY</span>
+      </div>
+
+      <div class="log-controls">
+        <button type="button" id="addBiasBtn">+ Add Bias Note</button>
+        <span class="log-note">Your own read of how a card actually played, entered after racing — there's no free
+          automated source for this, so it's manual by design. Dirt/Turf columns are pulled from the matching Daily
+          Log entry for that date so you can compare at a glance.</span>
+      </div>
+
+      <div class="bias-form" id="biasForm">
+        <div class="bias-form-row">
+          <label>Date
+            <input type="date" id="biasDateInput">
+          </label>
+          <label>Running-Style Bias
+            <select id="biasStyleInput">
+              <option value="Speed-favoring">Speed-favoring</option>
+              <option value="Neutral / No Bias">Neutral / No Bias</option>
+              <option value="Closer-favoring">Closer-favoring</option>
+              <option value="Mixed / Inconsistent">Mixed / Inconsistent</option>
+            </select>
+          </label>
+          <label>Rail Note (optional)
+            <input type="text" id="biasRailInput" placeholder="e.g. dead rail, speed golden on the rail">
+          </label>
+        </div>
+        <label>Notes
+          <textarea id="biasNotesInput" placeholder="Free-form observations about how the card played…"></textarea>
+        </label>
+        <div class="bias-form-actions">
+          <button type="button" id="biasSaveBtn">Save</button>
+          <button type="button" id="biasCancelBtn">Cancel</button>
+        </div>
+      </div>
+
+      <div class="log-table-wrap">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Date</th><th>Dirt</th><th>Turf</th><th>Bias</th><th>Rail</th><th>Notes</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="biasTableBody">
+            <tr><td colspan="7" class="log-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="log-disclaimer">
+        Bias Tracker entries are stored locally in this browser only (no backend, no sync across devices yet) and
+        are your own manual read of how a card played — not derived from any data feed.
+      </div>
     </div>
-  </div>
-
-  <div class="log-disclaimer">
-    Daily Log and Bias Tracker are stored locally in this browser only (no backend, no sync across devices yet).
-    Track condition columns use the same dirt/turf heuristics as the live badges above, adapted to a full day rather
-    than a rolling window. Bias Tracker entries are your own manual read of how a card played — not derived from any
-    data feed.
-  </div>
-</div>
-
   </div>
 
   <div class="page" id="page-news">
@@ -2724,7 +2751,7 @@
   // Config-driven like LOG_TABS below — adding another sidebar page later
   // (e.g. the Calendar/archive page floated for future work) is just another
   // button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "news"];
+  const SIDEBAR_PAGES = ["dashboard", "news", "historical", "bias"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
@@ -2743,7 +2770,6 @@
   const LOG_TABS = [
     { btn: "logTabBtnDaily", panel: "logTabDaily" },
     { btn: "logTabBtnHistory", panel: "logTabHistory" },
-    { btn: "logTabBtnBias", panel: "logTabBias" },
   ];
   function setActiveLogTab(activeBtnId){
     LOG_TABS.forEach(({ btn, panel }) => {

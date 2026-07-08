@@ -6,6 +6,29 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Split Historical Weather Data and Bias Tracker into their own sidebar pages
+**Date:** 2026-07-08
+**Decision:** The "Track Condition & Weather Log" panel (previously a 3-tab panel — Daily Log,
+Historical Lookup, Bias Tracker — living on the Dashboard page) is now two sidebar pages: **Historical
+Weather Data** (Daily Log + Historical Lookup, still as two tabs within that one page — they're both
+"look at recorded/archived weather" views, so keeping them together as tabs still made sense) and
+**Bias Tracker** (fully standalone, no tab bar — it was the third tab in a group of three, and with
+group size down to one, a tab switcher over a single always-visible tab was pure clutter). All
+underlying storage, cross-referencing (Bias Tracker rows still look up that date's Dirt/Turf from
+`weatherLog`), and alert-push behavior is unchanged — this was purely a navigation/layout move, same
+IDs and functions, just relocated in the DOM and added to `SIDEBAR_PAGES`.
+**Why:** User request, continuing the same "one stop shop" sidebar direction from the News Wire
+move — with Historical Weather Data and Bias Tracker now dedicated pages, the Dashboard page is
+lighter (down to live conditions, wind/compass, Track Play Analysis, AI Racing Summary, NYRA panel,
+and Radar), and each area gets a full page's worth of room instead of competing for space in one
+long scrolling panel.
+**Alternatives considered:** Keeping Bias Tracker under a tab bar for consistency with Historical
+Weather Data (rejected — a single-tab switcher has nothing to switch between, so the tab UI would
+just be dead chrome); merging Historical Weather Data and Bias Tracker into one page since both stem
+from the same original panel (rejected — they're different modes of use, one is "auto-collected
+sensor-style data," the other is "manual human read," and the user explicitly asked for them as two
+separate buttons).
+
 ## Sidebar navigation: persistent icon-rail, not a hamburger menu, and moved News Wire to its own page
 **Date:** 2026-07-08
 **Decision:** Restructured the page around a left sidebar (`.app-shell` = `.sidebar` + one `.page`
