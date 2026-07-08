@@ -6,6 +6,23 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Bias Tracker Trends: pure client-side aggregation, no external source
+**Date:** 2026-07-09
+**Decision:** Added a "Trends" section to the top of the Bias Tracker page — a bar chart of
+running-style-bias frequency (All Time / Last 30 / Last 14 Days), a dry-vs-wet dirt-condition
+cross-tab, and average wind speed per bias category. Entirely computed client-side from `biasLog`
+and `weatherLog`, both already in `localStorage` — no fetch, no proxy, no new data source.
+**Why:** Came right after a session spent researching odds/entries data sources, most of which
+turned out blocked or unreliable (see the entries above). This was chosen specifically *because* it
+needs nothing external — it's the one feature today guaranteed to keep working, and it's the actual
+payoff the Daily Log → Bias Tracker chain was built toward in the first place: correlating logged
+conditions with how the card played, not just recording both side by side.
+**Alternatives considered:** A charting library for the bar chart (rejected — plain CSS width%
+divs render identical bars with zero new dependencies, consistent with the project's no-build-step
+approach); showing the crosstab/wind sections unconditionally (rejected — with only dry days logged
+so far, e.g., a wet-column of all zeros is noise, not signal, so those sections only render once
+there's actually a day on both sides to compare).
+
 ## Odds/entries/morning-line: no free source found, live embed attempted and reverted
 **Date:** 2026-07-09
 **Decision:** No odds, entries, or morning-line feature was added. Every source checked either

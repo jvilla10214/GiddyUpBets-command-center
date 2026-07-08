@@ -733,6 +733,88 @@
   .bias-neutral{ background: rgba(169,164,150,0.15); color: var(--parchment-dim); }
   .bias-mixed{ background: rgba(192,120,48,0.15); color: var(--clay); }
   .bias-notes-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
+
+  /* ---------- Bias Tracker trends ---------- */
+  .bias-trends{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 18px;
+  }
+  .bias-trends-header{
+    display:flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .bias-trends-title{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-size: 12.5px;
+    color: var(--parchment-dim);
+  }
+  .bias-trends-window{ display:flex; gap: 6px; }
+  .bias-window-btn{
+    background: none;
+    border: 1px solid var(--panel-border);
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    padding: 5px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .bias-window-btn:hover{ border-color: var(--parchment-dim); color: var(--parchment); }
+  .bias-window-btn.active{ border-color: var(--tote-amber); color: var(--tote-amber); background: rgba(240,180,41,0.08); }
+  .bias-trends-count{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-bottom: 10px;
+  }
+  .bias-bar-row{
+    display:grid;
+    grid-template-columns: 150px 1fr 70px;
+    align-items:center;
+    gap: 10px;
+    margin-bottom: 7px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+  }
+  .bias-bar-label{ color: var(--parchment-dim); white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+  .bias-bar-track{ background: var(--panel); border-radius: 4px; height: 12px; overflow:hidden; }
+  .bias-bar-fill{ height: 100%; border-radius: 4px; }
+  .bias-bar-fill.bias-speed{ background: var(--tote-amber); }
+  .bias-bar-fill.bias-closer{ background: var(--sky); }
+  .bias-bar-fill.bias-neutral{ background: var(--parchment-dim); }
+  .bias-bar-fill.bias-mixed{ background: var(--clay); }
+  .bias-bar-count{ color: var(--parchment); text-align: right; }
+  .bias-crosstab{ margin-top: 14px; }
+  .bias-crosstab-title{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--parchment-dim);
+    margin-bottom: 8px;
+  }
+  .bias-crosstab table{
+    width: 100%;
+    border-collapse: collapse;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+  }
+  .bias-crosstab th, .bias-crosstab td{
+    padding: 6px 8px;
+    text-align: center;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .bias-crosstab th{ color: var(--parchment-dim); font-weight: 400; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+  .bias-crosstab td:first-child, .bias-crosstab th:first-child{ text-align: left; color: var(--parchment); }
   .log-tab{
     background: none;
     border: none;
@@ -1340,6 +1422,20 @@
           Log entry for that date so you can compare at a glance.</span>
       </div>
 
+      <div class="bias-trends" id="biasTrends">
+        <div class="bias-trends-header">
+          <span class="bias-trends-title">Trends</span>
+          <div class="bias-trends-window" id="biasTrendsWindow">
+            <button type="button" class="bias-window-btn active" data-window="all">All Time</button>
+            <button type="button" class="bias-window-btn" data-window="30">Last 30 Days</button>
+            <button type="button" class="bias-window-btn" data-window="14">Last 14 Days</button>
+          </div>
+        </div>
+        <div class="bias-trends-body" id="biasTrendsBody">
+          <div class="log-empty">Not enough entries yet — add a few bias notes to see trends.</div>
+        </div>
+      </div>
+
       <div class="bias-form" id="biasForm">
         <div class="bias-form-row">
           <label>Date
@@ -1555,12 +1651,14 @@
     biasLog.sort((a, b) => b.date.localeCompare(a.date));
     saveBiasLog();
     renderBiasTable();
+    renderBiasTrends();
     pushAlert(makeAlert("bias", `${fmtLogDateShort(entry.date)} bias noted: ${entry.runningStyleBias}${entry.railNote ? " — Rail: " + entry.railNote : ""}`));
   }
   function removeBiasEntry(dateStr){
     biasLog = biasLog.filter(e => e.date !== dateStr);
     saveBiasLog();
     renderBiasTable();
+    renderBiasTrends();
   }
 
   function renderBiasTable(){
@@ -1588,6 +1686,147 @@
     tbody.querySelectorAll(".log-remove").forEach(btn => {
       btn.addEventListener("click", () => removeBiasEntry(btn.dataset.date));
     });
+  }
+
+  // ---------- Bias Tracker trends ----------
+  // Pure aggregation over data already sitting in localStorage — no external
+  // source, so unlike everything researched today (odds/entries), this is a
+  // sure thing. Joins against weatherLog by date (same join renderBiasTable
+  // already does) to cross-tab bias against wet/dry conditions and wind.
+  const BIAS_SHORT_LABEL = {
+    "Speed-favoring": "Speed",
+    "Neutral / No Bias": "Neutral",
+    "Closer-favoring": "Closer",
+    "Mixed / Inconsistent": "Mixed",
+  };
+  let biasTrendsWindow = "all";
+
+  function biasEntriesInWindow(windowKey){
+    if (windowKey === "all") return biasLog;
+    const { date: todayStr } = nowInTrackTZ();
+    const cutoff = shiftDateStr(todayStr, -Number(windowKey));
+    return biasLog.filter(e => e.date >= cutoff);
+  }
+
+  function computeBiasTrends(windowKey){
+    const entries = biasEntriesInWindow(windowKey);
+    const counts = {}, wetCounts = {}, dryCounts = {}, windSum = {}, windCount = {};
+    let wetTotal = 0, dryTotal = 0;
+
+    entries.forEach(entry => {
+      const style = entry.runningStyleBias;
+      counts[style] = (counts[style] ?? 0) + 1;
+
+      const match = weatherLog.find(w => w.date === entry.date);
+      if (!match) return;
+      const wet = match.dirtConditionLabel === "MUDDY" || match.dirtConditionLabel === "SLOPPY / WET";
+      if (wet){ wetCounts[style] = (wetCounts[style] ?? 0) + 1; wetTotal++; }
+      else { dryCounts[style] = (dryCounts[style] ?? 0) + 1; dryTotal++; }
+      if (match.windAvg != null){
+        windSum[style] = (windSum[style] ?? 0) + match.windAvg;
+        windCount[style] = (windCount[style] ?? 0) + 1;
+      }
+    });
+
+    return { total: entries.length, counts, wetCounts, dryCounts, wetTotal, dryTotal, windSum, windCount };
+  }
+
+  function renderBiasTrends(){
+    const body = $("biasTrendsBody");
+    const trends = computeBiasTrends(biasTrendsWindow);
+    body.innerHTML = "";
+
+    if (trends.total === 0){
+      const empty = document.createElement("div");
+      empty.className = "log-empty";
+      empty.textContent = "Not enough entries yet — add a few bias notes to see trends.";
+      body.appendChild(empty);
+      return;
+    }
+
+    const countLine = document.createElement("div");
+    countLine.className = "bias-trends-count";
+    countLine.textContent = `${trends.total} ${trends.total === 1 ? "entry" : "entries"} in this window`;
+    body.appendChild(countLine);
+
+    Object.keys(BIAS_STYLE_CLASS).forEach(style => {
+      const count = trends.counts[style] ?? 0;
+      const pct = Math.round((count / trends.total) * 100);
+      const row = document.createElement("div");
+      row.className = "bias-bar-row";
+      const label = document.createElement("span");
+      label.className = "bias-bar-label";
+      label.textContent = style;
+      const track = document.createElement("div");
+      track.className = "bias-bar-track";
+      const fill = document.createElement("div");
+      fill.className = `bias-bar-fill ${BIAS_STYLE_CLASS[style]}`;
+      fill.style.width = `${pct}%`;
+      track.appendChild(fill);
+      const countSpan = document.createElement("span");
+      countSpan.className = "bias-bar-count";
+      countSpan.textContent = `${count} (${pct}%)`;
+      row.append(label, track, countSpan);
+      body.appendChild(row);
+    });
+
+    // Wet vs. dry crosstab — only worth showing once there's at least one
+    // logged day on each side, otherwise it's a table with an empty half.
+    if (trends.wetTotal > 0 && trends.dryTotal > 0){
+      const crosstab = document.createElement("div");
+      crosstab.className = "bias-crosstab";
+      const title = document.createElement("div");
+      title.className = "bias-crosstab-title";
+      title.textContent = "Dirt Condition: Dry vs. Wet Days";
+      crosstab.appendChild(title);
+
+      const styles = Object.keys(BIAS_STYLE_CLASS);
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      headRow.appendChild(document.createElement("th"));
+      styles.forEach(s => {
+        const th = document.createElement("th");
+        th.textContent = BIAS_SHORT_LABEL[s];
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      const tbody2 = document.createElement("tbody");
+      [["Dry", trends.dryCounts, trends.dryTotal], ["Wet", trends.wetCounts, trends.wetTotal]].forEach(([label, counts, total]) => {
+        const tr = document.createElement("tr");
+        const labelTd = document.createElement("td");
+        labelTd.textContent = `${label} (${total})`;
+        tr.appendChild(labelTd);
+        styles.forEach(s => {
+          const td = document.createElement("td");
+          td.textContent = String(counts[s] ?? 0);
+          tr.appendChild(td);
+        });
+        tbody2.appendChild(tr);
+      });
+      table.append(thead, tbody2);
+      crosstab.appendChild(table);
+      body.appendChild(crosstab);
+    }
+
+    // Avg wind by bias — only for categories with at least one matched day.
+    const windStyles = Object.keys(BIAS_STYLE_CLASS).filter(s => (trends.windCount[s] ?? 0) > 0);
+    if (windStyles.length){
+      const windSection = document.createElement("div");
+      windSection.className = "bias-crosstab";
+      const title = document.createElement("div");
+      title.className = "bias-crosstab-title";
+      title.textContent = "Average Wind by Bias";
+      windSection.appendChild(title);
+      windStyles.forEach(s => {
+        const avg = trends.windSum[s] / trends.windCount[s];
+        const row = document.createElement("div");
+        row.className = "bias-trends-count";
+        row.textContent = `${BIAS_SHORT_LABEL[s]}: ${avg.toFixed(1)} mph avg (${trends.windCount[s]} day${trends.windCount[s] === 1 ? "" : "s"})`;
+        windSection.appendChild(row);
+      });
+      body.appendChild(windSection);
+    }
   }
 
   function shiftDateStr(dateStr, deltaDays){
@@ -2825,6 +3064,15 @@
 
   biasLog = loadBiasLog();
   renderBiasTable();
+  renderBiasTrends();
+
+  document.querySelectorAll(".bias-window-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      biasTrendsWindow = btn.dataset.window;
+      document.querySelectorAll(".bias-window-btn").forEach(b => b.classList.toggle("active", b === btn));
+      renderBiasTrends();
+    });
+  });
 
   alertFeed = loadAlertFeed();
   alertState = loadAlertState();

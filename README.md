@@ -79,6 +79,10 @@ floated future Calendar/archive page) can slot in the same way.
   inherently qualitative/human read — so this is manual entry by design. Each row cross-references
   that same date's Dirt/Turf condition from the Daily Log (on the Historical Weather Data page) so
   you can compare at a glance. Saving a note pushes a Bias alert, same as an auto-logged day.
+- **Trends** — a rollup above the entry table: a bar chart of how often each running-style bias has
+  been logged (All Time / Last 30 Days / Last 14 Days), a dry-vs-wet dirt-condition cross-tab, and
+  average wind speed per bias category. Pure aggregation over data already in `localStorage` — no
+  external source, so unlike the weather/news/entries integrations, this can't break or go stale.
 
 **Alerts**
 - A bell icon in the header with an unread-count badge opens a dropdown **Alert Feed**, filterable
