@@ -6,6 +6,36 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Free public CORS proxies confirmed unreliable — Entries/Morning-Line and auto-suggested Bias Tracker results shelved
+**Date:** 2026-07-09
+**Decision:** No feature was built on top of the Horse Racing Nation scrape path. The plan (built
+and reverted once already — see the "Odds/entries/morning-line" entry below) was to fetch
+`entries.horseracingnation.com` through a free public CORS proxy (`api.allorigins.win`) since HRN
+itself blocks both iframe embedding (`X-Frame-Options: SAMEORIGIN`) and direct `fetch()` (no CORS
+header). Testing showed the proxy failing 0-of-4 to ~2-of-3 attempts across multiple checks over
+time, from this sandbox *and* from the user's own home network independently — ruling out
+"transient blip" or "sandbox-specific" as explanations. A follow-up idea — auto-suggesting Bias
+Tracker entries by keyword-parsing HRN's post-race chart notes (e.g., "wire to wire" / "pressed the
+pace" → speed-favoring signals, "rallied" / "closed well" → closer-favoring) into a draft the user
+would confirm/edit rather than blind-auto-fill — was scoped but not built, since it depends on the
+same unreliable proxy layer.
+**Why this matters for future work:** HRN's data itself is genuinely good when reachable — real
+entries, morning-line odds, scratches, and (post-race) prose trip notes with fractional splits, all
+server-rendered with no anti-bot wall. The blocker is purely "no free way to read it cross-origin
+reliably," not the data quality. The only way to actually make this work would be standing up a
+small proxy *we control* (e.g. a Cloudflare Worker or Vercel Edge Function that fetches HRN
+server-side and returns JSON) instead of depending on a public one — but that's a real architectural
+change (this app has been a single static file with no backend by design since day one; see "Single
+file HTML/JS app" below), not a data-source swap, so it needs an explicit decision before pursuing,
+not an assumption.
+**Alternatives considered:** Other free public proxies (`codetabs.com`, `corsproxy.io`,
+`thingproxy.freeboard.io`, `cors.isomorphic-git.org`) — all either timed out or returned 403 in
+testing, no better than `allorigins.win`; retry-with-backoff logic (already built once for this
+exact scrape, see git history around 2026-07-09) — doesn't help when the failure rate is this high
+and sustained rather than occasional.
+
+---
+
 ## Bias Tracker Trends: pure client-side aggregation, no external source
 **Date:** 2026-07-09
 **Decision:** Added a "Trends" section to the top of the Bias Tracker page — a bar chart of
