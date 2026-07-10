@@ -6,36 +6,31 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
-## NYRA live X/Twitter feed: official embed widget, verify-in-production
+## NYRA X/Twitter: gave up on the live embed widget, link out instead
 **Date:** 2026-07-10
-**Decision:** Added a live `@TheNYRA` timeline to the Dashboard's left column, right after the NYRA
-Scratches panel (grouping the two official NYRA-sourced live embeds together). Uses X's own official
-embed system (`<a class="twitter-timeline">` + `platform.x.com/widgets.js`, the same snippet X's
-own oEmbed API generates) — not scraped, no API key. Note the correct handle is `@TheNYRA`, not
-`@NYRA` (confirmed via the oEmbed endpoint after an initial wrong guess).
-**Why:** Neither the dev sandbox nor a local `file://` test could conclusively confirm the widget
-renders real tweets — the sandbox's `syndication.twitter.com` request came back 429 (likely a
-shared/cloud-IP reputation issue), and a double-clicked local HTML file runs under more restrictive
-script permissions than a real hosted page, so a blank/plain-link result there isn't a reliable
-negative signal either. Rather than keep chasing an inconclusive local test, this was verified
-directly on the real production domain (a real `https://` origin, the user's own residential
-network) — the only environment both test methods have a plausible confound for. The widget degrades
-gracefully either way: if it fails to render, the anchor stays a plain clickable link to the account
-instead of breaking the page.
-**Alternatives considered:** A scraped/proxied feed (rejected outright — X's official embed exists
-specifically so nobody needs to scrape it, unlike odds/entries where no official free embed exists);
-continuing to test locally before shipping (rejected as low-value — two inconclusive test
-environments in a row pointed at testing in the one environment that actually matters).
-**Update (same day):** Production test came back conclusive — plain link, no timeline, no iframe
-attempt at all. Switched from the simple `<a class="twitter-timeline">` + bare `<script>` tag (which
-depends on `widgets.js` auto-scanning the DOM on `DOMContentLoaded`) to X's documented async factory
-pattern: load the script ourselves, then explicitly call `twttr.widgets.load()` once it's ready. On
-a page this busy (Windy embed, NYRA iframe, RSS calls, fonts all loading at once), `widgets.js`
-plausibly finishes loading *after* `DOMContentLoaded` already fired, so auto-init never ran — this
-targets that specific timing gap. The dev sandbox still can't confirm real tweet data loads (an
-iframe now gets created, but the `syndication.twitter.com` request inside it still comes back
-empty/blocked there — a separate, likely IP-reputation issue unrelated to this fix), so this still
-needs a second production check.
+**Decision:** X's official embed widget (`<a class="twitter-timeline">` + `platform.x.com/widgets.js`,
+the exact snippet X's own oEmbed API generates for `@TheNYRA`) never rendered a real timeline in
+testing, so it was replaced with a plain "View NYRA's Latest Posts on X" link card (opens
+`x.com/TheNYRA` in a new tab) in the same spot in the Dashboard's left column, right after the NYRA
+Scratches panel.
+**Why:** Two different implementations were tried and both failed the same way on the actual
+production domain (the user's own browser, no ad-blocker, real `https://` origin — the one
+environment that should have been most representative): (1) the simple auto-init version relying on
+`widgets.js` scanning the DOM on `DOMContentLoaded`, and (2) X's documented async factory pattern
+(load the script manually, explicitly call `twttr.widgets.load()`) added specifically to rule out a
+timing race on a page with a lot of other embeds/API calls loading at once. Both showed a plain
+"Posts by TheNYRA" link with no timeline. A follow-up sandbox test with a large, unrelated account
+(`@AP`) failed identically (iframe created but stuck at 0×0, `syndication.twitter.com` not
+returning data) — ruling out anything `@TheNYRA`-specific and pointing at X's embed system itself
+being unreliable for this site in a way not fixable from the client side. Rather than keep
+debugging a third-party platform's opaque syndication backend with no further diagnostic leverage,
+switched to a plain link — same real value (one click to NYRA's latest posts), zero chance of
+rendering blank.
+**Alternatives considered:** A scraped/proxied feed (rejected outright, both attempts and now — X's
+official embed existing at all means scraping would be circumventing a system that's *supposed* to
+make this easy, not a case like Equibase/odds where no legitimate free path exists); a third embed
+attempt with different parameters (rejected — two independent failures on production plus an
+account-agnostic sandbox failure was enough signal that the problem isn't in our implementation).
 
 ---
 
