@@ -64,6 +64,10 @@ floated future Calendar/archive page) can slot in the same way.
   a multi-day ECMWF precipitation forecast ("Forecast — Storms"), toggled with two buttons, so you
   can see both what's happening right now and what might come through later.
 - **Next 8 Hours** ticker — hourly temp/feels-like/rain probability/wind strip.
+- **Next 3 Days** outlook — a simple 3-card strip (right under the Temperature tile) with each day's
+  high/low, max wind, rain chance, and a plain-language conditions description, pulled from
+  Open-Meteo's daily forecast block. Days with a thunderstorm code or ≥60% rain chance are flagged
+  in red.
 
 **Logging & history** (sidebar → Historical Weather Data)
 - **Daily Log** tab — automatically logs the most recently *completed* day (high/low temp, average
