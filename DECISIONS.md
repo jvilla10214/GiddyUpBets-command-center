@@ -6,6 +6,29 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## NYRA live X/Twitter feed: official embed widget, verify-in-production
+**Date:** 2026-07-10
+**Decision:** Added a live `@TheNYRA` timeline to the Dashboard's left column, right after the NYRA
+Scratches panel (grouping the two official NYRA-sourced live embeds together). Uses X's own official
+embed system (`<a class="twitter-timeline">` + `platform.x.com/widgets.js`, the same snippet X's
+own oEmbed API generates) — not scraped, no API key. Note the correct handle is `@TheNYRA`, not
+`@NYRA` (confirmed via the oEmbed endpoint after an initial wrong guess).
+**Why:** Neither the dev sandbox nor a local `file://` test could conclusively confirm the widget
+renders real tweets — the sandbox's `syndication.twitter.com` request came back 429 (likely a
+shared/cloud-IP reputation issue), and a double-clicked local HTML file runs under more restrictive
+script permissions than a real hosted page, so a blank/plain-link result there isn't a reliable
+negative signal either. Rather than keep chasing an inconclusive local test, this was verified
+directly on the real production domain (a real `https://` origin, the user's own residential
+network) — the only environment both test methods have a plausible confound for. The widget degrades
+gracefully either way: if it fails to render, the anchor stays a plain clickable link to the account
+instead of breaking the page.
+**Alternatives considered:** A scraped/proxied feed (rejected outright — X's official embed exists
+specifically so nobody needs to scrape it, unlike odds/entries where no official free embed exists);
+continuing to test locally before shipping (rejected as low-value — two inconclusive test
+environments in a row pointed at testing in the one environment that actually matters).
+
+---
+
 ## Bias auto-suggest from user-pasted text, not a fetched/scraped source
 **Date:** 2026-07-09
 **Decision:** Added an "Analyze Pasted Text" step to the Bias Tracker's Add Bias Note form. The

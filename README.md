@@ -52,6 +52,9 @@ floated future Calendar/archive page) can slot in the same way.
 - A **Track Conditions & Rail — NYRA Scratches** panel embedding NYRA's own live scratches page
   (official track/turf condition, which races run on which turf course, and rail settings in feet) —
   the real stewards' call, shown right next to our heuristic for comparison.
+- A **live @TheNYRA X/Twitter feed**, right below the scratches panel, via X's own official embed
+  widget (`platform.x.com/widgets.js`) — not scraped. If the widget doesn't load in a given browser,
+  it falls back to a plain link to the account rather than breaking anything.
 
 **Forecasting**
 - **Wind Forecast Scrubber** — a slider from "Now" to +6h in 30-minute steps that re-projects the

@@ -555,6 +555,15 @@
     margin-top: 8px;
     line-height: 1.5;
   }
+  .twitter-embed-wrap{
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 200px;
+  }
+  .twitter-embed-wrap a.twitter-timeline{
+    color: var(--sky);
+    font-family:'IBM Plex Sans', sans-serif;
+  }
 
   /* ---------- Wind forecast scrubber ---------- */
   .forecast-panel{ margin-top: 18px; }
@@ -1321,6 +1330,22 @@
       <div class="nyra-readout">
         Official scratches, track/turf conditions, and rail settings, straight from NYRA's own live page —
         this is the real stewards' call, not our heuristic estimate above.
+      </div>
+    </div>
+
+    <div class="nyra-panel">
+      <div class="panel-title" style="margin-bottom:10px;">
+        NYRA — Live X/Twitter Feed
+        <span class="tag">LIVE · X.COM/THENYRA</span>
+      </div>
+      <div class="twitter-embed-wrap">
+        <a class="twitter-timeline" data-theme="dark" data-height="600" href="https://x.com/TheNYRA?ref_src=twsrc%5Etfw">Posts by TheNYRA</a>
+        <script async src="https://platform.x.com/widgets.js" charset="utf-8"></script>
+      </div>
+      <div class="nyra-readout">
+        Official @TheNYRA feed via X's own embed widget — not scraped. If this shows as a plain text
+        link instead of a live timeline, X's widget didn't load in your browser; the link still works
+        as a fallback.
       </div>
     </div>
 
