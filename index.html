@@ -1338,9 +1338,8 @@
         NYRA — Live X/Twitter Feed
         <span class="tag">LIVE · X.COM/THENYRA</span>
       </div>
-      <div class="twitter-embed-wrap">
+      <div class="twitter-embed-wrap" id="twitterEmbedWrap">
         <a class="twitter-timeline" data-theme="dark" data-height="600" href="https://x.com/TheNYRA?ref_src=twsrc%5Etfw">Posts by TheNYRA</a>
-        <script async src="https://platform.x.com/widgets.js" charset="utf-8"></script>
       </div>
       <div class="nyra-readout">
         Official @TheNYRA feed via X's own embed widget — not scraped. If this shows as a plain text
@@ -3022,6 +3021,36 @@
     if (frame) frame.src = `${NYRA_SCRATCH_URL}?_=${Date.now()}`;
   }
 
+  // ---------- NYRA live X/Twitter feed (official embed widget) ----------
+  // The simple <a class="twitter-timeline"> + plain <script> tag relies on
+  // X's widgets.js auto-scanning the DOM on DOMContentLoaded. On a page this
+  // busy (Windy embed, NYRA iframe, RSS calls, fonts all loading at once),
+  // widgets.js can finish loading *after* that event already fired and never
+  // scan the page — confirmed as the likely cause after the simple version
+  // showed a plain link in three different environments (sandbox, local
+  // file, and live production). This is X's own documented async factory
+  // pattern for exactly that situation: load the script ourselves, then
+  // explicitly call twttr.widgets.load() once it's actually ready, instead
+  // of hoping auto-init's timing works out.
+  window.twttr = (function(d, s, id){
+    let js; const fjs = d.getElementsByTagName(s)[0];
+    const t = window.twttr || {};
+    if (d.getElementById(id)) return t;
+    js = d.createElement(s);
+    js.id = id;
+    js.src = "https://platform.x.com/widgets.js";
+    fjs.parentNode.insertBefore(js, fjs);
+    t._e = [];
+    t.ready = function(f){ t._e.push(f); };
+    return t;
+  }(document, "script", "twitter-wjs"));
+
+  function loadTwitterEmbed(){
+    const wrap = $("twitterEmbedWrap");
+    if (!wrap) return;
+    twttr.ready((twttrInstance) => { twttrInstance.widgets.load(wrap); });
+  }
+
   // ---------- Radar & storm forecast (Windy.com embed, two modes) ----------
   // Consolidated from two separate widgets (a RainViewer/Leaflet radar map +
   // a standalone Windy forecast embed) into one: same iframe, we just swap
@@ -3337,6 +3366,7 @@
   initWindFlow();
   fetchWeather();
   fetchNewsWire();
+  loadTwitterEmbed();
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts

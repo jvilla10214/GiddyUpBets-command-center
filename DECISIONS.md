@@ -26,6 +26,16 @@ instead of breaking the page.
 specifically so nobody needs to scrape it, unlike odds/entries where no official free embed exists);
 continuing to test locally before shipping (rejected as low-value — two inconclusive test
 environments in a row pointed at testing in the one environment that actually matters).
+**Update (same day):** Production test came back conclusive — plain link, no timeline, no iframe
+attempt at all. Switched from the simple `<a class="twitter-timeline">` + bare `<script>` tag (which
+depends on `widgets.js` auto-scanning the DOM on `DOMContentLoaded`) to X's documented async factory
+pattern: load the script ourselves, then explicitly call `twttr.widgets.load()` once it's ready. On
+a page this busy (Windy embed, NYRA iframe, RSS calls, fonts all loading at once), `widgets.js`
+plausibly finishes loading *after* `DOMContentLoaded` already fired, so auto-init never ran — this
+targets that specific timing gap. The dev sandbox still can't confirm real tweet data loads (an
+iframe now gets created, but the `syndication.twitter.com` request inside it still comes back
+empty/blocked there — a separate, likely IP-reputation issue unrelated to this fix), so this still
+needs a second production check.
 
 ---
 
