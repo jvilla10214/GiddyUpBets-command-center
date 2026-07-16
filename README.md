@@ -38,7 +38,9 @@ floated future Calendar/archive page) can slot in the same way.
 - Wind compass (rotating needle, true direction + speed) and an animated wind-flow overlay
   (Windy.com-style streaklines) drawn directly on the track photo, both driven by live wind data.
 - Temperature (with feels-like), wind gusts, rainfall (current rate + last 6h/24h/48h + today's
-  total), humidity, cloud cover, barometric pressure, and a plain-language conditions description.
+  total), humidity, cloud cover, barometric pressure, a plain-language conditions description, and
+  US AQI air quality (color-coded by EPA category — Good through Hazardous), via Open-Meteo's
+  separate free Air Quality API.
 - Auto-refreshes every 5 minutes, with a visible countdown, manual refresh button, and a
   connection-status pill that turns red and auto-retries if a fetch fails.
 

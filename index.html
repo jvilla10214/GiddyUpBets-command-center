@@ -374,6 +374,12 @@
   .trend-dry{ color: var(--rail-green); }
   .trend-wet{ color: var(--silk-red); }
   .trend-hold{ color: var(--parchment-dim); }
+  .aqi-good{ color: var(--rail-green); }
+  .aqi-moderate{ color: var(--tote-amber); }
+  .aqi-usg{ color: var(--clay); }
+  .aqi-unhealthy{ color: var(--silk-red); }
+  .aqi-very-unhealthy{ color: #a565c9; }
+  .aqi-hazardous{ color: #7e2d40; }
 
   /* ---------- Metric tiles ---------- */
   .tile-stack{ display:flex; flex-direction:column; gap:14px; }
@@ -1453,6 +1459,14 @@
       <div class="tvalue" style="font-size:18px;"><span id="weatherDesc">—</span></div>
     </div>
 
+    <div class="tile" id="aqiTile">
+      <div>
+        <div class="tlabel">Air Quality</div>
+        <div class="tsub" id="aqiCategory">—</div>
+      </div>
+      <div class="tvalue"><span id="aqiValue">—</span><span class="tunit">AQI</span></div>
+    </div>
+
     <div class="tile radar-panel">
       <div class="panel-title" style="margin-bottom:10px;">
         Radar &amp; Storm Forecast — Saratoga
@@ -2529,6 +2543,47 @@
     }
   }
 
+  // ---------- Air Quality (Open-Meteo Air Quality API) ----------
+  // Same free/keyless provider already used for the main weather fetch, just
+  // a different subdomain/endpoint, so this is a separate fetch() call with
+  // its own try/catch — a hiccup here shouldn't affect the main weather tiles.
+  const AQI_API = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT}&longitude=${LON}` +
+    `&current=us_aqi&timezone=America%2FNew_York`;
+
+  // EPA's standard US AQI breakpoints. Pure classifier (no DOM) so it's
+  // reusable/testable on its own, same pattern as classifyDirtCondition above.
+  function classifyAqi(aqi){
+    if (aqi <= 50) return { label: "Good", cls: "aqi-good" };
+    if (aqi <= 100) return { label: "Moderate", cls: "aqi-moderate" };
+    if (aqi <= 150) return { label: "Unhealthy for Sensitive Groups", cls: "aqi-usg" };
+    if (aqi <= 200) return { label: "Unhealthy", cls: "aqi-unhealthy" };
+    if (aqi <= 300) return { label: "Very Unhealthy", cls: "aqi-very-unhealthy" };
+    return { label: "Hazardous", cls: "aqi-hazardous" };
+  }
+
+  async function fetchAirQuality(){
+    try{
+      const res = await fetch(AQI_API);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const aqi = data.current?.us_aqi;
+      const valueEl = $("aqiValue");
+      const categoryEl = $("aqiCategory");
+      if (aqi == null){
+        valueEl.textContent = "—";
+        categoryEl.textContent = "—";
+        return;
+      }
+      const { label, cls } = classifyAqi(aqi);
+      valueEl.textContent = Math.round(aqi);
+      valueEl.className = cls;
+      categoryEl.textContent = label;
+      categoryEl.className = `tsub ${cls}`;
+    } catch(err){
+      console.error("Air quality fetch failed", err);
+    }
+  }
+
   // ---------- Racing News Wire ----------
   // General racing-industry news, not Saratoga-filtered — narrowing to
   // Saratoga-only would leave the wire empty for long stretches outside major
@@ -3372,11 +3427,13 @@
   initWindFlow();
   fetchWeather();
   fetchNewsWire();
+  fetchAirQuality();
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
+  setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
 })();
 </script>
 </body>

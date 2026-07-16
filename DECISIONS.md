@@ -6,6 +6,24 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## Air Quality tile: Open-Meteo's Air Quality API, same provider as everything else
+**Date:** 2026-07-16
+**Decision:** Added an "Air Quality" tile to the Dashboard's right column (after Conditions, before
+Radar), showing US AQI color-coded by the standard EPA breakpoints (Good/Moderate/Unhealthy for
+Sensitive Groups/Unhealthy/Very Unhealthy/Hazardous). Data comes from
+`air-quality-api.open-meteo.com` — a separate subdomain/endpoint from the main weather API, so it's
+its own `fetch()` call with its own try/catch, refreshed on the same 5-minute cycle as the main
+weather fetch.
+**Why:** Same free, keyless provider already trusted for every other weather data point in this app
+— no new vendor to evaluate, no new reliability question. Air quality is also genuinely relevant to
+racing (wildfire smoke has caused real race-day postponements at various tracks in recent years),
+so this isn't just "more numbers," it's the same category of decision-relevant conditions data as
+wind/rain/track condition.
+**Alternatives considered:** None seriously — this was a straightforward extension of an
+already-decided, already-trusted data source, not a new data-source evaluation.
+
+---
+
 ## NYRA X/Twitter: gave up on the live embed widget, link out instead
 **Date:** 2026-07-10
 **Decision:** X's official embed widget (`<a class="twitter-timeline">` + `platform.x.com/widgets.js`,
