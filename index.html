@@ -2875,6 +2875,30 @@
       sentences.push(`Track conditions are holding steady at ${dirtLabel.toLowerCase()} (dirt) / ${turfLabel.toLowerCase()} (turf).`);
     }
 
+    // ---- Turf-specific rain effect (why: turf drains slower than dirt and
+    // doesn't firm back up the same way — rain softens it independently of
+    // whatever the dirt is doing, and typically slows turf times rather than
+    // just shifting a bias like it does on dirt). ----
+    if (turfLabel === "SOFT"){
+      sentences.push(`The turf is playing soft off recent rain — turf times typically run slower in this, and a persistent soaking could prompt turf races to move to the main track.`);
+    } else if (turfLabel === "YIELDING"){
+      sentences.push(`The turf has some give from recent rain (yielding), which tends to slow turf times somewhat versus a firm course.`);
+    }
+
+    // ---- Backstretch vs. stretch wind reversal (why: a headwind down the
+    // backstretch shields closers sitting behind pace-setters, and if the
+    // stretch wind then flips to a tailwind it helps them finish — the
+    // opposite combo brings hot fractions back to the field late instead). ----
+    const back = windComponents(speed, dir, TRACK_HEADING.backstretch);
+    const backDesc = describeStretchWind(back.headwind, back.crosswind);
+    if (backDesc.kind !== "calm" && backDesc.kind !== homeDesc.kind){
+      if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){
+        sentences.push(`Wind flips from a backstretch headwind to a stretch tailwind — that shields closers early and helps them finish, a combination that tends to favor rallying types over lone-speed.`);
+      } else if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){
+        sentences.push(`Wind flips from a backstretch tailwind to a stretch headwind — an aided pace early runs into more resistance late than the stretch wind alone would suggest.`);
+      }
+    }
+
     // ---- Heat/humidity vs. stamina (why: evaporative cooling gets harder as
     // feels-like climbs, independent of wind or surface — this is a fatigue/
     // vet-scratch risk note, not a running-style bias claim like wind gets,
@@ -2904,7 +2928,7 @@
       sentences.push("Speed that gets loose on the lead may be tough to run down under this wind — a shape that favors need-to-lead types.");
     }
 
-    return sentences.slice(0, 5).join(" ");
+    return sentences.slice(0, 7).join(" ");
   }
 
   function renderAiRacingSummary(ctx){
