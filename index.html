@@ -89,6 +89,37 @@
     font-size: 13px;
     color: var(--parchment-dim);
   }
+
+  #trackSelect{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  #trackSelect:hover{ border-color: var(--tote-amber); }
+
+  .track-photo-placeholder[hidden]{ display:none; }
+  .track-photo-placeholder{
+    position:absolute; inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap: 10px;
+    background: var(--panel-2);
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    text-align: center;
+    padding: 20px;
+  }
+  .track-photo-placeholder svg{ opacity: 0.5; }
   @media (max-width: 480px){
     .alert-dropdown{
       position: fixed;
@@ -1206,6 +1237,7 @@
     <img class="brand-logo" src="assets/GupB.png" alt="GiddyUpBets — Press Your Strongest Opinions &amp; Print Money">
     <div class="sub">Command Center</div>
   </div>
+  <select id="trackSelect" title="Choose track"></select>
   <div class="status-cluster">
     <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting</span></span>
     <span id="clock">--:--:--</span>
@@ -1276,10 +1308,17 @@
 <div class="grid">
   <!-- LEFT: Track + wind -->
   <div class="panel">
-    <div class="panel-title">Saratoga Race Course <span class="tag" id="asOf">—</span></div>
+    <div class="panel-title"><span id="trackPanelTitle">Saratoga Race Course</span> <span class="tag" id="asOf">—</span></div>
     <div class="track-wrap" id="trackWrap">
-      <img class="track-photo" src="assets/track.png" alt="Aerial view of Saratoga Race Course">
-      <div class="track-caption">Live aerial — Saratoga Race Course</div>
+      <img class="track-photo" id="trackPhoto" src="assets/track.png" alt="Aerial view of Saratoga Race Course">
+      <div class="track-photo-placeholder" id="trackPhotoPlaceholder" hidden>
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <ellipse cx="12" cy="12" rx="10" ry="6"/>
+          <ellipse cx="12" cy="12" rx="5.5" ry="2.5"/>
+        </svg>
+        <span id="trackPhotoPlaceholderText">Aerial photo coming soon</span>
+      </div>
+      <div class="track-caption" id="trackCaption">Live aerial — Saratoga Race Course</div>
 
       <canvas class="wind-flow-canvas" id="windFlowCanvas"></canvas>
 
@@ -1354,7 +1393,7 @@
       </div>
     </div>
 
-    <div class="nyra-panel">
+    <div class="nyra-panel" id="nyraScratchesPanel">
       <div class="panel-title" style="margin-bottom:10px;">
         Track Conditions &amp; Rail — NYRA Scratches
         <span class="tag">LIVE · NYRA.COM</span>
@@ -1362,7 +1401,7 @@
       <div class="nyra-frame-wrap">
         <iframe
           id="nyraFrame"
-          src="https://tr-cdn.nyra.com/direct/scratches/SARscratch.html"
+          src=""
           loading="lazy"
           title="Saratoga scratches, official track conditions, and turf rail settings from NYRA">
         </iframe>
@@ -1373,7 +1412,7 @@
       </div>
     </div>
 
-    <div class="nyra-panel">
+    <div class="nyra-panel" id="nyraXPanel">
       <div class="panel-title" style="margin-bottom:10px;">
         NYRA on X/Twitter
         <span class="tag">X.COM/THENYRA</span>
@@ -1389,6 +1428,17 @@
         X's own embed widget wasn't rendering reliably across the browsers we tested (even for
         major accounts, not just NYRA), so this links out directly instead of embedding a live
         timeline that might just show blank.
+      </div>
+    </div>
+
+    <div class="nyra-panel" id="nyraFallbackPanel" hidden>
+      <div class="panel-title" style="margin-bottom:10px;">
+        Track Conditions &amp; Rail
+        <span class="tag">NOT AVAILABLE</span>
+      </div>
+      <div class="nyra-readout" id="nyraFallbackText">
+        Live scratches/rail widget isn't available for this track yet — check the track's own site for
+        official conditions.
       </div>
     </div>
 
@@ -1471,7 +1521,7 @@
 
     <div class="tile radar-panel">
       <div class="panel-title" style="margin-bottom:10px;">
-        Radar &amp; Storm Forecast — Saratoga
+        Radar &amp; Storm Forecast — <span id="radarPanelTrackName">Saratoga</span>
         <span class="tag" id="radarModeTag">NOW · RADAR</span>
       </div>
       <div class="radar-mode-toggle">
@@ -1481,7 +1531,7 @@
       <div class="futurecast-frame-wrap">
         <iframe
           id="radarFrame"
-          src="https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=9&level=surface&overlay=radar&product=radar&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1"
+          src=""
           loading="lazy"
           title="Saratoga radar and storm forecast">
         </iframe>
@@ -1646,7 +1696,7 @@
       <div class="news-wire-list news-wire-list-full" id="newsWireList">
         <div class="news-wire-empty">Loading racing news…</div>
       </div>
-      <div class="news-wire-disclaimer">
+      <div class="news-wire-disclaimer" id="newsWireDisclaimer">
         Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just
         Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
       </div>
@@ -1656,24 +1706,67 @@
 </div>
 
 <footer>
-  <span>Weather data: Open-Meteo (no API key required) · Saratoga Race Course, NY (43.0723, -73.7859)</span>
+  <span id="footerWeatherSource">Weather data: Open-Meteo (no API key required) · Saratoga Race Course, NY (43.0723, -73.7859)</span>
   <span>Track condition and trend estimates are heuristic, not official stewards' calls — always confirm with track superintendent reports.</span>
 </footer>
 
 <script>
 (function(){
-  const LAT = 43.0723, LON = -73.7859;
+  // ---------- Multi-track registry ----------
+  // Every other API URL/timezone/wind-geometry constant in this file used to be
+  // hardcoded to Saratoga. This is now the single source of truth they all read
+  // from via `activeTrack` — see currentApiUrl()/currentAqiApiUrl()/etc. below.
+  // `heading` bearings are NOT guessable: each is derived from inspecting that
+  // track's actual satellite layout (grandstand side = home stretch, then
+  // counterclockwise-motion geometry gives the compass heading), the same way
+  // Saratoga's 270°/90° were derived. `nyraCode` is null for non-NYRA tracks —
+  // it doubles as the flag that hides the NYRA scratches/X panels.
+  const TRACKS = {
+    saratoga: {
+      id: "saratoga", name: "Saratoga Race Course", shortName: "Saratoga",
+      city: "Saratoga Springs, NY",
+      lat: 43.0723, lon: -73.7859,
+      timezone: "America/New_York",
+      heading: { homestretch: 270, backstretch: 90 },
+      nyraCode: "SAR",
+      photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
+    },
+    monmouth: {
+      id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
+      city: "Oceanport, NJ",
+      lat: 40.3058, lon: -74.0087,
+      timezone: "America/New_York",
+      heading: { homestretch: 70, backstretch: 250 },
+      nyraCode: null,
+      photo: null, photoAlt: null,
+    },
+  };
+  const DEFAULT_TRACK_ID = "saratoga";
+  const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
+  let activeTrack = TRACKS[DEFAULT_TRACK_ID];
+
+  // Saratoga keeps its original unsuffixed key so existing users don't lose
+  // their weather/bias history when this ships — every other track gets a
+  // namespaced key so per-track history/state can't collide.
+  function trackScopedKey(base){
+    return activeTrack.id === DEFAULT_TRACK_ID ? base : `${base}__${activeTrack.id}`;
+  }
+
   const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
   const FORECAST_STEP_COUNT = 12; // + the live "now" entry = 13 points, 6 hours ahead in 30-min steps
-  const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
-    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,` +
-    `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl` +
-    `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m` +
-    `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
-    `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
-    `wind_speed_10m_max,wind_gusts_10m_max,weather_code` +
-    `&past_days=2` +
-    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York`;
+
+  function currentApiUrl(){
+    const t = activeTrack;
+    return `https://api.open-meteo.com/v1/forecast?latitude=${t.lat}&longitude=${t.lon}` +
+      `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,` +
+      `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl` +
+      `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m` +
+      `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
+      `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
+      `wind_speed_10m_max,wind_gusts_10m_max,weather_code` +
+      `&past_days=2` +
+      `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=${encodeURIComponent(t.timezone)}`;
+  }
 
   const $ = (id) => document.getElementById(id);
   let countdownTimer = null;
@@ -1683,6 +1776,7 @@
   let lastWeatherData = null;
   let lastAqi = null; // filled in by fetchAirQuality(), a separate fetch cycle from the main weather call
   let lastAiSummaryCtx = null; // last non-AQI context used, so an AQI update alone can re-render the summary
+  let lastNewsItems = []; // cached so switchTrack() can re-flag matches without a network refetch
 
   const WMO = {
     0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
@@ -1770,7 +1864,7 @@
   // won't sync across devices and clearing browser data clears it too.
   // Historical Lookup instead pulls any past date live from Open-Meteo's
   // free archive API (ERA5 reanalysis), no key required, ~5 day lag.
-  const LOG_STORAGE_KEY = "giddyupbets_weather_log_v1";
+  const LOG_STORAGE_KEY_BASE = "giddyupbets_weather_log_v1";
   const ARCHIVE_API_BASE = "https://archive-api.open-meteo.com/v1/archive";
   let weatherLog = [];
 
@@ -1779,7 +1873,7 @@
   // that's an inherently qualitative, human read, so this is manual entry by
   // design (unlike everything else in this app, which is auto-fetched). Keyed
   // by date, same grain as the Daily Log, so the two can be joined for display.
-  const BIAS_LOG_KEY = "giddyupbets_bias_log_v1";
+  const BIAS_LOG_KEY_BASE = "giddyupbets_bias_log_v1";
   const BIAS_STYLE_CLASS = {
     "Speed-favoring": "bias-speed",
     "Neutral / No Bias": "bias-neutral",
@@ -1790,7 +1884,7 @@
 
   function loadBiasLog(){
     try{
-      const raw = localStorage.getItem(BIAS_LOG_KEY);
+      const raw = localStorage.getItem(trackScopedKey(BIAS_LOG_KEY_BASE));
       const parsed = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
     } catch(err){
@@ -1799,7 +1893,7 @@
     }
   }
   function saveBiasLog(){
-    try{ localStorage.setItem(BIAS_LOG_KEY, JSON.stringify(biasLog)); }
+    try{ localStorage.setItem(trackScopedKey(BIAS_LOG_KEY_BASE), JSON.stringify(biasLog)); }
     catch(err){ console.error("Bias log failed to save", err); }
   }
 
@@ -2070,7 +2164,7 @@
 
   function loadWeatherLog(){
     try{
-      const raw = localStorage.getItem(LOG_STORAGE_KEY);
+      const raw = localStorage.getItem(trackScopedKey(LOG_STORAGE_KEY_BASE));
       const parsed = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
     } catch(err){
@@ -2081,7 +2175,7 @@
 
   function saveWeatherLog(){
     try{
-      localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(weatherLog));
+      localStorage.setItem(trackScopedKey(LOG_STORAGE_KEY_BASE), JSON.stringify(weatherLog));
     } catch(err){
       console.error("Weather log failed to save", err);
     }
@@ -2239,11 +2333,11 @@
     table.hidden = true;
     try{
       const prevDateStr = shiftDateStr(dateStr, -1);
-      const url = `${ARCHIVE_API_BASE}?latitude=${LAT}&longitude=${LON}` +
+      const url = `${ARCHIVE_API_BASE}?latitude=${activeTrack.lat}&longitude=${activeTrack.lon}` +
         `&start_date=${prevDateStr}&end_date=${dateStr}` +
         `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_gusts_10m_max,weather_code` +
         `&hourly=wind_speed_10m,wind_direction_10m,precipitation` +
-        `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York`;
+        `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=${encodeURIComponent(activeTrack.timezone)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
@@ -2289,8 +2383,8 @@
     odds:    { label: "Odds",     colorVar: "--sky",        enabled: false },
   };
 
-  const ALERT_FEED_KEY = "giddyupbets_alert_feed_v1";
-  const ALERT_STATE_KEY = "giddyupbets_alert_state_v1";
+  const ALERT_FEED_KEY = "giddyupbets_alert_feed_v1"; // shared across all tracks, deliberately not namespaced
+  const ALERT_STATE_KEY_BASE = "giddyupbets_alert_state_v1";
   const ALERT_LAST_SEEN_KEY = "giddyupbets_alert_last_seen";
   const ALERT_FEED_MAX = 50;
   let alertFeed = [];
@@ -2313,7 +2407,7 @@
   }
   function loadAlertState(){
     try{
-      const raw = localStorage.getItem(ALERT_STATE_KEY);
+      const raw = localStorage.getItem(trackScopedKey(ALERT_STATE_KEY_BASE));
       return raw ? JSON.parse(raw) : alertState;
     } catch(err){
       console.error("Alert state failed to load", err);
@@ -2321,7 +2415,7 @@
     }
   }
   function saveAlertState(){
-    try{ localStorage.setItem(ALERT_STATE_KEY, JSON.stringify(alertState)); }
+    try{ localStorage.setItem(trackScopedKey(ALERT_STATE_KEY_BASE), JSON.stringify(alertState)); }
     catch(err){ console.error("Alert state failed to save", err); }
   }
 
@@ -2329,7 +2423,7 @@
     return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type,
-      track: track ?? "Saratoga",
+      track: track ?? activeTrack.shortName,
       message,
       timestamp: new Date().toISOString(),
     };
@@ -2487,7 +2581,9 @@
   // actual real-world trigger for race delays (lightning/severe storms, excessive
   // heat) — unlike the wind/rain alerts above, which are just our own threshold
   // reads of raw Open-Meteo numbers, this is the government's own official call.
-  const NWS_ALERTS_URL = `https://api.weather.gov/alerts/active?point=${LAT},${LON}`;
+  function currentNwsAlertsUrl(){
+    return `https://api.weather.gov/alerts/active?point=${activeTrack.lat},${activeTrack.lon}`;
+  }
   const NWS_SEEN_KEY = "giddyupbets_nws_seen_alerts_v1";
 
   function loadSeenNwsAlerts(){
@@ -2523,7 +2619,7 @@
   // push an "ended" message using the name we already had stored for them.
   async function fetchNwsAlerts(){
     try{
-      const res = await fetch(NWS_ALERTS_URL, { headers: { Accept: "application/geo+json" } });
+      const res = await fetch(currentNwsAlertsUrl(), { headers: { Accept: "application/geo+json" } });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       const active = classifyNwsAlerts(data.features);
@@ -2551,8 +2647,10 @@
   // Same free/keyless provider already used for the main weather fetch, just
   // a different subdomain/endpoint, so this is a separate fetch() call with
   // its own try/catch — a hiccup here shouldn't affect the main weather tiles.
-  const AQI_API = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT}&longitude=${LON}` +
-    `&current=us_aqi&timezone=America%2FNew_York`;
+  function currentAqiApiUrl(){
+    return `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${activeTrack.lat}&longitude=${activeTrack.lon}` +
+      `&current=us_aqi&timezone=${encodeURIComponent(activeTrack.timezone)}`;
+  }
 
   // EPA's standard US AQI breakpoints. Pure classifier (no DOM) so it's
   // reusable/testable on its own, same pattern as classifyDirtCondition above.
@@ -2567,7 +2665,7 @@
 
   async function fetchAirQuality(){
     try{
-      const res = await fetch(AQI_API);
+      const res = await fetch(currentAqiApiUrl());
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       const aqi = data.current?.us_aqi;
@@ -2648,11 +2746,12 @@
     }
   }
 
-  function isSaratogaItem(item){
-    return /saratoga/i.test(item.title);
+  function isActiveTrackItem(item){
+    return new RegExp(activeTrack.shortName, "i").test(item.title);
   }
 
   function renderNewsWire(items){
+    lastNewsItems = items;
     const list = $("newsWireList");
     const tag = $("newsWireTag");
     tag.textContent = items.length ? `${items.length} ITEMS` : "NO ITEMS";
@@ -2665,9 +2764,9 @@
       // title/link come from external RSS feeds — built via DOM APIs (textContent,
       // a real <a> element) rather than innerHTML string interpolation, so a feed
       // can't inject markup/attributes into the page.
-      const saratoga = isSaratogaItem(item);
+      const matchesTrack = isActiveTrackItem(item);
       const div = document.createElement("div");
-      div.className = "news-item" + (saratoga ? " saratoga" : "");
+      div.className = "news-item" + (matchesTrack ? " saratoga" : "");
 
       const meta = document.createElement("div");
       meta.className = "news-item-meta";
@@ -2677,10 +2776,10 @@
       const timeSpan = document.createElement("span");
       timeSpan.textContent = item.ts ? fmtRelativeTime(new Date(item.ts).toISOString()) : "—";
       meta.append(sourceSpan, timeSpan);
-      if (saratoga){
+      if (matchesTrack){
         const flag = document.createElement("span");
         flag.className = "news-item-saratoga-flag";
-        flag.textContent = "Saratoga";
+        flag.textContent = activeTrack.shortName;
         meta.appendChild(flag);
       }
 
@@ -2705,10 +2804,9 @@
   }
 
   // ---------- Track play analysis (rule-based heuristic, no LLM) ----------
-  // Compass bearing horses are heading on each straight. Assumes the aerial
-  // photo is north-up and the field runs counterclockwise, standard for
-  // Saratoga and virtually every N. American thoroughbred track.
-  const TRACK_HEADING = { homestretch: 270, backstretch: 90 };
+  // Compass bearing horses are heading on each straight — read from
+  // activeTrack.heading (see the TRACKS registry above) rather than a fixed
+  // constant, since every track has its own real-world stretch orientation.
 
   // Aviation-style wind component math: headwind is positive when the wind's
   // source bearing matches the direction of travel (blowing straight into you).
@@ -2745,8 +2843,8 @@
       return "<p>Waiting on live conditions…</p>";
     }
 
-    const home = windComponents(speed, sourceDeg, TRACK_HEADING.homestretch);
-    const back = windComponents(speed, sourceDeg, TRACK_HEADING.backstretch);
+    const home = windComponents(speed, sourceDeg, activeTrack.heading.homestretch);
+    const back = windComponents(speed, sourceDeg, activeTrack.heading.backstretch);
     const homeDesc = describeStretchWind(home.headwind, home.crosswind);
     const backDesc = describeStretchWind(back.headwind, back.crosswind);
 
@@ -2819,7 +2917,7 @@
     for (let i = 1; i < steps.length; i++){
       const step = steps[i];
       if (step.wind == null || step.dir == null) continue;
-      const { headwind, crosswind } = windComponents(step.wind, step.dir, TRACK_HEADING.homestretch);
+      const { headwind, crosswind } = windComponents(step.wind, step.dir, activeTrack.heading.homestretch);
       const desc = describeStretchWind(headwind, crosswind);
       if (desc.kind === "headwind" && desc.strength !== "light"){
         return { step, desc };
@@ -2838,7 +2936,7 @@
     }
 
     const compass = compassPoint(dir);
-    const home = windComponents(speed, dir, TRACK_HEADING.homestretch);
+    const home = windComponents(speed, dir, activeTrack.heading.homestretch);
     const homeDesc = describeStretchWind(home.headwind, home.crosswind);
 
     // Only look for a future onset if wind isn't already a moderate+ headwind —
@@ -2889,7 +2987,7 @@
     // backstretch shields closers sitting behind pace-setters, and if the
     // stretch wind then flips to a tailwind it helps them finish — the
     // opposite combo brings hot fractions back to the field late instead). ----
-    const back = windComponents(speed, dir, TRACK_HEADING.backstretch);
+    const back = windComponents(speed, dir, activeTrack.heading.backstretch);
     const backDesc = describeStretchWind(back.headwind, back.crosswind);
     if (backDesc.kind !== "calm" && backDesc.kind !== homeDesc.kind){
       if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){
@@ -2943,15 +3041,15 @@
   }
 
   function fmtTime(iso){
-    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute:'2-digit', timeZone:'America/New_York' });
+    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute:'2-digit', timeZone: activeTrack.timezone });
   }
 
-  // API timestamps are labeled in track-local time (America/New_York) with no UTC
-  // offset, so "now" has to be computed in that same zone rather than with
-  // toISOString() (always UTC) or the browser's own local zone.
+  // API timestamps are labeled in track-local time (activeTrack.timezone) with
+  // no UTC offset, so "now" has to be computed in that same zone rather than
+  // with toISOString() (always UTC) or the browser's own local zone.
   function nowInTrackTZ(){
     const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
+      timeZone: activeTrack.timezone,
       year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
     }).formatToParts(new Date());
     const get = (type) => parts.find(p => p.type === type)?.value;
@@ -3164,10 +3262,13 @@
   // A plain <iframe> only loads once, so without this it would show a stale
   // snapshot until the browser tab itself is reloaded. Cache-busting the src
   // on the same interval as the weather refresh keeps it genuinely live.
-  const NYRA_SCRATCH_URL = "https://tr-cdn.nyra.com/direct/scratches/SARscratch.html";
+  // Only NYRA-owned tracks (activeTrack.nyraCode != null) have this feed at all —
+  // see updateNyraWidgetVisibility() for the non-NYRA fallback.
   function refreshNyraFrame(){
     const frame = $("nyraFrame");
-    if (frame) frame.src = `${NYRA_SCRATCH_URL}?_=${Date.now()}`;
+    if (frame && activeTrack.nyraCode){
+      frame.src = `https://tr-cdn.nyra.com/direct/scratches/${activeTrack.nyraCode}scratch.html?_=${Date.now()}`;
+    }
   }
 
   // ---------- Radar & storm forecast (Windy.com embed, two modes) ----------
@@ -3177,10 +3278,13 @@
   // forecast product. Real radar has no far-future view (same underlying
   // limit RainViewer had), and the forecast product is model data, not
   // observed radar — the readout under the map says which one you're on.
-  const RADAR_MODE_URLS = {
-    radar: "https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=9&level=surface&overlay=radar&product=radar&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1",
-    rain: "https://embed.windy.com/embed2.html?lat=43.0723&lon=-73.7859&detailLat=43.0723&detailLon=-73.7859&width=650&height=450&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1",
-  };
+  function currentRadarModeUrls(){
+    const { lat, lon } = activeTrack;
+    return {
+      radar: `https://embed.windy.com/embed2.html?lat=${lat}&lon=${lon}&detailLat=${lat}&detailLon=${lon}&width=650&height=450&zoom=9&level=surface&overlay=radar&product=radar&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1`,
+      rain: `https://embed.windy.com/embed2.html?lat=${lat}&lon=${lon}&detailLat=${lat}&detailLon=${lon}&width=650&height=450&zoom=8&level=surface&overlay=rain&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1`,
+    };
+  }
   const RADAR_MODE_COPY = {
     radar: "Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.",
     rain: "Multi-day precipitation forecast (ECMWF model) — good for spotting storms that might come through, less precise than radar for \"right now.\"",
@@ -3188,18 +3292,21 @@
   const RADAR_MODE_TAGS = { radar: "NOW · RADAR", rain: "FORECAST · STORMS" };
 
   function setRadarMode(mode){
-    $("radarFrame").src = RADAR_MODE_URLS[mode];
+    $("radarFrame").src = currentRadarModeUrls()[mode];
     $("radarModeTag").textContent = RADAR_MODE_TAGS[mode];
     $("radarModeReadout").textContent = RADAR_MODE_COPY[mode];
     document.querySelectorAll(".radar-mode-btn").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.mode === mode);
     });
   }
+  function currentRadarMode(){
+    return document.querySelector(".radar-mode-btn.active")?.dataset.mode || "radar";
+  }
 
   async function fetchWeather(){
     setStatus(true, "Updating");
     try{
-      const res = await fetch(API);
+      const res = await fetch(currentApiUrl());
       if(!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       render(data);
@@ -3351,6 +3458,111 @@
     if (secondsLeft <= 0) fetchWeather();
   }
 
+  // ---------- Track switching ----------
+  // Everything in this section is what makes the header dropdown actually
+  // change the whole dashboard rather than just a label. switchTrack() is the
+  // single orchestration point: reset stale in-memory state, repaint the pure
+  // static UI synchronously (no network wait), reload per-track storage, then
+  // kick an immediate fetch so the user isn't staring at blanks until the next
+  // interval tick.
+  function updateNyraWidgetVisibility(track){
+    const hasNyra = track.nyraCode != null;
+    $("nyraScratchesPanel").hidden = !hasNyra;
+    $("nyraXPanel").hidden = !hasNyra;
+    $("nyraFallbackPanel").hidden = hasNyra;
+    if (!hasNyra){
+      $("nyraFallbackText").textContent =
+        `Live scratches/rail widget isn't available for ${track.name} yet — check ${track.shortName}'s own site for official conditions.`;
+    }
+  }
+
+  function renderStaticTrackChrome(track){
+    $("trackPanelTitle").textContent = track.name;
+    $("trackCaption").textContent = `Live aerial — ${track.name}`;
+    if (track.photo){
+      $("trackPhoto").src = track.photo;
+      $("trackPhoto").alt = track.photoAlt;
+      $("trackPhoto").hidden = false;
+      $("trackPhotoPlaceholder").hidden = true;
+    } else {
+      $("trackPhoto").hidden = true;
+      $("trackPhotoPlaceholder").hidden = false;
+      $("trackPhotoPlaceholderText").textContent = `${track.name} — aerial photo coming soon`;
+    }
+    $("nyraFrame").title = `${track.name} scratches, official track conditions, and turf rail settings from NYRA`;
+    $("radarFrame").title = `${track.name} radar and storm forecast`;
+    $("radarPanelTrackName").textContent = track.shortName;
+    $("newsWireDisclaimer").textContent =
+      `Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just ` +
+      `${track.shortName}. Items mentioning ${track.shortName} by name are flagged. Refreshes every 15 minutes.`;
+    $("footerWeatherSource").textContent =
+      `Weather data: Open-Meteo (no API key required) · ${track.name}, ${track.city} (${track.lat}, ${track.lon})`;
+    updateNyraWidgetVisibility(track);
+  }
+
+  function populateTrackSelect(){
+    const select = $("trackSelect");
+    select.innerHTML = "";
+    Object.values(TRACKS).forEach(t => {
+      const opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = t.name;
+      select.appendChild(opt);
+    });
+    select.value = activeTrack.id;
+    select.addEventListener("change", () => switchTrack(select.value));
+  }
+
+  function switchTrack(trackId){
+    const track = TRACKS[trackId];
+    if (!track || track === activeTrack) return;
+    activeTrack = track;
+    localStorage.setItem(ACTIVE_TRACK_KEY, trackId);
+
+    // Reset in-memory state + visible numbers so nothing from the old track
+    // bleeds into the new track's panels while the fresh fetch is in flight.
+    lastAqi = null;
+    lastWeatherData = null;
+    lastApparentTemp = null;
+    forecastSteps = [];
+    lastAiSummaryCtx = null;
+    flowAngleDeg = 90;
+    flowSpeedMph = 0;
+    $("aqiValue").textContent = "—";
+    $("aqiCategory").textContent = "—";
+    $("aiSummaryBody").textContent = "Waiting on live conditions…";
+    $("analysisBody").innerHTML = "<p>Waiting on live conditions…</p>";
+    $("windSpeed").textContent = "—";
+    $("windDir").textContent = "—";
+    $("dirtConditionValue").textContent = "—";
+    $("turfConditionValue").textContent = "—";
+    $("dirtTrend").textContent = "—";
+    $("turfTrend").textContent = "—";
+    $("forecastSlider").value = 0;
+    $("forecastReadout").textContent = "Showing current live conditions";
+
+    // Pure static UI — no network wait, so this repaints instantly.
+    renderStaticTrackChrome(track);
+    refreshNyraFrame();
+    setRadarMode(currentRadarMode());
+
+    // Per-track storage-backed collections.
+    weatherLog = loadWeatherLog();
+    renderLogTable();
+    biasLog = loadBiasLog();
+    renderBiasTable();
+    renderBiasTrends();
+    alertState = loadAlertState();
+
+    // Cheap re-flag of already-fetched news items under the new track name —
+    // no network call needed just to update which items get the highlight flag.
+    renderNewsWire(lastNewsItems);
+
+    // Kick an immediate fetch rather than waiting for the next interval tick.
+    fetchWeather();
+    fetchAirQuality();
+  }
+
   // ---------- Sidebar page navigation ----------
   // Config-driven like LOG_TABS below — adding another sidebar page later
   // (e.g. the Calendar/archive page floated for future work) is just another
@@ -3441,6 +3653,13 @@
     $("biasForm").classList.remove("open");
   });
 
+  // Restore the last-selected track (if any) before anything reads
+  // activeTrack, so the very first load of every per-track collection below
+  // already resolves to the right storage key.
+  activeTrack = TRACKS[localStorage.getItem(ACTIVE_TRACK_KEY)] ?? TRACKS[DEFAULT_TRACK_ID];
+  populateTrackSelect();
+  renderStaticTrackChrome(activeTrack);
+
   weatherLog = loadWeatherLog();
   renderLogTable();
 
@@ -3486,6 +3705,8 @@
   });
 
   initWindFlow();
+  refreshNyraFrame();
+  setRadarMode("radar");
   fetchWeather();
   fetchNewsWire();
   fetchAirQuality();
