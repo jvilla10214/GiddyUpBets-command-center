@@ -1762,6 +1762,15 @@
       nyraCode: null, scratchesUrl: "https://www.monmouthpark.com/horse-racing/scratches-and-changes/",
       photo: "assets/track-monmouth.png", photoAlt: "Aerial view of Monmouth Park",
     },
+    delmar: {
+      id: "delmar", name: "Del Mar", shortName: "Del Mar",
+      city: "Del Mar, CA",
+      lat: 32.9718, lon: -117.2575,
+      timezone: "America/Los_Angeles",
+      heading: { homestretch: 320, backstretch: 140 },
+      nyraCode: null, scratchesUrl: "https://www.dmtc.com/racing/changes",
+      photo: "assets/track-delmar.png", photoAlt: "Aerial view of Del Mar racetrack",
+    },
   };
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
@@ -3062,7 +3071,27 @@
     $("statusText").textContent = msg;
   }
 
+  // Open-Meteo timestamps (sunrise/sunset, hourly/minutely times, forecast
+  // step times) come back as local wall-clock strings for whatever timezone
+  // was requested — no UTC offset. Handing one of those to `new Date()`
+  // silently reinterprets it in the BROWSER's own timezone (JS treats an
+  // offset-less date-time string as local time), so converting that back
+  // through `timeZone: activeTrack.timezone` compounds the error instead of
+  // fixing it — invisible for Eastern-zone tracks if the runtime happens to
+  // also be Eastern/UTC-ish, but badly wrong for e.g. Del Mar (Pacific).
+  // Other sources (NWS alert `expires`) DO carry a real UTC offset and need
+  // genuine conversion, so only skip the Date() path when there's no offset.
   function fmtTime(iso){
+    const hasOffset = /Z$|[+-]\d{2}:\d{2}$/.test(iso);
+    if (!hasOffset){
+      const m = /T(\d{2}):(\d{2})/.exec(iso);
+      if (m){
+        let hour = parseInt(m[1], 10);
+        const ampm = hour >= 12 ? "PM" : "AM";
+        hour = hour % 12 || 12;
+        return `${hour}:${m[2]} ${ampm}`;
+      }
+    }
     return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute:'2-digit', timeZone: activeTrack.timezone });
   }
 
