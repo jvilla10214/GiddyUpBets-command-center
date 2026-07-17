@@ -1508,6 +1508,14 @@
 
     <div class="tile">
       <div>
+        <div class="tlabel">Soil Moisture</div>
+        <div class="tsub" id="soilMoistureDeep">Root zone (9–27cm) —</div>
+      </div>
+      <div class="tvalue"><span id="soilMoistureSurface">—</span><span class="tunit">% VWC</span></div>
+    </div>
+
+    <div class="tile">
+      <div>
         <div class="tlabel">Humidity</div>
         <div class="tsub" id="cloudCover">Cloud cover —</div>
       </div>
@@ -1790,7 +1798,8 @@
     const t = activeTrack;
     return `https://api.open-meteo.com/v1/forecast?latitude=${t.lat}&longitude=${t.lon}` +
       `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,` +
-      `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl` +
+      `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl,` +
+      `soil_moisture_0_to_1cm,soil_moisture_9_to_27cm` +
       `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m` +
       `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
       `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
@@ -3417,6 +3426,16 @@
     $("pressure").textContent = Math.round(c.pressure_msl ?? 0);
     $("weatherDesc").textContent = WMO[c.weather_code] ?? "—";
 
+    // Open-Meteo reports volumetric water content (m³ water per m³ soil, 0–1)
+    // — displayed as a percentage since that's the more familiar unit. Two
+    // depths: 0-1cm reacts fast to recent rain/sun (closest to what a track
+    // super would call "the cushion"), 9-27cm is the slower-moving base
+    // moisture that takes longer to dry out after a soaking.
+    $("soilMoistureSurface").textContent = c.soil_moisture_0_to_1cm != null
+      ? (c.soil_moisture_0_to_1cm * 100).toFixed(1) : "—";
+    $("soilMoistureDeep").textContent = `Root zone (9–27cm) ${
+      c.soil_moisture_9_to_27cm != null ? (c.soil_moisture_9_to_27cm * 100).toFixed(1) + "%" : "—"}`;
+
     const { date: todayStr, hourPrefix: nowHourPrefix } = nowInTrackTZ();
 
     let todayIdx = data.daily?.time?.findIndex(t => t === todayStr) ?? -1;
@@ -3598,6 +3617,8 @@
     $("turfConditionValue").textContent = "—";
     $("dirtTrend").textContent = "—";
     $("turfTrend").textContent = "—";
+    $("soilMoistureSurface").textContent = "—";
+    $("soilMoistureDeep").textContent = "Root zone (9–27cm) —";
     $("forecastSlider").value = 0;
     $("forecastReadout").textContent = "Showing current live conditions";
 
