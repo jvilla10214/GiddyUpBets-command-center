@@ -1412,6 +1412,25 @@
       </div>
     </div>
 
+    <div class="nyra-panel" id="scratchesLinkPanel" hidden>
+      <div class="panel-title" style="margin-bottom:10px;">
+        Track Conditions &amp; Rail
+        <span class="tag" id="scratchesLinkTag">LIVE</span>
+      </div>
+      <a class="twitter-link-card" id="scratchesLinkCard" href="#" target="_blank" rel="noopener noreferrer">
+        <span class="twitter-link-card-icon">↗</span>
+        <span class="twitter-link-card-text">
+          <span class="twitter-link-card-title" id="scratchesLinkTitle">View official scratches</span>
+          <span class="twitter-link-card-sub">Opens in a new tab</span>
+        </span>
+      </a>
+      <div class="nyra-readout">
+        We don't embed this track's scratches page directly — the page isn't a clean widget the way
+        NYRA's is, so this links out instead of pulling its full site (and whatever else is on it)
+        into this dashboard.
+      </div>
+    </div>
+
     <div class="nyra-panel" id="nyraXPanel">
       <div class="panel-title" style="margin-bottom:10px;">
         NYRA on X/Twitter
@@ -1719,8 +1738,11 @@
   // `heading` bearings are NOT guessable: each is derived from inspecting that
   // track's actual satellite layout (grandstand side = home stretch, then
   // counterclockwise-motion geometry gives the compass heading), the same way
-  // Saratoga's 270°/90° were derived. `nyraCode` is null for non-NYRA tracks —
-  // it doubles as the flag that hides the NYRA scratches/X panels.
+  // Saratoga's 270°/90° were derived. `nyraCode` is null for non-NYRA tracks.
+  // `scratchesUrl` is a direct iframe-able URL for tracks that publish their
+  // own scratches/conditions page (verified individually — no X-Frame-Options
+  // or CSP frame-ancestors header blocking it) but aren't NYRA-owned. Either
+  // one being set shows the scratches panel; both null shows the fallback.
   const TRACKS = {
     saratoga: {
       id: "saratoga", name: "Saratoga Race Course", shortName: "Saratoga",
@@ -1728,7 +1750,7 @@
       lat: 43.0723, lon: -73.7859,
       timezone: "America/New_York",
       heading: { homestretch: 270, backstretch: 90 },
-      nyraCode: "SAR",
+      nyraCode: "SAR", scratchesUrl: null,
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
     },
     monmouth: {
@@ -1737,7 +1759,7 @@
       lat: 40.3058, lon: -74.0087,
       timezone: "America/New_York",
       heading: { homestretch: 70, backstretch: 250 },
-      nyraCode: null,
+      nyraCode: null, scratchesUrl: "https://www.monmouthpark.com/horse-racing/scratches-and-changes/",
       photo: "assets/track-monmouth.png", photoAlt: "Aerial view of Monmouth Park",
     },
   };
@@ -3262,8 +3284,10 @@
   // A plain <iframe> only loads once, so without this it would show a stale
   // snapshot until the browser tab itself is reloaded. Cache-busting the src
   // on the same interval as the weather refresh keeps it genuinely live.
-  // Only NYRA-owned tracks (activeTrack.nyraCode != null) have this feed at all —
-  // see updateNyraWidgetVisibility() for the non-NYRA fallback.
+  // NYRA-only: embedding is only safe/known-good for NYRA's dedicated
+  // embeddable endpoint. Other tracks' own scratches pages are full
+  // third-party sites (ads, trackers, unknown content) — link out instead
+  // of iframing them; see scratchesUrl / updateNyraWidgetVisibility().
   function refreshNyraFrame(){
     const frame = $("nyraFrame");
     if (frame && activeTrack.nyraCode){
@@ -3467,12 +3491,19 @@
   // interval tick.
   function updateNyraWidgetVisibility(track){
     const hasNyra = track.nyraCode != null;
+    const hasScratchesLink = !hasNyra && track.scratchesUrl != null;
     $("nyraScratchesPanel").hidden = !hasNyra;
-    $("nyraXPanel").hidden = !hasNyra;
-    $("nyraFallbackPanel").hidden = hasNyra;
-    if (!hasNyra){
+    $("nyraXPanel").hidden = !hasNyra; // NYRA's own X account only makes sense for NYRA tracks
+    $("scratchesLinkPanel").hidden = !hasScratchesLink;
+    $("nyraFallbackPanel").hidden = hasNyra || hasScratchesLink;
+    if (hasScratchesLink){
+      const source = new URL(track.scratchesUrl).hostname.replace(/^www\./, "").toUpperCase();
+      $("scratchesLinkTag").textContent = `LIVE · ${source}`;
+      $("scratchesLinkTitle").textContent = `View ${track.name}'s Official Scratches`;
+      $("scratchesLinkCard").href = track.scratchesUrl;
+    } else if (!hasNyra){
       $("nyraFallbackText").textContent =
-        `Live scratches/rail widget isn't available for ${track.name} yet — check ${track.shortName}'s own site for official conditions.`;
+        `Live scratches/rail info isn't available for ${track.name} yet — check ${track.shortName}'s own site for official conditions.`;
     }
   }
 
