@@ -1855,41 +1855,94 @@
     return pts[Math.round(deg / 22.5) % 16];
   }
 
-  // Dirt firms back up fast, so this leans hard on the instant rain rate and
-  // today's running total — the same heuristic this app always used.
-  // Pure classifier (no DOM) so the live badge and the log/history tables
-  // below can all share one source of truth for the thresholds.
+  // Simple flat-threshold classifiers. The live dashboard uses the richer
+  // decayed multi-day model below instead (estimateDirtCondition/
+  // estimateTurfCondition) — these two stay in use only for historical/
+  // archive snapshots (computeDayStatsFromDaily), where we don't have a full
+  // 72h hourly window to work with, just the target day and the one before.
   function classifyDirtCondition(rainToday, rainRate){
     if (rainRate > 0.05 || rainToday > 0.6) return { label: "SLOPPY / WET", cls: "cond-sloppy" };
     if (rainToday > 0.15) return { label: "MUDDY", cls: "cond-muddy" };
     if (rainToday > 0) return { label: "GOOD", cls: "cond-good" };
     return { label: "FAST", cls: "cond-fast" };
   }
-  function dirtCondition(rainToday, rainRate){
-    const el = $("dirtConditionValue");
-    const { label, cls } = classifyDirtCondition(rainToday, rainRate);
-    el.className = "tc-value " + cls;
-    el.textContent = label;
-    return label;
-  }
 
-  // Turf drains slower and stays soft longer after rain than dirt does — a
-  // grass course that took a soaking yesterday can still play soft today even
-  // on a dry, sunny afternoon. So this weights the trailing 24h/48h rainfall
-  // totals more heavily than the current instant rate, roughly mirroring the
-  // dirt thresholds above but scaled to rolling windows instead of "today."
   function classifyTurfCondition(rain24h, rain48h, rainRate){
     if (rain24h > 0.5 || rain48h > 1.0 || rainRate > 0.15) return { label: "SOFT", cls: "cond-sloppy" };
     if (rain24h > 0.2 || rain48h > 0.5) return { label: "YIELDING", cls: "cond-muddy" };
     if (rain24h > 0 || rain48h > 0.1) return { label: "GOOD", cls: "cond-good" };
     return { label: "FIRM", cls: "cond-fast" };
   }
-  function turfCondition(rain24h, rain48h, rainRate){
-    const el = $("turfConditionValue");
-    const { label, cls } = classifyTurfCondition(rain24h, rain48h, rainRate);
-    el.className = "tc-value " + cls;
-    el.textContent = label;
-    return label;
+
+  // ---------- Smarter live condition model (decayed multi-day moisture) ----------
+  // classifyDirtCondition/classifyTurfCondition above only look at today's
+  // elapsed rain (dirt) or a flat 24h/48h total (turf) — fine for historical/
+  // archive snapshots where that's all the data we have, but the live
+  // dashboard already fetches ~72h of real hourly rain (past_days=2) plus
+  // current sun/wind, which is enough to model how a track actually
+  // recovers: dirt drains and gets harrowed back to fast within a day or so,
+  // turf holds water for days. Still a rule-based heuristic, not a live AI
+  // call — same "AUTOMATED — RULE-BASED" approach as the rest of this app,
+  // just a richer formula with a longer memory.
+  //
+  // Sums hourly rain over the lookback window, weighting recent hours more
+  // heavily via exponential decay (halfLifeHours = how fast "memory" of past
+  // rain fades). Short half-life = fast-draining surface (dirt), long
+  // half-life = slow-draining surface (turf).
+  function decayedRainIndex(hourlyPrecip, nowHourIdx, halfLifeHours, lookbackHours){
+    if (nowHourIdx < 0 || !hourlyPrecip) return 0;
+    let total = 0;
+    for (let h = 0; h <= lookbackHours; h++){
+      const idx = nowHourIdx - h;
+      if (idx < 0) break;
+      const rain = hourlyPrecip[idx] ?? 0;
+      if (rain <= 0) continue;
+      total += rain * Math.pow(0.5, h / halfLifeHours);
+    }
+    return total;
+  }
+
+  function estimateDirtCondition({ hourlyPrecip, nowHourIdx, rainRate, cloudCover, windSpeed }){
+    const sunny = cloudCover != null && cloudCover <= 40;
+    const windy = windSpeed != null && windSpeed >= 8;
+    // Sun+wind speeds up evaporation/drainage (and NYRA's crew actively
+    // harrows/maintains in these conditions), so "memory" of past rain fades
+    // faster than on a still, overcast day.
+    const halfLife = (sunny && windy) ? 10 : (sunny || windy) ? 13 : 16;
+    let index = decayedRainIndex(hourlyPrecip, nowHourIdx, halfLife, 72);
+    if (rainRate > 0) index += rainRate * 6; // actively raining right now wets the surface beyond what decayed history alone captures
+    if (index > 0.6) return { label: "SLOPPY / WET", cls: "cond-sloppy", index };
+    if (index > 0.15) return { label: "MUDDY", cls: "cond-muddy", index };
+    if (index > 0.02) return { label: "GOOD", cls: "cond-good", index };
+    return { label: "FAST", cls: "cond-fast", index };
+  }
+
+  function estimateTurfCondition({ hourlyPrecip, nowHourIdx, rainRate, cloudCover, windSpeed }){
+    const sunny = cloudCover != null && cloudCover <= 40;
+    const windy = windSpeed != null && windSpeed >= 8;
+    const halfLife = (sunny && windy) ? 40 : (sunny || windy) ? 48 : 56; // turf holds water much longer than dirt regardless of conditions
+    let index = decayedRainIndex(hourlyPrecip, nowHourIdx, halfLife, 72);
+    if (rainRate > 0) index += rainRate * 4;
+    if (index > 1.0) return { label: "SOFT", cls: "cond-sloppy", index };
+    if (index > 0.4) return { label: "YIELDING", cls: "cond-muddy", index };
+    if (index > 0.05) return { label: "GOOD", cls: "cond-good", index };
+    return { label: "FIRM", cls: "cond-fast", index };
+  }
+
+  // Forward-looking only — does NOT feed back into the current label above
+  // (that was the exact bug fixed elsewhere: using not-yet-fallen forecast
+  // rain to describe current conditions). Just flags the first upcoming hour
+  // with meaningful rain, if any, so the AI summary can give a heads-up.
+  function upcomingRainOutlook(hourlyPrecip, hourlyTimes, nowHourIdx, hoursAhead){
+    if (nowHourIdx < 0 || !hourlyPrecip) return null;
+    for (let h = 1; h <= hoursAhead; h++){
+      const idx = nowHourIdx + h;
+      if (idx >= hourlyPrecip.length) break;
+      if ((hourlyPrecip[idx] ?? 0) > 0.05){
+        return { hoursAway: h, time: hourlyTimes[idx] };
+      }
+    }
+    return null;
   }
 
   // Simplified heuristic, not a scientific drying model: compares rainfall in
@@ -3054,7 +3107,7 @@
   function buildAiRacingSummary(ctx){
     const {
       speed, dir, windTrend, forecastSteps, dirtLabel, turfLabel, trackTrendInfo, rainToday, rainRate,
-      apparentTemp, cloudCover, aqi, tide,
+      apparentTemp, cloudCover, aqi, tide, rainOutlook,
     } = ctx;
     if (speed == null || dir == null || !dirtLabel || !turfLabel || !trackTrendInfo){
       return "Waiting on live conditions to generate a summary.";
@@ -3096,6 +3149,16 @@
       sentences.push(`Track conditions should remain ${dirtLabel.toLowerCase()} despite some rain in the area.`);
     } else {
       sentences.push(`Track conditions are holding steady at ${dirtLabel.toLowerCase()} (dirt) / ${turfLabel.toLowerCase()} (turf).`);
+    }
+
+    // ---- Forward rain outlook (why: purely a heads-up about what's coming —
+    // does NOT feed back into the current label above, since using rain that
+    // hasn't fallen yet to describe current conditions is exactly the bug
+    // fixed elsewhere in this app). Only worth a sentence when the track is
+    // currently dry-ish and about to get tested — a wet track getting more
+    // rain isn't a new development worth calling out separately. ----
+    if (rainOutlook && (dirtLabel === "FAST" || dirtLabel === "GOOD")){
+      sentences.push(`Conditions are currently ${dirtLabel.toLowerCase()}, but rain expected by around ${fmtTime(rainOutlook.time)} could start working the track wetter.`);
     }
 
     // ---- Turf-specific rain effect (why: turf drains slower than dirt and
@@ -3164,7 +3227,7 @@
       sentences.push("Speed that gets loose on the lead may be tough to run down under this wind — a shape that favors need-to-lead types.");
     }
 
-    return sentences.slice(0, 8).join(" ");
+    return sentences.slice(0, 9).join(" ");
   }
 
   function renderAiRacingSummary(ctx){
@@ -3575,8 +3638,25 @@
     renderNext3Days(data, todayIdx);
 
     const rainRate = c.rain ?? c.precipitation ?? 0;
-    const dirtLabel = dirtCondition(rainToday, rainRate);
-    const turfLabel = turfCondition(rain24h, rain48h, rainRate);
+
+    const dirtEst = estimateDirtCondition({
+      hourlyPrecip: data.hourly?.precipitation, nowHourIdx, rainRate,
+      cloudCover: c.cloud_cover, windSpeed: c.wind_speed_10m,
+    });
+    $("dirtConditionValue").className = "tc-value " + dirtEst.cls;
+    $("dirtConditionValue").textContent = dirtEst.label;
+    const dirtLabel = dirtEst.label;
+
+    const turfEst = estimateTurfCondition({
+      hourlyPrecip: data.hourly?.precipitation, nowHourIdx, rainRate,
+      cloudCover: c.cloud_cover, windSpeed: c.wind_speed_10m,
+    });
+    $("turfConditionValue").className = "tc-value " + turfEst.cls;
+    $("turfConditionValue").textContent = turfEst.label;
+    const turfLabel = turfEst.label;
+
+    const rainOutlook = upcomingRainOutlook(data.hourly?.precipitation, data.hourly?.time, nowHourIdx, 6);
+
     const trend = trackTrend(rainLast6h, rainPrior6h, c.wind_speed_10m ?? 0, c.cloud_cover ?? 0);
     renderTrackTrend(trend);
     detectWeatherAlerts(c, rainToday, dirtLabel);
@@ -3622,6 +3702,7 @@
       cloudCover: c.cloud_cover,
       aqi: lastAqi,
       tide: lastTide,
+      rainOutlook,
     });
 
     maybeAutoLogYesterday(data);
