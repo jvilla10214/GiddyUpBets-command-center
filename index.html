@@ -2249,8 +2249,20 @@
     const dIdx = dailyBlock?.time?.findIndex(t => t === dateStr) ?? -1;
     if (dIdx < 0) return null;
 
+    // If dateStr is today (still in progress), the hourly rows for hours
+    // later today — and dailyBlock's own precipitation_sum for today — are
+    // forecast, not observation. Clip to elapsed hours only so a mid-day
+    // "Log Now" snapshot doesn't count rain that hasn't fallen yet (this is
+    // the same fix applied to the live render() path).
+    const { date: todayStr, hourPrefix: nowHourPrefix } = nowInTrackTZ();
+    const isToday = dateStr === todayStr;
+
     const hIdxs = [];
-    hourlyBlock?.time?.forEach((t, i) => { if (t.startsWith(dateStr)) hIdxs.push(i); });
+    hourlyBlock?.time?.forEach((t, i) => {
+      if (!t.startsWith(dateStr)) return;
+      if (isToday && t.slice(0, 13) > nowHourPrefix) return;
+      hIdxs.push(i);
+    });
 
     let windAvg = null;
     let prevailingDeg = null;
@@ -2278,7 +2290,12 @@
     const maxHourlyPrecip = hIdxs.length
       ? Math.max(...hIdxs.map(i => hourlyBlock.precipitation?.[i] ?? 0))
       : 0;
-    const rainTotal = dailyBlock.precipitation_sum?.[dIdx] ?? 0;
+    // For a completed day, dailyBlock's own total is the accurate final
+    // figure. For today (in progress), sum only the elapsed hourly rows —
+    // see the isToday clipping above.
+    const rainTotal = isToday
+      ? hIdxs.reduce((sum, i) => sum + (hourlyBlock.precipitation?.[i] ?? 0), 0)
+      : (dailyBlock.precipitation_sum?.[dIdx] ?? 0);
     const rain48 = rainTotal + (prevDayRainTotal ?? 0);
 
     return {
@@ -3521,9 +3538,6 @@
 
     let todayIdx = data.daily?.time?.findIndex(t => t === todayStr) ?? -1;
     if (todayIdx < 0) todayIdx = 0;
-    const rainToday = data.daily?.precipitation_sum?.[todayIdx] ?? 0;
-    $("rainTotal").textContent = rainToday.toFixed(2);
-    $("rainTile").classList.toggle("alert", rainToday > 0.5);
 
     // Rolling last-24-hours total (past_days=2 gives us prior hourly data so
     // this window doesn't just reset at midnight like "Today" does)
@@ -3536,6 +3550,16 @@
       }
       return total;
     };
+    // NOT data.daily.precipitation_sum[todayIdx] — that's Open-Meteo's
+    // full-day model total, which blends in forecast for hours later today
+    // that haven't happened yet (e.g. an afternoon storm still hours away
+    // would already push "today" into MUDDY at 9am). Sum only the hours
+    // that have actually elapsed, same technique as the 6h/24h/48h windows.
+    const todayStartIdx = data.hourly?.time?.findIndex(t => t.startsWith(todayStr)) ?? -1;
+    const rainToday = sumPrecip(todayStartIdx, nowHourIdx);
+    $("rainTotal").textContent = rainToday.toFixed(2);
+    $("rainTile").classList.toggle("alert", rainToday > 0.5);
+
     const rain24h = sumPrecip(nowHourIdx - 23, nowHourIdx);
     const rain48h = sumPrecip(nowHourIdx - 47, nowHourIdx);
     const rainLast6h = sumPrecip(nowHourIdx - 5, nowHourIdx);
