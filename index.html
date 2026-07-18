@@ -2855,10 +2855,12 @@
   }
 
   async function fetchAirQuality(){
+    const requestedTrackId = activeTrack.id; // see fetchWeather()'s comment on stale-response guarding
     try{
       const res = await fetch(currentAqiApiUrl());
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
+      if (activeTrack.id !== requestedTrackId) return;
       const aqi = data.current?.us_aqi;
       const valueEl = $("aqiValue");
       const categoryEl = $("aqiCategory");
@@ -2906,10 +2908,12 @@
 
   async function fetchTideData(){
     if (!activeTrack.tideStationId) return; // not a tide-relevant track — nothing to do
+    const requestedTrackId = activeTrack.id; // see fetchWeather()'s comment on stale-response guarding
     try{
       const res = await fetch(currentTideApiUrl(activeTrack.tideStationId));
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
+      if (activeTrack.id !== requestedTrackId) return;
       const readings = data.data;
       if (!readings || !readings.length) throw new Error("No tide readings returned");
 
@@ -3590,10 +3594,18 @@
 
   async function fetchWeather(){
     setStatus(true, "Updating");
+    // Captured at request time — if the user switches tracks before this
+    // resolves (a slow response racing a switch, or an interval tick firing
+    // right as switchTrack() kicks its own fetch), a late response would
+    // otherwise render onto whatever track is now displayed instead of the
+    // one it was actually fetched for (e.g. Saratoga's storm banner text
+    // bleeding onto a freshly-switched-to Del Mar).
+    const requestedTrackId = activeTrack.id;
     try{
       const res = await fetch(currentApiUrl());
       if(!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
+      if (activeTrack.id !== requestedTrackId) return; // stale — track changed while this was in flight
       render(data);
       setStatus(true, "Live");
       $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'});
