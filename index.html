@@ -149,6 +149,36 @@
   .pill.err .dot{ background: var(--silk-red); box-shadow:0 0 8px var(--silk-red); animation:none; }
   @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.35} }
 
+  /* ---------- Incoming-weather storm banner ---------- */
+  /* Full-width, sits above the sidebar/page shell so it's visible regardless
+     of which page (dashboard/news/historical/bias) is active — incoming
+     rain matters no matter what you're looking at. Amber for plain rain,
+     red for thunderstorms, matching the same severity colors used for
+     dirt/turf condition and the alert feed elsewhere in this app. */
+  .storm-banner{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    padding: 10px 18px;
+    margin: 14px 0 0;
+    border-radius: var(--radius);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--tote-amber);
+    background: rgba(240,180,41,0.10);
+    color: var(--parchment);
+  }
+  .storm-banner.severe{
+    border-color: var(--silk-red);
+    background: rgba(179,71,59,0.14);
+  }
+  .storm-banner-icon{
+    font-size: 18px;
+    line-height: 1;
+    animation: pulse 2s infinite;
+  }
+
   #refreshBtn{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
@@ -1265,6 +1295,11 @@
   </div>
 </header>
 
+<div class="storm-banner" id="stormBanner" hidden>
+  <span class="storm-banner-icon" id="stormBannerIcon">🌧️</span>
+  <span id="stormBannerText">Rain expected</span>
+</div>
+
 <div class="app-shell">
   <nav class="sidebar" id="sidebar">
     <button type="button" class="sidebar-btn active" data-page="dashboard">
@@ -1818,7 +1853,7 @@
       `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,` +
       `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl,` +
       `soil_moisture_0_to_1cm,soil_moisture_9_to_27cm` +
-      `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m` +
+      `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,weather_code` +
       `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
       `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
       `wind_speed_10m_max,wind_gusts_10m_max,weather_code` +
@@ -1931,18 +1966,45 @@
 
   // Forward-looking only — does NOT feed back into the current label above
   // (that was the exact bug fixed elsewhere: using not-yet-fallen forecast
-  // rain to describe current conditions). Just flags the first upcoming hour
-  // with meaningful rain, if any, so the AI summary can give a heads-up.
-  function upcomingRainOutlook(hourlyPrecip, hourlyTimes, nowHourIdx, hoursAhead){
+  // rain to describe current conditions). Flags the first upcoming hour with
+  // meaningful rain or a thunderstorm weather_code, if any, so the AI
+  // summary and the top-of-page storm banner can both give a heads-up off
+  // the same detection. Suppressed if it's already raining right now — this
+  // is specifically for INCOMING weather, not a running commentary.
+  const STORM_WMO_CODES = new Set([95, 96, 99]);
+  function upcomingRainOutlook(hourlyPrecip, hourlyWeatherCode, hourlyTimes, nowHourIdx, hoursAhead, currentRainRate){
     if (nowHourIdx < 0 || !hourlyPrecip) return null;
+    if (currentRainRate > 0.02) return null;
     for (let h = 1; h <= hoursAhead; h++){
       const idx = nowHourIdx + h;
       if (idx >= hourlyPrecip.length) break;
-      if ((hourlyPrecip[idx] ?? 0) > 0.05){
-        return { hoursAway: h, time: hourlyTimes[idx] };
+      const precip = hourlyPrecip[idx] ?? 0;
+      const code = hourlyWeatherCode?.[idx];
+      const isThunder = code != null && STORM_WMO_CODES.has(code);
+      if (precip > 0.05 || isThunder){
+        return { hoursAway: h, time: hourlyTimes[idx], isThunder };
       }
     }
     return null;
+  }
+
+  // Top-of-page banner, visible on every sidebar page (not just Dashboard)
+  // since incoming weather matters regardless of which tab you're on. Only
+  // ever shows for genuinely incoming rain/storms — hides itself the moment
+  // upcomingRainOutlook() no longer returns anything (rain arrived, window
+  // passed, or track switched to one with no rain in the forecast).
+  function renderStormBanner(outlook){
+    const banner = $("stormBanner");
+    if (!outlook){
+      banner.hidden = true;
+      return;
+    }
+    banner.hidden = false;
+    banner.classList.toggle("severe", outlook.isThunder);
+    $("stormBannerIcon").textContent = outlook.isThunder ? "⛈️" : "🌧️";
+    $("stormBannerText").textContent = outlook.isThunder
+      ? `Thunderstorms likely to begin around ${fmtTime(outlook.time)}`
+      : `Rain expected to begin around ${fmtTime(outlook.time)}`;
   }
 
   // Simplified heuristic, not a scientific drying model: compares rainfall in
@@ -3655,7 +3717,10 @@
     $("turfConditionValue").textContent = turfEst.label;
     const turfLabel = turfEst.label;
 
-    const rainOutlook = upcomingRainOutlook(data.hourly?.precipitation, data.hourly?.time, nowHourIdx, 6);
+    const rainOutlook = upcomingRainOutlook(
+      data.hourly?.precipitation, data.hourly?.weather_code, data.hourly?.time, nowHourIdx, 6, rainRate
+    );
+    renderStormBanner(rainOutlook);
 
     const trend = trackTrend(rainLast6h, rainPrior6h, c.wind_speed_10m ?? 0, c.cloud_cover ?? 0);
     renderTrackTrend(trend);
@@ -3800,6 +3865,7 @@
     $("aqiCategory").textContent = "—";
     $("tideHeight").textContent = "—";
     $("tideState").textContent = "—";
+    $("stormBanner").hidden = true;
     $("aiSummaryBody").textContent = "Waiting on live conditions…";
     $("analysisBody").innerHTML = "<p>Waiting on live conditions…</p>";
     $("windSpeed").textContent = "—";
