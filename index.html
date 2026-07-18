@@ -158,6 +158,7 @@
   .storm-banner[hidden]{ display:none; }
   .storm-banner{
     display:flex;
+    flex-wrap: wrap;
     align-items:center;
     gap: 10px;
     padding: 10px 18px;
@@ -179,6 +180,21 @@
     line-height: 1;
     animation: pulse 2s infinite;
   }
+  .storm-banner-radar-link{
+    margin-left: auto;
+    background: none;
+    border: 1px solid currentColor;
+    color: inherit;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    opacity: 0.85;
+    white-space: nowrap;
+  }
+  .storm-banner-radar-link:hover{ opacity: 1; }
 
   #refreshBtn{
     background: var(--panel-2);
@@ -1300,6 +1316,7 @@
 <div class="storm-banner" id="stormBanner" hidden>
   <span class="storm-banner-icon" id="stormBannerIcon">🌧️</span>
   <span id="stormBannerText">Rain expected</span>
+  <button type="button" class="storm-banner-radar-link" id="stormBannerRadarLink">Forecast model, not live radar — check radar →</button>
 </div>
 
 <div class="app-shell">
@@ -1591,7 +1608,7 @@
       <div class="tvalue"><span id="aqiValue">—</span><span class="tunit">AQI</span></div>
     </div>
 
-    <div class="tile radar-panel">
+    <div class="tile radar-panel" id="radarPanel">
       <div class="panel-title" style="margin-bottom:10px;">
         Radar &amp; Storm Forecast — <span id="radarPanelTrackName">Saratoga</span>
         <span class="tag" id="radarModeTag">NOW · RADAR</span>
@@ -2732,10 +2749,15 @@
         }
       }
 
+      // "per forecast model" is worth spelling out here specifically —
+      // Open-Meteo's "current" rain reading is a short-term nowcast, not a
+      // live radar/gauge observation, and it can miss fast-moving, highly
+      // localized thunderstorm cells entirely. Worth a live-radar check
+      // before trusting this during active severe weather.
       if (rainActive && !alertState.rainActive){
-        pushAlert(makeAlert("weather", "Rain has started"));
+        pushAlert(makeAlert("weather", "Rain has started (per forecast model — verify with radar during active storms)"));
       } else if (!rainActive && alertState.rainActive){
-        pushAlert(makeAlert("weather", "Rain has stopped"));
+        pushAlert(makeAlert("weather", "Rain has stopped (per forecast model — verify with radar during active storms)"));
       }
 
       if (rainTotalTier !== alertState.rainTotalTier){
@@ -3935,6 +3957,17 @@
 
   $("refreshBtn").addEventListener("click", fetchWeather);
   $("forecastSlider").addEventListener("input", (e) => applyForecastStep(+e.target.value));
+
+  // Open-Meteo's "current" rain reading is a short-term model nowcast, not a
+  // live radar/gauge observation — it can miss fast-moving, highly localized
+  // thunderstorm cells entirely (confirmed: it showed clear skies during an
+  // actual ongoing storm). This doesn't fix that gap, just makes it easy to
+  // cross-check against the real radar panel instead of taking the banner's
+  // word for it.
+  $("stormBannerRadarLink").addEventListener("click", () => {
+    setActivePage("dashboard");
+    $("radarPanel").scrollIntoView({ behavior: "auto", block: "center" });
+  });
 
   const LOG_TABS = [
     { btn: "logTabBtnDaily", panel: "logTabDaily" },
