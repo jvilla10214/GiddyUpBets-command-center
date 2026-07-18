@@ -1495,6 +1495,14 @@
       <div class="tvalue"><span id="gust">—</span><span class="tunit">mph</span></div>
     </div>
 
+    <div class="tile" id="tideTile" hidden>
+      <div>
+        <div class="tlabel">Ocean Tide</div>
+        <div class="tsub" id="tideState">—</div>
+      </div>
+      <div class="tvalue"><span id="tideHeight">—</span><span class="tunit">ft</span></div>
+    </div>
+
     <div class="tile" id="rainTile">
       <div>
         <div class="tlabel">Rainfall — Today</div>
@@ -1760,6 +1768,7 @@
       heading: { homestretch: 270, backstretch: 90 },
       nyraCode: "SAR", scratchesUrl: null,
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
+      tideStationId: null, tideRangeFt: null,
     },
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
@@ -1769,6 +1778,7 @@
       heading: { homestretch: 70, backstretch: 250 },
       nyraCode: null, scratchesUrl: "https://www.monmouthpark.com/horse-racing/scratches-and-changes/",
       photo: "assets/track-monmouth.png", photoAlt: "Aerial view of Monmouth Park",
+      tideStationId: null, tideRangeFt: null,
     },
     delmar: {
       id: "delmar", name: "Del Mar", shortName: "Del Mar",
@@ -1778,6 +1788,14 @@
       heading: { homestretch: 320, backstretch: 140 },
       nyraCode: null, scratchesUrl: "https://www.dmtc.com/racing/changes",
       photo: "assets/track-delmar.png", photoAlt: "Aerial view of Del Mar racetrack",
+      // Del Mar's main track sits right along the coast, and the sales-page
+      // brief we're using explicitly ties tide state to dirt-surface
+      // moisture, so this is the one track wired to a NOAA tide station —
+      // 9410230 (La Jolla) is the nearest CO-OPS gauge with real-time water
+      // level data. tideRangeFt = MHHW-MLLW for this station (9.69-4.37 ft,
+      // from NOAA's published datums) — used to turn a raw water-level
+      // reading into a 0-1 "how full is the tidal range" fraction.
+      tideStationId: "9410230", tideRangeFt: 5.32,
     },
   };
   const DEFAULT_TRACK_ID = "saratoga";
@@ -1815,7 +1833,8 @@
   let lastApparentTemp = null;
   let lastWeatherData = null;
   let lastAqi = null; // filled in by fetchAirQuality(), a separate fetch cycle from the main weather call
-  let lastAiSummaryCtx = null; // last non-AQI context used, so an AQI update alone can re-render the summary
+  let lastTide = null; // filled in by fetchTideData() (Del Mar only), same separate-fetch pattern as AQI
+  let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
   let lastNewsItems = []; // cached so switchTrack() can re-flag matches without a network refetch
 
   const WMO = {
@@ -2728,6 +2747,55 @@
     }
   }
 
+  // ---------- Ocean Tide (NOAA CO-OPS — Del Mar only) ----------
+  // NOAA's `predictions` product (harmonic next-high/low forecasts) was
+  // returning errors for every station/date tried, including NOAA's own
+  // documented example — looks like an outage on their end, not something
+  // fixable client-side. `water_level` (real-time observed readings) works
+  // fine and is CORS-open, so tide *state* is derived from that instead:
+  // fetch the last couple hours of 6-min readings, use the latest value as
+  // current height and the delta from ~30 min ago as the rising/falling
+  // trend. Only ever called for tracks with `tideStationId` set — currently
+  // just Del Mar, whose dirt surface the tide directly affects.
+  function currentTideApiUrl(stationId){
+    return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=water_level` +
+      `&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&format=json&range=2`;
+  }
+
+  // fraction: 0 = MLLW (station's mean-low reference), 1 = MHHW (mean-high),
+  // using the station's own tidal range so this isn't a universal threshold
+  // (tidal range varies a lot by location).
+  function classifyTide(heightFt, rangeFt){
+    const fraction = heightFt / rangeFt;
+    if (fraction <= 0.35) return { label: "Low", fraction };
+    if (fraction >= 0.65) return { label: "High", fraction };
+    return { label: "Mid", fraction };
+  }
+
+  async function fetchTideData(){
+    if (!activeTrack.tideStationId) return; // not a tide-relevant track — nothing to do
+    try{
+      const res = await fetch(currentTideApiUrl(activeTrack.tideStationId));
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const readings = data.data;
+      if (!readings || !readings.length) throw new Error("No tide readings returned");
+
+      const latest = parseFloat(readings[readings.length - 1].v);
+      const earlier = parseFloat(readings[Math.max(0, readings.length - 6)].v); // ~30 min earlier at 6-min intervals
+      const trend = latest > earlier ? "rising" : latest < earlier ? "falling" : "steady";
+      const { label } = classifyTide(latest, activeTrack.tideRangeFt);
+
+      $("tideHeight").textContent = latest.toFixed(1);
+      $("tideState").textContent = `${label} · ${trend}`;
+
+      lastTide = { heightFt: latest, label, trend };
+      if (lastAiSummaryCtx) renderAiRacingSummary({ ...lastAiSummaryCtx, tide: lastTide });
+    } catch(err){
+      console.error("Tide fetch failed", err);
+    }
+  }
+
   // ---------- Racing News Wire ----------
   // General racing-industry news, not Saratoga-filtered — narrowing to
   // Saratoga-only would leave the wire empty for long stretches outside major
@@ -2969,7 +3037,7 @@
   function buildAiRacingSummary(ctx){
     const {
       speed, dir, windTrend, forecastSteps, dirtLabel, turfLabel, trackTrendInfo, rainToday, rainRate,
-      apparentTemp, cloudCover, aqi,
+      apparentTemp, cloudCover, aqi, tide,
     } = ctx;
     if (speed == null || dir == null || !dirtLabel || !turfLabel || !trackTrendInfo){
       return "Waiting on live conditions to generate a summary.";
@@ -3023,6 +3091,19 @@
       sentences.push(`The turf has some give from recent rain (yielding), which tends to slow turf times somewhat versus a firm course.`);
     }
 
+    // ---- Ocean tide vs. dirt-surface moisture (Del Mar only — activeTrack.tideStationId
+    // gates whether `tide` is ever populated at all). Low tide dries the
+    // surface toward a "golden rail" that favors speed; high tide adds
+    // moisture that can help closers. Mid-range tide isn't distinctive
+    // enough to call out, same reasoning as skipping Good/Moderate AQI. ----
+    if (tide){
+      if (tide.label === "Low"){
+        sentences.push(`The tide is low and ${tide.trend} — that tends to dry out the dirt surface here, the kind of "golden rail" setup that can heavily favor early speed.`);
+      } else if (tide.label === "High"){
+        sentences.push(`The tide is high and ${tide.trend} — added surface moisture from this can play into the hands of closers.`);
+      }
+    }
+
     // ---- Backstretch vs. stretch wind reversal (why: a headwind down the
     // backstretch shields closers sitting behind pace-setters, and if the
     // stretch wind then flips to a tailwind it helps them finish — the
@@ -3066,7 +3147,7 @@
       sentences.push("Speed that gets loose on the lead may be tough to run down under this wind — a shape that favors need-to-lead types.");
     }
 
-    return sentences.slice(0, 7).join(" ");
+    return sentences.slice(0, 8).join(" ");
   }
 
   function renderAiRacingSummary(ctx){
@@ -3516,6 +3597,7 @@
       apparentTemp: c.apparent_temperature,
       cloudCover: c.cloud_cover,
       aqi: lastAqi,
+      tide: lastTide,
     });
 
     maybeAutoLogYesterday(data);
@@ -3577,6 +3659,7 @@
     $("footerWeatherSource").textContent =
       `Weather data: Open-Meteo (no API key required) · ${track.name}, ${track.city} (${track.lat}, ${track.lon})`;
     updateNyraWidgetVisibility(track);
+    $("tideTile").hidden = !track.tideStationId;
   }
 
   function populateTrackSelect(){
@@ -3601,6 +3684,7 @@
     // Reset in-memory state + visible numbers so nothing from the old track
     // bleeds into the new track's panels while the fresh fetch is in flight.
     lastAqi = null;
+    lastTide = null;
     lastWeatherData = null;
     lastApparentTemp = null;
     forecastSteps = [];
@@ -3609,6 +3693,8 @@
     flowSpeedMph = 0;
     $("aqiValue").textContent = "—";
     $("aqiCategory").textContent = "—";
+    $("tideHeight").textContent = "—";
+    $("tideState").textContent = "—";
     $("aiSummaryBody").textContent = "Waiting on live conditions…";
     $("analysisBody").innerHTML = "<p>Waiting on live conditions…</p>";
     $("windSpeed").textContent = "—";
@@ -3642,6 +3728,7 @@
     // Kick an immediate fetch rather than waiting for the next interval tick.
     fetchWeather();
     fetchAirQuality();
+    fetchTideData(); // no-ops internally for tracks without tideStationId
   }
 
   // ---------- Sidebar page navigation ----------
@@ -3791,12 +3878,14 @@
   fetchWeather();
   fetchNewsWire();
   fetchAirQuality();
+  fetchTideData(); // no-ops internally for tracks without tideStationId
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
+  setInterval(fetchTideData, REFRESH_MS); // same cadence; no-ops for non-tide tracks
 })();
 </script>
 </body>
