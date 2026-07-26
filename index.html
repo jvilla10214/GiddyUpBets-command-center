@@ -1205,7 +1205,53 @@
     margin-bottom: 4px;
   }
   .stable-note-meta strong{ color: var(--parchment); font-family:'IBM Plex Sans', sans-serif; font-size:13px; }
-  .stable-note-text{ color: var(--parchment); font-size: 13px; line-height:1.5; }
+  .stable-note-text{ color: var(--parchment); font-size: 13px; line-height:1.5; white-space: pre-wrap; }
+  .stable-extract-results{ display:flex; flex-direction:column; gap:10px; margin-bottom: 14px; }
+  .stable-extract-item{
+    background: var(--panel-2);
+    border: 1px solid var(--sky);
+    border-radius: 8px;
+    padding: 14px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .stable-extract-item .bias-form-row{ display:flex; gap:12px; flex-wrap:wrap; }
+  .stable-extract-item label{
+    display:flex; flex-direction:column; gap:4px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex: 1 1 160px;
+  }
+  .stable-extract-item input, .stable-extract-item textarea{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+  }
+  .stable-extract-item input:focus, .stable-extract-item textarea:focus{ border-color: var(--tote-amber); }
+  .stable-extract-item textarea{ resize: vertical; min-height: 80px; }
+  .stable-extract-discard{
+    background:none;
+    border: 1px solid var(--panel-border);
+    color: var(--parchment-dim);
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .stable-extract-discard:hover{ border-color: var(--silk-red); color: var(--silk-red); }
 
   /* ---------- Unified alert feed (bell + dropdown) ---------- */
   .alert-bell-wrap{ position: relative; }
@@ -2781,6 +2827,37 @@
     return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
   }
 
+  // No live fetching/proxy involved — the user pastes article text
+  // themselves (e.g. from thisishorseracing.com's Stable Tour pieces), same
+  // reliability reasoning as Bias Tracker's own paste-and-analyze flow.
+  // That site's Stable Tour articles consistently lead each horse's section
+  // with "Horse Name: " at the very start of a paragraph — confirmed against
+  // a real published piece, not a guess — so this is a transparent heuristic
+  // over that real structural pattern, not an NLP model: it always shows
+  // exactly what it split out for review before anything gets saved.
+  function extractHorseChunks(text){
+    const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+    const HORSE_MARKER = /^([A-Z][A-Za-z.'’\-\s]{1,40}):\s*([\s\S]*)$/;
+    const chunks = [];
+    let current = null;
+    paragraphs.forEach(p => {
+      const m = p.match(HORSE_MARKER);
+      // Guard against matching an ordinary sentence that happens to contain
+      // an early colon — real horse names here are short (1-5 words).
+      if (m && m[1].trim().split(/\s+/).length <= 5){
+        if (current) chunks.push(current);
+        current = { horse: m[1].trim(), text: m[2].trim() };
+      } else if (current){
+        current.text += (current.text ? "\n\n" : "") + p;
+      }
+      // Paragraphs before the first horse marker (intro/context) are dropped.
+    });
+    if (current) chunks.push(current);
+    return chunks;
+  }
+
+  let stablePendingExtracts = {}; // trainer -> chunks[] awaiting review — in-memory UI state only, never persisted
+
   function renderStableTour(){
     const list = $("stableTrainerList");
     if (!stableTrainers.length){
@@ -2793,6 +2870,7 @@
         .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.capturedAt.localeCompare(a.capturedAt));
       const isOpen = stableOpenTrainers.has(trainer);
       const safeTrainer = escapeHtml(trainer);
+      const pending = stablePendingExtracts[trainer] || [];
 
       const notesHtml = notes.length
         ? notes.map(n => `
@@ -2806,6 +2884,21 @@
             </div>`).join("")
         : `<div class="log-empty">No notes yet for ${safeTrainer}.</div>`;
 
+      const extractResultsHtml = pending.length
+        ? pending.map((c, i) => `
+            <div class="stable-extract-item">
+              <div class="bias-form-row">
+                <label>Horse <input type="text" class="stableExtractHorse" value="${escapeHtml(c.horse)}"></label>
+                <label>Date <input type="date" class="stableExtractDate"></label>
+              </div>
+              <label>Note <textarea class="stableExtractNote">${escapeHtml(c.text)}</textarea></label>
+              <div class="bias-form-actions">
+                <button type="button" class="stable-save-btn stable-extract-save" data-trainer="${safeTrainer}" data-index="${i}">Save This Horse</button>
+                <button type="button" class="stable-extract-discard" data-trainer="${safeTrainer}" data-index="${i}">Discard</button>
+              </div>
+            </div>`).join("")
+        : "";
+
       return `
         <div class="stable-trainer ${isOpen ? "open" : ""}" data-trainer="${safeTrainer}">
           <div class="stable-trainer-header">
@@ -2817,6 +2910,15 @@
             <button type="button" class="stable-trainer-remove" data-trainer="${safeTrainer}" title="Remove trainer">×</button>
           </div>
           <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="bias-form open">
+              <label>Paste Stable Tour Article Text (optional)
+                <textarea class="stablePasteInput" placeholder="Paste the full article text here — this site consistently leads each horse's section with &quot;Horse Name:&quot;, which is what gets detected below. No fetch or proxy involved since you're pasting it yourself."></textarea>
+              </label>
+              <div class="bias-form-actions">
+                <button type="button" class="stable-extract-btn" data-trainer="${safeTrainer}">Extract Horses</button>
+              </div>
+            </div>
+            <div class="stable-extract-results">${extractResultsHtml}</div>
             <div class="bias-form open">
               <div class="bias-form-row">
                 <label>Horse <input type="text" class="stableHorseInput" placeholder="Horse name"></label>
@@ -2833,7 +2935,7 @@
         </div>`;
     }).join("");
 
-    list.querySelectorAll(".stableDateInput").forEach(input => {
+    list.querySelectorAll(".stableDateInput, .stableExtractDate").forEach(input => {
       if (!input.value) input.value = nowInTrackTZ().date;
     });
   }
@@ -2867,6 +2969,49 @@
     const removeNoteBtn = e.target.closest(".stable-note-remove");
     if (removeNoteBtn){
       removeStableNote(removeNoteBtn.dataset.id);
+      return;
+    }
+    const extractBtn = e.target.closest(".stable-extract-btn");
+    if (extractBtn){
+      const trainer = extractBtn.dataset.trainer;
+      const trainerEl = extractBtn.closest(".stable-trainer");
+      const pasteInput = trainerEl.querySelector(".stablePasteInput");
+      const chunks = extractHorseChunks(pasteInput.value);
+      if (!chunks.length){
+        trainerEl.querySelector(".stable-extract-results").innerHTML =
+          `<div class="log-empty">No "Horse Name:" markers found in that text — this site's Stable Tour format leads each horse's section that way. You can still add entries manually below.</div>`;
+        return;
+      }
+      stablePendingExtracts[trainer] = chunks;
+      stableOpenTrainers.add(trainer);
+      renderStableTour();
+      return;
+    }
+    const discardBtn = e.target.closest(".stable-extract-discard");
+    if (discardBtn){
+      const trainer = discardBtn.dataset.trainer;
+      const index = +discardBtn.dataset.index;
+      if (stablePendingExtracts[trainer]) stablePendingExtracts[trainer].splice(index, 1);
+      renderStableTour();
+      return;
+    }
+    // Checked before the generic .stable-save-btn below since extract-save
+    // buttons carry both classes (shared button styling, different behavior).
+    const extractSaveBtn = e.target.closest(".stable-extract-save");
+    if (extractSaveBtn){
+      const trainer = extractSaveBtn.dataset.trainer;
+      const index = +extractSaveBtn.dataset.index;
+      const itemEl = extractSaveBtn.closest(".stable-extract-item");
+      const horseInput = itemEl.querySelector(".stableExtractHorse");
+      const noteInput = itemEl.querySelector(".stableExtractNote");
+      const horse = horseInput.value.trim();
+      const note = noteInput.value.trim();
+      if (!horse){ horseInput.focus(); return; }
+      if (!note){ noteInput.focus(); return; }
+      const date = itemEl.querySelector(".stableExtractDate").value;
+      if (stablePendingExtracts[trainer]) stablePendingExtracts[trainer].splice(index, 1);
+      stableOpenTrainers.add(trainer);
+      addStableNote(trainer, { horse, date, source: "", note });
       return;
     }
     const saveBtn = e.target.closest(".stable-save-btn");
