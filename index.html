@@ -1044,7 +1044,7 @@
     transition: background .15s;
   }
   .log-controls button:hover{ background: #ffc94d; }
-  .log-controls input[type="date"]{
+  .log-controls input[type="date"], .log-controls input[type="text"]{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
     color: var(--parchment);
@@ -1054,7 +1054,7 @@
     border-radius: 6px;
     outline: none;
   }
-  .log-controls input[type="date"]:focus{ border-color: var(--tote-amber); }
+  .log-controls input[type="date"]:focus, .log-controls input[type="text"]:focus{ border-color: var(--tote-amber); }
   .log-note{
     font-family:'IBM Plex Mono', monospace;
     font-size: 11px;
@@ -1123,6 +1123,89 @@
     color: var(--parchment-dim);
     line-height: 1.5;
   }
+
+  /* ---------- Stable Tour ---------- */
+  .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
+  .stable-trainer{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+  }
+  .stable-trainer-header{
+    display:flex;
+    align-items:center;
+    gap: 4px;
+    padding: 2px 4px 2px 14px;
+  }
+  .stable-trainer-toggle{
+    flex:1;
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background:none;
+    border:none;
+    color: var(--parchment);
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    padding: 12px 0;
+    cursor:pointer;
+    text-align:left;
+  }
+  .stable-trainer-toggle:hover{ color: var(--tote-amber); }
+  .stable-trainer-toggle .chevron{
+    display:inline-block;
+    color: var(--parchment-dim);
+    transition: transform .15s;
+  }
+  .stable-trainer.open .stable-trainer-toggle .chevron{ transform: rotate(90deg); }
+  .stable-trainer-toggle .tag{ margin-left: auto; }
+  .stable-trainer-remove{
+    background:none;
+    border:none;
+    color: var(--parchment-dim);
+    font-size: 16px;
+    padding: 6px 10px;
+    cursor:pointer;
+  }
+  .stable-trainer-remove:hover{ color: var(--silk-red); }
+  .stable-trainer-body{ padding: 0 14px 14px; border-top: 1px solid var(--panel-border); }
+  .stable-trainer-body[hidden]{ display:none; }
+  .stable-save-btn{
+    background: var(--tote-amber);
+    color: var(--ink);
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: none;
+  }
+  .stable-save-btn:hover{ background: #ffc94d; }
+  .stable-note-list{ display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+  .stable-note{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--sky);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .stable-note-meta{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    margin-bottom: 4px;
+  }
+  .stable-note-meta strong{ color: var(--parchment); font-family:'IBM Plex Sans', sans-serif; font-size:13px; }
+  .stable-note-text{ color: var(--parchment); font-size: 13px; line-height:1.5; }
 
   /* ---------- Unified alert feed (bell + dropdown) ---------- */
   .alert-bell-wrap{ position: relative; }
@@ -1354,6 +1437,14 @@
         <path d="M20 20v-7"/>
       </svg>
       Bias Tracker
+    </button>
+    <button type="button" class="sidebar-btn" data-page="stable">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 4v7a5 5 0 0 0 10 0V4"/>
+        <circle cx="7" cy="18" r="1.5"/>
+        <circle cx="17" cy="18" r="1.5"/>
+      </svg>
+      Stable Tour
     </button>
   </nav>
 
@@ -1772,6 +1863,31 @@
       <div class="log-disclaimer">
         Bias Tracker entries are stored locally in this browser only (no backend, no sync across devices yet) and
         are your own manual read of how a card played — not derived from any data feed.
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="page-stable">
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Stable Tour
+        <span class="tag">MANUAL ENTRY</span>
+      </div>
+
+      <div class="log-controls">
+        <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
+        <button type="button" id="addTrainerBtn">+ Add Trainer</button>
+        <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
+          color. No automated source is wired up yet, so entries go in by hand for now; once specific sites are
+          identified, this can be extended to pull from them automatically instead.</span>
+      </div>
+
+      <div class="stable-trainer-list" id="stableTrainerList">
+        <div class="log-empty">No trainers added yet — add one above to get started.</div>
+      </div>
+
+      <div class="log-disclaimer">
+        Stable Tour entries are stored locally in this browser only (no backend, no sync across devices yet).
       </div>
     </div>
   </div>
@@ -2578,6 +2694,197 @@
       status.textContent = "Couldn't reach the archive — try again in a moment.";
     }
   }
+
+  // ---------- Stable Tour ----------
+  // What trainers say about their own horses — manual entry for now, same
+  // reasoning as Bias Tracker (no automated source wired up yet). Global,
+  // not track-scoped via trackScopedKey() — a trainer and their horses
+  // aren't tied to any one track's weather the way the logs/bias data are.
+  // Escaped (unlike Bias Tracker's own notes field) since this is meant to
+  // eventually hold scraped/pasted third-party quotes, not just your own
+  // typed text — same reasoning the News Wire already uses for RSS content.
+  const STABLE_TRAINERS_KEY = "giddyupbets_stable_trainers_v1";
+  const STABLE_NOTES_KEY = "giddyupbets_stable_notes_v1";
+  let stableTrainers = [];
+  let stableNotes = [];
+  let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
+
+  function escapeHtml(str){
+    const div = document.createElement("div");
+    div.textContent = str ?? "";
+    return div.innerHTML;
+  }
+
+  function loadStableTrainers(){
+    try{
+      const raw = localStorage.getItem(STABLE_TRAINERS_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("Stable trainers failed to load", err);
+      return [];
+    }
+  }
+  function saveStableTrainers(){
+    try{ localStorage.setItem(STABLE_TRAINERS_KEY, JSON.stringify(stableTrainers)); }
+    catch(err){ console.error("Stable trainers failed to save", err); }
+  }
+  function loadStableNotes(){
+    try{
+      const raw = localStorage.getItem(STABLE_NOTES_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("Stable notes failed to load", err);
+      return [];
+    }
+  }
+  function saveStableNotes(){
+    try{ localStorage.setItem(STABLE_NOTES_KEY, JSON.stringify(stableNotes)); }
+    catch(err){ console.error("Stable notes failed to save", err); }
+  }
+
+  function addStableTrainer(name){
+    const trimmed = name.trim();
+    if (!trimmed || stableTrainers.some(t => t.toLowerCase() === trimmed.toLowerCase())) return;
+    stableTrainers.push(trimmed);
+    stableTrainers.sort((a, b) => a.localeCompare(b));
+    saveStableTrainers();
+    stableOpenTrainers.add(trimmed); // open it right away so you can start adding notes
+    renderStableTour();
+  }
+  function removeStableTrainer(name){
+    stableTrainers = stableTrainers.filter(t => t !== name);
+    stableNotes = stableNotes.filter(n => n.trainer !== name);
+    stableOpenTrainers.delete(name);
+    saveStableTrainers();
+    saveStableNotes();
+    renderStableTour();
+  }
+  function addStableNote(trainer, note){
+    stableNotes.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      trainer, ...note,
+      capturedAt: new Date().toISOString(),
+    });
+    saveStableNotes();
+    renderStableTour();
+  }
+  function removeStableNote(id){
+    stableNotes = stableNotes.filter(n => n.id !== id);
+    saveStableNotes();
+    renderStableTour();
+  }
+
+  function fmtStableDate(dateStr){
+    if (!dateStr) return "—";
+    return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+  }
+
+  function renderStableTour(){
+    const list = $("stableTrainerList");
+    if (!stableTrainers.length){
+      list.innerHTML = `<div class="log-empty">No trainers added yet — add one above to get started.</div>`;
+      return;
+    }
+    list.innerHTML = stableTrainers.map(trainer => {
+      const notes = stableNotes
+        .filter(n => n.trainer === trainer)
+        .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.capturedAt.localeCompare(a.capturedAt));
+      const isOpen = stableOpenTrainers.has(trainer);
+      const safeTrainer = escapeHtml(trainer);
+
+      const notesHtml = notes.length
+        ? notes.map(n => `
+            <div class="stable-note">
+              <div class="stable-note-meta">
+                <strong>${escapeHtml(n.horse) || "—"}</strong>
+                <span>${fmtStableDate(n.date)}${n.source ? " · " + escapeHtml(n.source) : ""}</span>
+                <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
+              </div>
+              <div class="stable-note-text">${escapeHtml(n.note)}</div>
+            </div>`).join("")
+        : `<div class="log-empty">No notes yet for ${safeTrainer}.</div>`;
+
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}" data-trainer="${safeTrainer}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-trainer="${safeTrainer}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${safeTrainer}</span>
+              <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+            <button type="button" class="stable-trainer-remove" data-trainer="${safeTrainer}" title="Remove trainer">×</button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="bias-form open">
+              <div class="bias-form-row">
+                <label>Horse <input type="text" class="stableHorseInput" placeholder="Horse name"></label>
+                <label>Date <input type="date" class="stableDateInput"></label>
+                <label>Source (optional) <input type="text" class="stableSourceInput" placeholder="e.g. BloodHorse, 7/24"></label>
+              </div>
+              <label>What did ${safeTrainer} say? <textarea class="stableNoteInput" placeholder="Quote or note about this horse…"></textarea></label>
+              <div class="bias-form-actions">
+                <button type="button" class="stable-save-btn" data-trainer="${safeTrainer}">Save Note</button>
+              </div>
+            </div>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+
+    list.querySelectorAll(".stableDateInput").forEach(input => {
+      if (!input.value) input.value = nowInTrackTZ().date;
+    });
+  }
+
+  $("addTrainerBtn").addEventListener("click", () => {
+    const input = $("stableTrainerInput");
+    if (!input.value.trim()){ input.focus(); return; }
+    addStableTrainer(input.value);
+    input.value = "";
+  });
+  $("stableTrainerInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("addTrainerBtn").click();
+  });
+
+  // Event delegation — the whole list is regenerated on every render, so
+  // listeners on individual buttons would just be thrown away each time.
+  $("stableTrainerList").addEventListener("click", (e) => {
+    const toggleBtn = e.target.closest(".stable-trainer-toggle");
+    if (toggleBtn){
+      const trainer = toggleBtn.dataset.trainer;
+      if (stableOpenTrainers.has(trainer)) stableOpenTrainers.delete(trainer);
+      else stableOpenTrainers.add(trainer);
+      renderStableTour();
+      return;
+    }
+    const removeTrainerBtn = e.target.closest(".stable-trainer-remove");
+    if (removeTrainerBtn){
+      removeStableTrainer(removeTrainerBtn.dataset.trainer);
+      return;
+    }
+    const removeNoteBtn = e.target.closest(".stable-note-remove");
+    if (removeNoteBtn){
+      removeStableNote(removeNoteBtn.dataset.id);
+      return;
+    }
+    const saveBtn = e.target.closest(".stable-save-btn");
+    if (saveBtn){
+      const trainer = saveBtn.dataset.trainer;
+      const trainerEl = saveBtn.closest(".stable-trainer");
+      const horseInput = trainerEl.querySelector(".stableHorseInput");
+      const noteInput = trainerEl.querySelector(".stableNoteInput");
+      const horse = horseInput.value.trim();
+      const note = noteInput.value.trim();
+      if (!horse){ horseInput.focus(); return; }
+      if (!note){ noteInput.focus(); return; }
+      const date = trainerEl.querySelector(".stableDateInput").value;
+      const source = trainerEl.querySelector(".stableSourceInput").value.trim();
+      stableOpenTrainers.add(trainer); // keep it open after saving
+      addStableNote(trainer, { horse, date, source, note });
+    }
+  });
 
   // ---------- Unified alert feed ----------
   // STAGE 1: detection + storage only. Alerts are console.logged for now;
@@ -3977,7 +4284,7 @@
   // Config-driven like LOG_TABS below — adding another sidebar page later
   // (e.g. the Calendar/archive page floated for future work) is just another
   // button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "news", "historical", "bias"];
+  const SIDEBAR_PAGES = ["dashboard", "news", "historical", "bias", "stable"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
@@ -4087,6 +4394,10 @@
   biasLog = loadBiasLog();
   renderBiasTable();
   renderBiasTrends();
+
+  stableTrainers = loadStableTrainers();
+  stableNotes = loadStableNotes();
+  renderStableTour();
 
   document.querySelectorAll(".bias-window-btn").forEach(btn => {
     btn.addEventListener("click", () => {
