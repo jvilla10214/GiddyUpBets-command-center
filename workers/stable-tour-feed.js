@@ -19,6 +19,12 @@ const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tou
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
 const MAX_ARTICLES_PER_RUN = 8; // caps subrequests/runtime per poll
+// A UA that identifies itself as a bot gets a flat 403 from this site's WAF
+// on individual article pages (confirmed directly: identical request,
+// bot-labeled UA -> 403, a real browser's UA -> 200) — the feed endpoint
+// itself didn't seem to care, but using a real UA everywhere here anyway
+// rather than relying on that being a permanent distinction.
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 export default {
   async fetch(request) {
@@ -28,7 +34,7 @@ export default {
 
     let feedRes;
     try {
-      feedRes = await fetch(FEED_URL, { cf: { cacheTtl: 900, cacheEverything: true } });
+      feedRes = await fetch(FEED_URL, { headers: { "User-Agent": BROWSER_UA }, cf: { cacheTtl: 900, cacheEverything: true } });
     } catch (err) {
       return json({ error: `Feed fetch failed: ${err.message}` }, 502);
     }
@@ -51,7 +57,7 @@ export default {
       let articleRes;
       try {
         articleRes = await fetch(item.link, {
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; GiddyUpBetsBot/1.0)" },
+          headers: { "User-Agent": BROWSER_UA },
           cf: { cacheTtl: 3600, cacheEverything: true },
         });
       } catch (err) {
