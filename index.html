@@ -1172,6 +1172,50 @@
   #stableFeedSaveBtn:hover{ background: #ffc94d; }
   #stableFeedCheckBtn{ background:none; border: 1px solid var(--sky); color: var(--sky); }
   #stableFeedCheckBtn:hover{ background: rgba(111,168,201,0.1); }
+  .stable-bulk-import{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .stable-bulk-import label{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stable-bulk-import textarea{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+    resize: vertical;
+  }
+  .stable-bulk-import textarea:focus{ border-color: var(--tote-amber); }
+  .stable-bulk-import button{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: none;
+    background: var(--tote-amber);
+    color: var(--ink);
+    align-self: flex-start;
+  }
+  .stable-bulk-import button:hover{ background: #ffc94d; }
   .stable-auto-badge{
     font-size: 9px;
     color: var(--sky);
@@ -2003,6 +2047,16 @@
           section below (Extract Horses) or add entries by hand otherwise.</span>
       </div>
 
+      <div class="stable-bulk-import">
+        <label for="stableBulkTrainerInput">Bulk-add trainers (paste a list from any leaderboard/roster page — one
+          per line or comma-separated)</label>
+        <textarea id="stableBulkTrainerInput" rows="3" placeholder="Brad H. Cox, Steven M. Asmussen, Mark E. Casse, ..."></textarea>
+        <button type="button" id="stableBulkAddBtn">Add All</button>
+        <span class="log-note" id="stableBulkStatus">Names are normalized (middle initials/Jr./II/III stripped) so
+          they match how trainers are usually named in news articles — needed for the auto-import from News Wire
+          below to catch mentions of them.</span>
+      </div>
+
       <div class="stable-trainer-list" id="stableTrainerList">
         <div class="log-empty">No trainers added yet — add one above to get started.</div>
       </div>
@@ -2023,7 +2077,7 @@
         <div class="news-wire-empty">Loading racing news…</div>
       </div>
       <div class="news-wire-disclaimer" id="newsWireDisclaimer">
-        Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just
+        Pulled from DRF, TDN, America's Best Racing, and BloodHorse RSS feeds — general racing-industry news, not just
         Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
       </div>
     </div>
@@ -3047,6 +3101,35 @@
     if (e.key === "Enter") $("addTrainerBtn").click();
   });
 
+  // Leaderboard/roster pages tend to use official-standings formatting
+  // (middle initials, "Jr."/"II"/"III" suffixes) that rarely appears in
+  // ordinary news prose — stripping it down to the everyday "First Last"
+  // form maximizes hits for the News Wire trainer-mention scan below.
+  function normalizeTrainerName(raw){
+    return raw
+      .replace(/,?\s*(Jr\.?|Sr\.?|II|III|IV)\s*$/i, "")
+      .replace(/\s+[A-Z]\.\s+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  $("stableBulkAddBtn").addEventListener("click", () => {
+    const input = $("stableBulkTrainerInput");
+    const statusEl = $("stableBulkStatus");
+    const raw = input.value.trim();
+    // Split on newlines when present (unambiguous, one name per line);
+    // otherwise split on commas, but not a comma immediately before a
+    // suffix like ", Jr." — several real trainer names contain one.
+    const rawNames = (raw.includes("\n") ? raw.split("\n") : raw.split(/,(?!\s*(?:Jr\.?|Sr\.?|II|III|IV)\b)/))
+      .map(s => s.trim()).filter(Boolean);
+    if (!rawNames.length){ input.focus(); return; }
+    const before = stableTrainers.length;
+    rawNames.forEach(raw => addStableTrainer(normalizeTrainerName(raw)));
+    const added = stableTrainers.length - before;
+    statusEl.textContent = `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
+    input.value = "";
+  });
+
   // Event delegation — the whole list is regenerated on every render, so
   // listeners on individual buttons would just be thrown away each time.
   $("stableTrainerList").addEventListener("click", (e) => {
@@ -3611,6 +3694,7 @@
     { name: "DRF", kind: "direct", url: "https://www.drf.com/rss.xml" },
     { name: "TDN", kind: "bridge", url: "https://www.thoroughbreddailynews.com/feed/" },
     { name: "ABR", kind: "bridge", url: "https://www.americasbestracing.net/rss" },
+    { name: "BloodHorse", kind: "bridge", url: "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing" },
   ];
 
   function parseRssXml(xmlText){
@@ -3620,6 +3704,10 @@
       title: item.querySelector("title")?.textContent?.trim() ?? "",
       link: item.querySelector("link")?.textContent?.trim() ?? "",
       pubDate: item.querySelector("pubDate")?.textContent?.trim() ?? "",
+      // content:encoded (full article body, when a feed publishes it) beats
+      // description (usually just a teaser) for the trainer-mention scan below.
+      body: item.getElementsByTagName("content:encoded")[0]?.textContent?.trim()
+        || item.querySelector("description")?.textContent?.trim() || "",
     }));
   }
 
@@ -3646,6 +3734,7 @@
       return (data.items ?? []).map(it => ({
         title: it.title, link: it.link, pubDate: it.pubDate,
         source: source.name, ts: newsItemTimestamp(it.pubDate),
+        body: it.content || it.description || "",
       }));
     } catch(err){
       console.error(`News source ${source.name} failed`, err);
@@ -3708,6 +3797,67 @@
       .sort((a, b) => b.ts - a.ts)
       .slice(0, NEWS_ITEM_CAP);
     renderNewsWire(merged);
+    scanNewsForTrainerMentions(merged);
+  }
+
+  // ---------- News Wire -> Stable Tour trainer-mention auto-import ----------
+  // General racing news occasionally has a trainer's comment about one of
+  // their horses buried in an otherwise unrelated race recap. This scans
+  // each freshly-fetched News Wire item's title+body for a mention of a
+  // trainer already tracked in Stable Tour and files it as a note under
+  // that trainer — scoped to trainers you've already added (there's no
+  // reliable way to guess a *new* trainer's name out of free-form prose
+  // the way thisishorseracing.com's structured "Stable Tour: Trainer Name"
+  // titles allow). It also doesn't try to guess which horse is being
+  // discussed — the article's own headline is used as the note's label
+  // instead of inventing a horse name, so nothing false gets asserted; the
+  // linked source and snippet let you confirm what it's actually about.
+  const STABLE_NEWS_SEEN_KEY = "giddyupbets_stable_news_seen_v1";
+  function loadStableNewsSeen(){
+    try { return new Set(JSON.parse(localStorage.getItem(STABLE_NEWS_SEEN_KEY)) ?? []); }
+    catch { return new Set(); }
+  }
+  function saveStableNewsSeen(){
+    try { localStorage.setItem(STABLE_NEWS_SEEN_KEY, JSON.stringify([...stableNewsSeen])); }
+    catch(err){ console.error("Stable news-seen failed to save", err); }
+  }
+  let stableNewsSeen = loadStableNewsSeen();
+
+  function stripHtml(html){
+    // Parsed as an inert HTML document (never inserted into the page), so
+    // embedded scripts/images never execute or load — the same trust model
+    // as the rest of this app applies to third-party feed content.
+    const doc = new DOMParser().parseFromString(html ?? "", "text/html");
+    return (doc.body.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  function escapeRegExp(str){
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function scanNewsForTrainerMentions(items){
+    if (!stableTrainers.length) return;
+    let added = false;
+    for (const item of items){
+      const bodyText = stripHtml(item.body);
+      const haystack = `${item.title} ${bodyText}`;
+      for (const trainer of stableTrainers){
+        const seenKey = `${item.link}|${trainer}`;
+        if (stableNewsSeen.has(seenKey)) continue;
+        if (!new RegExp(`\\b${escapeRegExp(trainer)}\\b`, "i").test(haystack)) continue;
+        stableNewsSeen.add(seenKey);
+        addStableNote(trainer, {
+          horse: item.title,
+          note: bodyText.slice(0, 1200),
+          date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+          source: item.source,
+          link: item.link,
+          autoImported: true,
+        });
+        added = true;
+      }
+    }
+    if (added) saveStableNewsSeen();
   }
 
   // ---------- Track play analysis (rule-based heuristic, no LLM) ----------
@@ -4534,7 +4684,7 @@
     $("radarFrame").title = `${track.name} radar and storm forecast`;
     $("radarPanelTrackName").textContent = track.shortName;
     $("newsWireDisclaimer").textContent =
-      `Pulled from DRF, TDN, and America's Best Racing RSS feeds — general racing-industry news, not just ` +
+      `Pulled from DRF, TDN, America's Best Racing, and BloodHorse RSS feeds — general racing-industry news, not just ` +
       `${track.shortName}. Items mentioning ${track.shortName} by name are flagged. Refreshes every 15 minutes.`;
     $("footerWeatherSource").textContent =
       `Weather data: Open-Meteo (no API key required) · ${track.name}, ${track.city} (${track.lat}, ${track.lon})`;
