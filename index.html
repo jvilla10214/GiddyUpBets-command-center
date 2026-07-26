@@ -1230,6 +1230,7 @@
     box-sizing: border-box;
   }
   .stable-search-row input:focus{ border-color: var(--tote-amber); }
+  .stable-setup-section{ display:flex; flex-direction:column; gap:16px; margin-top: 18px; }
   .stable-auto-badge{
     font-size: 9px;
     color: var(--sky);
@@ -2036,39 +2037,12 @@
         <span class="tag">AUTO-IMPORT + MANUAL</span>
       </div>
 
-      <div class="stable-autoimport">
-        <div class="bias-form-row">
-          <label>Auto-Import Source (Worker URL)
-            <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
-          </label>
-        </div>
-        <div class="bias-form-actions">
-          <button type="button" id="stableFeedSaveBtn">Save</button>
-          <button type="button" id="stableFeedCheckBtn">Check Now</button>
-        </div>
-        <div class="log-note" id="stableFeedStatus">
-          Not configured yet — deploy workers/stable-tour-feed.js to Cloudflare and paste its URL above. Once set,
-          this checks thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per
-          detected horse, same review-free auto-add as everything else in this app once a source is trusted.
-        </div>
-      </div>
-
       <div class="log-controls">
         <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
         <button type="button" id="addTrainerBtn">+ Add Trainer</button>
         <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
-          color. Auto-imported from the source above when configured; paste article text into a trainer's
-          section below (Extract Horses) or add entries by hand otherwise.</span>
-      </div>
-
-      <div class="stable-bulk-import">
-        <label for="stableBulkTrainerInput">Bulk-add trainers (paste a list from any leaderboard/roster page — one
-          per line or comma-separated)</label>
-        <textarea id="stableBulkTrainerInput" rows="3" placeholder="Brad H. Cox, Steven M. Asmussen, Mark E. Casse, ..."></textarea>
-        <button type="button" id="stableBulkAddBtn">Add All</button>
-        <span class="log-note" id="stableBulkStatus">Names are normalized (middle initials/Jr./II/III stripped) so
-          they match how trainers are usually named in news articles — needed for the auto-import from News Wire
-          below to catch mentions of them.</span>
+          color. Auto-imported when a source is configured (see Setup below); paste article text into a
+          trainer's section below (Extract Horses) or add entries by hand otherwise.</span>
       </div>
 
       <div class="stable-search-row">
@@ -2077,6 +2051,35 @@
 
       <div class="stable-trainer-list" id="stableTrainerList">
         <div class="log-empty">No trainers added yet — add one above to get started.</div>
+      </div>
+
+      <div class="stable-setup-section">
+        <div class="stable-autoimport">
+          <div class="bias-form-row">
+            <label>Auto-Import Source (Worker URL)
+              <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
+            </label>
+          </div>
+          <div class="bias-form-actions">
+            <button type="button" id="stableFeedSaveBtn">Save</button>
+            <button type="button" id="stableFeedCheckBtn">Check Now</button>
+          </div>
+          <div class="log-note" id="stableFeedStatus">
+            Not configured yet — deploy workers/stable-tour-feed.js to Cloudflare and paste its URL above. Once set,
+            this checks thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per
+            detected horse, same review-free auto-add as everything else in this app once a source is trusted.
+          </div>
+        </div>
+
+        <div class="stable-bulk-import">
+          <label for="stableBulkTrainerInput">Bulk-add trainers (paste a list from any leaderboard/roster page — one
+            per line or comma-separated)</label>
+          <textarea id="stableBulkTrainerInput" rows="3" placeholder="Brad H. Cox, Steven M. Asmussen, Mark E. Casse, ..."></textarea>
+          <button type="button" id="stableBulkAddBtn">Add All</button>
+          <span class="log-note" id="stableBulkStatus">Names are normalized (middle initials/Jr./II/III stripped) so
+            they match how trainers are usually named in news articles — needed for the auto-import from News Wire
+            to catch mentions of them.</span>
+        </div>
       </div>
 
       <div class="log-disclaimer">
