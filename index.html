@@ -1216,6 +1216,20 @@
     align-self: flex-start;
   }
   .stable-bulk-import button:hover{ background: #ffc94d; }
+  .stable-search-row{ margin-bottom: 12px; }
+  .stable-search-row input{
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 9px 12px;
+    border-radius: 6px;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .stable-search-row input:focus{ border-color: var(--tote-amber); }
   .stable-auto-badge{
     font-size: 9px;
     color: var(--sky);
@@ -2055,6 +2069,10 @@
         <span class="log-note" id="stableBulkStatus">Names are normalized (middle initials/Jr./II/III stripped) so
           they match how trainers are usually named in news articles — needed for the auto-import from News Wire
           below to catch mentions of them.</span>
+      </div>
+
+      <div class="stable-search-row">
+        <input type="search" id="stableSearchInput" placeholder="Search trainers or horses…">
       </div>
 
       <div class="stable-trainer-list" id="stableTrainerList">
@@ -2925,7 +2943,6 @@
     stableTrainers.push(trimmed);
     stableTrainers.sort((a, b) => a.localeCompare(b));
     saveStableTrainers();
-    stableOpenTrainers.add(trimmed); // open it right away so you can start adding notes
     renderStableTour();
   }
   function removeStableTrainer(name){
@@ -3002,6 +3019,7 @@
   }
 
   let stablePendingExtracts = {}; // trainer -> chunks[] awaiting review — in-memory UI state only, never persisted
+  let stableSearchQuery = ""; // in-memory UI state only, not persisted
 
   function renderStableTour(){
     const list = $("stableTrainerList");
@@ -3009,11 +3027,27 @@
       list.innerHTML = `<div class="log-empty">No trainers added yet — add one above to get started.</div>`;
       return;
     }
-    list.innerHTML = stableTrainers.map(trainer => {
-      const notes = stableNotes
+    const query = stableSearchQuery.trim().toLowerCase();
+    const visibleTrainers = stableTrainers.filter(trainer => {
+      if (!query) return true;
+      if (trainer.toLowerCase().includes(query)) return true;
+      return stableNotes.some(n => n.trainer === trainer && (n.horse || "").toLowerCase().includes(query));
+    });
+    if (!visibleTrainers.length){
+      list.innerHTML = `<div class="log-empty">No trainers or horses match "${escapeHtml(stableSearchQuery.trim())}".</div>`;
+      return;
+    }
+    list.innerHTML = visibleTrainers.map(trainer => {
+      const trainerNameMatches = query && trainer.toLowerCase().includes(query);
+      const allNotes = stableNotes
         .filter(n => n.trainer === trainer)
         .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.capturedAt.localeCompare(a.capturedAt));
-      const isOpen = stableOpenTrainers.has(trainer);
+      // Searching by horse name (not a trainer-name match) narrows the notes
+      // shown to just the matches, rather than dumping the trainer's full list.
+      const notes = (query && !trainerNameMatches)
+        ? allNotes.filter(n => (n.horse || "").toLowerCase().includes(query))
+        : allNotes;
+      const isOpen = query ? true : stableOpenTrainers.has(trainer); // auto-expand matches while searching
       const safeTrainer = escapeHtml(trainer);
       const pending = stablePendingExtracts[trainer] || [];
 
@@ -3099,6 +3133,10 @@
   });
   $("stableTrainerInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("addTrainerBtn").click();
+  });
+  $("stableSearchInput").addEventListener("input", (e) => {
+    stableSearchQuery = e.target.value;
+    renderStableTour();
   });
 
   // Leaderboard/roster pages tend to use official-standings formatting
