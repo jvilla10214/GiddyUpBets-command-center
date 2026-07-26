@@ -3106,6 +3106,18 @@
       text: `mostly a ${strength} crosswind (~${absCross.toFixed(0)} mph) rather than straight down the lane — limited effect on final time, though horses may drift off a true line.` };
   }
 
+  // Approximates the compass heading a horse is running at the MIDPOINT of a
+  // turn, given the heading of the straight it's coming FROM. Turns aren't
+  // otherwise modeled in this app (only the two straightaways have a fixed
+  // heading) — this is a simplification good enough to classify turn wind as
+  // head/tail/crosswind, not a precise geometric model of the turn's radius.
+  // Assumes a standard counterclockwise (left-turning) oval, same assumption
+  // already used for every track's homestretch/backstretch headings — the
+  // heading rotates left (decreases) by 90° at the turn's midpoint.
+  function turnMidpointHeading(fromHeadingDeg){
+    return (fromHeadingDeg - 90 + 360) % 360;
+  }
+
   function buildTrackPlayAnalysis(speed, sourceDeg, condLabel){
     if (speed == null || sourceDeg == null){
       return "<p>Waiting on live conditions…</p>";
@@ -3288,6 +3300,29 @@
       }
     }
 
+    // ---- Del Mar-specific wind/turn rules (handicapper-supplied — not
+    // derived from the general wind-vs-stretch geometry the rest of this
+    // function uses, so gated to this track specifically rather than
+    // assumed to generalize elsewhere). ----
+    if (activeTrack.id === "delmar"){
+      // At Del Mar, a backstretch crosswind is the one that actually holds
+      // up — a stretch crosswind here tends not to sway the result the way
+      // it might elsewhere.
+      if (backDesc.kind === "crosswind" && backDesc.strength !== "light"){
+        sentences.push(`At Del Mar, this backstretch crosswind (~${Math.round(backDesc.mag)} mph) is the one to watch — horses can drift off their line and lose ground down the backside, whereas a stretch crosswind here rarely swings the result.`);
+      }
+
+      // Far-turn headwind: shields horses rating covered up, while runners
+      // caught 2-4 wide (no cover) catch it in the open. 10mph+ threshold
+      // is the handicapping rule of thumb as given, not a general-purpose
+      // wind-strength tier like the rest of this function uses.
+      const farTurn = windComponents(speed, dir, turnMidpointHeading(activeTrack.heading.backstretch));
+      if (farTurn.headwind >= 10){
+        sentences.push(`With a strong headwind (~${Math.round(farTurn.headwind)} mph) on the far turn, one-turn races tend to favor horses that can rate covered up — they're shielded from the wind, while runners caught 2-4 wide catch it in the open. Inside-drawn horses able to tuck in and rate off the pace look best positioned.`);
+        sentences.push(`In two-turn races, that same far-turn headwind is partly offset by a tailwind boost into and out of the clubhouse turn earlier — a loose leader gets a lift early but pays it back late, roughly neutralizing the net effect, though horses rating covered up still come out ahead by avoiding the wind altogether.`);
+      }
+    }
+
     // ---- Heat/humidity vs. stamina (why: evaporative cooling gets harder as
     // feels-like climbs, independent of wind or surface — this is a fatigue/
     // vet-scratch risk note, not a running-style bias claim like wind gets,
@@ -3317,7 +3352,7 @@
       sentences.push("Speed that gets loose on the lead may be tough to run down under this wind — a shape that favors need-to-lead types.");
     }
 
-    return sentences.slice(0, 9).join(" ");
+    return sentences.slice(0, 12).join(" ");
   }
 
   function renderAiRacingSummary(ctx){
