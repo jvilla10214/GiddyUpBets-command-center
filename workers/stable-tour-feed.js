@@ -39,10 +39,14 @@ export default {
     const feedXml = await feedRes.text();
     const items = parseFeedItems(feedXml).slice(0, MAX_ARTICLES_PER_RUN);
 
+    const debug = []; // temporary — remove once auto-import is confirmed working end-to-end
     const articles = [];
     for (const item of items) {
       const trainer = trainerFromTitle(item.title);
-      if (!trainer) continue; // "Stable Tour Rewind" or an unrecognized title format — not a single-trainer piece
+      if (!trainer) {
+        debug.push({ title: item.title, skipped: "no trainer match (Rewind or unrecognized title)" });
+        continue;
+      }
 
       let articleRes;
       try {
@@ -51,11 +55,16 @@ export default {
           cf: { cacheTtl: 3600, cacheEverything: true },
         });
       } catch (err) {
-        continue; // skip this one article, don't fail the whole batch
+        debug.push({ title: item.title, trainer, skipped: `article fetch threw: ${err.message}` });
+        continue;
       }
-      if (!articleRes.ok) continue;
+      if (!articleRes.ok) {
+        debug.push({ title: item.title, trainer, skipped: `article fetch HTTP ${articleRes.status}` });
+        continue;
+      }
 
       const horses = await extractHorseChunks(articleRes);
+      debug.push({ title: item.title, trainer, horsesFound: horses.length });
       articles.push({
         guid: item.guid || item.link,
         title: item.title,
@@ -69,6 +78,8 @@ export default {
     return json({
       source: FEED_URL,
       fetchedAt: new Date().toISOString(),
+      itemsInFeed: items.length,
+      debug,
       articles,
     });
   },
