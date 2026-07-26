@@ -1125,6 +1125,64 @@
   }
 
   /* ---------- Stable Tour ---------- */
+  .stable-autoimport{
+    background: var(--panel-2);
+    border: 1px solid var(--sky);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 16px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .stable-autoimport .bias-form-row{ display:flex; gap:12px; flex-wrap:wrap; }
+  .stable-autoimport label{
+    display:flex; flex-direction:column; gap:4px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex: 1 1 260px;
+  }
+  .stable-autoimport input{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+  }
+  .stable-autoimport input:focus{ border-color: var(--tote-amber); }
+  .stable-autoimport .bias-form-actions{ display:flex; gap:10px; }
+  .stable-autoimport button{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: none;
+  }
+  #stableFeedSaveBtn{ background: var(--tote-amber); color: var(--ink); }
+  #stableFeedSaveBtn:hover{ background: #ffc94d; }
+  #stableFeedCheckBtn{ background:none; border: 1px solid var(--sky); color: var(--sky); }
+  #stableFeedCheckBtn:hover{ background: rgba(111,168,201,0.1); }
+  .stable-auto-badge{
+    font-size: 9px;
+    color: var(--sky);
+    background: rgba(111,168,201,0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stable-note-meta a{ color: var(--sky); text-decoration:none; }
+  .stable-note-meta a:hover{ text-decoration:underline; }
   .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
   .stable-trainer{
     background: var(--panel-2);
@@ -1917,15 +1975,32 @@
     <div class="panel log-panel">
       <div class="panel-title">
         Stable Tour
-        <span class="tag">MANUAL ENTRY</span>
+        <span class="tag">AUTO-IMPORT + MANUAL</span>
+      </div>
+
+      <div class="stable-autoimport">
+        <div class="bias-form-row">
+          <label>Auto-Import Source (Worker URL)
+            <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
+          </label>
+        </div>
+        <div class="bias-form-actions">
+          <button type="button" id="stableFeedSaveBtn">Save</button>
+          <button type="button" id="stableFeedCheckBtn">Check Now</button>
+        </div>
+        <div class="log-note" id="stableFeedStatus">
+          Not configured yet — deploy workers/stable-tour-feed.js to Cloudflare and paste its URL above. Once set,
+          this checks thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per
+          detected horse, same review-free auto-add as everything else in this app once a source is trusted.
+        </div>
       </div>
 
       <div class="log-controls">
         <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
         <button type="button" id="addTrainerBtn">+ Add Trainer</button>
         <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
-          color. No automated source is wired up yet, so entries go in by hand for now; once specific sites are
-          identified, this can be extended to pull from them automatically instead.</span>
+          color. Auto-imported from the source above when configured; paste article text into a trainer's
+          section below (Extract Horses) or add entries by hand otherwise.</span>
       </div>
 
       <div class="stable-trainer-list" id="stableTrainerList">
@@ -2827,14 +2902,27 @@
     return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
   }
 
-  // No live fetching/proxy involved — the user pastes article text
-  // themselves (e.g. from thisishorseracing.com's Stable Tour pieces), same
-  // reliability reasoning as Bias Tracker's own paste-and-analyze flow.
-  // That site's Stable Tour articles consistently lead each horse's section
-  // with "Horse Name: " at the very start of a paragraph — confirmed against
-  // a real published piece, not a guess — so this is a transparent heuristic
-  // over that real structural pattern, not an NLP model: it always shows
-  // exactly what it split out for review before anything gets saved.
+  // No live fetching/proxy involved for the PASTE path — the user pastes
+  // article text themselves, same reliability reasoning as Bias Tracker's
+  // own paste-and-analyze flow. (The auto-import feed below uses the same
+  // extraction logic server-side, in the Cloudflare Worker, since that path
+  // fetches the article itself rather than working from pasted text.)
+  //
+  // Verified against three real published thisishorseracing.com Stable Tour
+  // pieces (two different authors) that this site actually uses two
+  // different conventions to lead each horse's section: some bold the name
+  // + colon inline ("Deterministic: You going to argue..."), others use a
+  // standalone heading with just the name. Both patterns are checked here —
+  // this is a transparent heuristic over real structural patterns, not an
+  // NLP model: it always shows exactly what it split out for review before
+  // anything gets saved.
+  function isShortHorseName(s){
+    if (!/^[A-Z][A-Za-z.'’\-\s]{1,40}$/.test(s)) return false;
+    if (s.split(/\s+/).length > 5) return false;
+    if (/[.!?]$/.test(s)) return false; // a real sentence, not a standalone name
+    return true;
+  }
+
   function extractHorseChunks(text){
     const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
     const HORSE_MARKER = /^([A-Z][A-Za-z.'’\-\s]{1,40}):\s*([\s\S]*)$/;
@@ -2847,6 +2935,9 @@
       if (m && m[1].trim().split(/\s+/).length <= 5){
         if (current) chunks.push(current);
         current = { horse: m[1].trim(), text: m[2].trim() };
+      } else if (isShortHorseName(p)){
+        if (current) chunks.push(current);
+        current = { horse: p, text: "" };
       } else if (current){
         current.text += (current.text ? "\n\n" : "") + p;
       }
@@ -2873,15 +2964,21 @@
       const pending = stablePendingExtracts[trainer] || [];
 
       const notesHtml = notes.length
-        ? notes.map(n => `
+        ? notes.map(n => {
+            const sourceHtml = n.source
+              ? (n.link ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.source)}</a>` : escapeHtml(n.source))
+              : "";
+            return `
             <div class="stable-note">
               <div class="stable-note-meta">
                 <strong>${escapeHtml(n.horse) || "—"}</strong>
-                <span>${fmtStableDate(n.date)}${n.source ? " · " + escapeHtml(n.source) : ""}</span>
+                <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
+                ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
                 <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
               </div>
               <div class="stable-note-text">${escapeHtml(n.note)}</div>
-            </div>`).join("")
+            </div>`;
+          }).join("")
         : `<div class="log-empty">No notes yet for ${safeTrainer}.</div>`;
 
       const extractResultsHtml = pending.length
@@ -3030,6 +3127,96 @@
       addStableNote(trainer, { horse, date, source, note });
     }
   });
+
+  // ---------- Stable Tour auto-import (Cloudflare Worker feed) ----------
+  // The Worker (workers/stable-tour-feed.js in this repo) does the actual
+  // fetching/parsing server-side — thisishorseracing.com has no CORS
+  // headers, and the free public CORS proxies tested against it were
+  // unreliable (500s, gateway timeouts), same conclusion reached for Del
+  // Mar's scratches page. This just polls whatever Worker URL is
+  // configured and skips anything already imported, tracked by a persisted
+  // set of article GUIDs — same "seen" dedup pattern already used for NWS
+  // alerts elsewhere in this app. Auto-imported notes save directly (no
+  // per-item review step, unlike the paste-to-parse flow) since the user
+  // asked for hands-off import — the "Auto" badge + source link on each
+  // note keep it easy to spot-check and remove anything wrong after the
+  // fact instead.
+  const STABLE_FEED_URL_KEY = "giddyupbets_stable_feed_url_v1";
+  const STABLE_SEEN_ARTICLES_KEY = "giddyupbets_stable_seen_articles_v1";
+  let stableSeenArticles = [];
+
+  function loadStableFeedUrl(){
+    try{ return localStorage.getItem(STABLE_FEED_URL_KEY) || ""; }
+    catch(err){ return ""; }
+  }
+  function saveStableFeedUrl(url){
+    try{ localStorage.setItem(STABLE_FEED_URL_KEY, url); }
+    catch(err){ console.error("Stable feed URL failed to save", err); }
+  }
+  function loadStableSeenArticles(){
+    try{
+      const raw = localStorage.getItem(STABLE_SEEN_ARTICLES_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(err){
+      console.error("Stable seen-articles failed to load", err);
+      return [];
+    }
+  }
+  function saveStableSeenArticles(){
+    try{ localStorage.setItem(STABLE_SEEN_ARTICLES_KEY, JSON.stringify(stableSeenArticles)); }
+    catch(err){ console.error("Stable seen-articles failed to save", err); }
+  }
+
+  async function fetchStableTourFeed(){
+    const url = loadStableFeedUrl();
+    const statusEl = $("stableFeedStatus");
+    if (!url){
+      statusEl.textContent = "Not configured yet — deploy workers/stable-tour-feed.js to Cloudflare and paste its URL above.";
+      return;
+    }
+    statusEl.textContent = "Checking…";
+    try{
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      const newArticles = (data.articles || []).filter(a => !stableSeenArticles.includes(a.guid));
+
+      let importedHorses = 0;
+      newArticles.forEach(article => {
+        addStableTrainer(article.trainer); // no-ops if this trainer already exists
+        (article.horses || []).forEach(h => {
+          addStableNote(article.trainer, {
+            horse: h.horse,
+            note: h.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+          });
+          importedHorses++;
+        });
+        stableSeenArticles.push(article.guid);
+      });
+      saveStableSeenArticles();
+
+      const checkedAt = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      statusEl.textContent = newArticles.length
+        ? `Checked ${checkedAt} — imported ${importedHorses} horse note${importedHorses === 1 ? "" : "s"} from ${newArticles.length} new article${newArticles.length === 1 ? "" : "s"}.`
+        : `Checked ${checkedAt} — no new Stable Tour articles since last check.`;
+    } catch(err){
+      console.error("Stable Tour feed fetch failed", err);
+      statusEl.textContent = `Couldn't reach the auto-import source (${err.message}) — check the Worker URL and try again.`;
+    }
+  }
+
+  $("stableFeedSaveBtn").addEventListener("click", () => {
+    const url = $("stableFeedUrlInput").value.trim();
+    saveStableFeedUrl(url);
+    $("stableFeedStatus").textContent = url ? "Saved — click Check Now to fetch." : "Cleared.";
+    if (url) fetchStableTourFeed();
+  });
+  $("stableFeedCheckBtn").addEventListener("click", fetchStableTourFeed);
 
   // ---------- Unified alert feed ----------
   // STAGE 1: detection + storage only. Alerts are console.logged for now;
@@ -4543,6 +4730,11 @@
   stableTrainers = loadStableTrainers();
   stableNotes = loadStableNotes();
   renderStableTour();
+
+  stableSeenArticles = loadStableSeenArticles();
+  $("stableFeedUrlInput").value = loadStableFeedUrl();
+  fetchStableTourFeed(); // no-ops with a status message if nothing's configured yet
+  setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
 
   document.querySelectorAll(".bias-window-btn").forEach(btn => {
     btn.addEventListener("click", () => {
