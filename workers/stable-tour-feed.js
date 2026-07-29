@@ -59,11 +59,12 @@ export default {
       if (!name) return json({ error: "Missing name" }, 400);
       const state = await readState(env);
       const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
-      if (!exists) {
-        state.trainers.push(name);
-        state.trainers.sort((a, b) => a.localeCompare(b));
-        await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
-      }
+      if (!exists) state.trainers.push(name);
+      // Always re-sort and re-save, even on a duplicate — lets re-posting an
+      // already-added name (harmless no-op otherwise) double as a one-time
+      // way to re-sort the whole existing list after this ordering changed.
+      state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
       return json({ trainers: state.trainers }, 200, { "Cache-Control": "no-store" });
     }
 
@@ -168,6 +169,15 @@ export default {
 
 function isAuthorized(request) {
   return request.headers.get("X-Stable-Key") === WRITE_PASSPHRASE;
+}
+
+// Trainers sort by last name — the last whitespace-separated token, which
+// holds even for hyphenated last names ("Ramirez-Rodriguez" stays one
+// token) and names with an unstripped leading initial ("W. Bret Calhoun"
+// -> "Calhoun").
+function lastNameKey(fullName) {
+  const parts = fullName.trim().split(/\s+/);
+  return parts[parts.length - 1].toLowerCase();
 }
 
 async function readState(env) {
