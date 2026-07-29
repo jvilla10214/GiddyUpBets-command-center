@@ -3023,26 +3023,6 @@
     $("stableApiStatus").textContent = `Couldn't ${action}: ${err.message}`;
   }
 
-  // Firing many requests at once trips a real concurrency limit — confirmed
-  // directly: 100 simultaneous requests to the Worker had ~10% fail with a
-  // generic network error even though the Worker itself was fine. This caps
-  // how many run at once and retries whatever failed once before giving up
-  // on it, so a big batch (bulk-add, or a heavy auto-import poll) completes
-  // reliably instead of one flaky request failing the whole thing.
-  async function stableApiWriteBatch(items, requestFn, batchSize = 8){
-    let pending = items;
-    for (let attempt = 0; attempt < 2 && pending.length; attempt++){
-      const stillFailed = [];
-      for (let i = 0; i < pending.length; i += batchSize){
-        const batch = pending.slice(i, i + batchSize);
-        const results = await Promise.allSettled(batch.map(requestFn));
-        results.forEach((r, idx) => { if (r.status === "rejected") stillFailed.push(batch[idx]); });
-      }
-      pending = stillFailed;
-    }
-    return pending; // whatever's still failed after the retry pass
-  }
-
   async function loadStableData(){
     try{
       const data = await stableApiGet("/data");
@@ -3286,18 +3266,14 @@
     const before = stableTrainers.length;
     const names = rawNames.map(normalizeTrainerName);
     try{
-      // Batched + retried, then one final read of the merged state — see
-      // stableApiWriteBatch for why (a flat-out parallel blast of 100
-      // requests reliably drops some to a generic network error).
-      const stillFailed = await stableApiWriteBatch(names, name => stableApiWrite("POST", "/trainers", { name }));
-      const data = await loadStableData();
+      // One request for the whole batch — both faster than one-at-a-time
+      // and immune to Workers KV's daily write-quota (a single write per
+      // batch instead of one per name, which used to burn through it fast).
+      const data = await stableApiWrite("POST", "/trainers/bulk", { names });
       stableTrainers = data.trainers;
-      stableNotes = data.notes;
       renderStableTour();
       const added = stableTrainers.length - before;
-      statusEl.textContent = stillFailed.length
-        ? `Added ${added} new trainer${added === 1 ? "" : "s"} — ${stillFailed.length} failed after retrying (network hiccup), click Add All again to retry just those: ${stillFailed.join(", ")}`
-        : `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
+      statusEl.textContent = `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
     } catch(err){
       stableApiError("bulk-add trainers", err);
     }
@@ -3424,11 +3400,12 @@
       const newArticles = (data.articles || []).filter(a => !stableSeenArticles.includes(a.guid));
 
       let importedHorses = 0;
-      const tasks = []; // deferred thunks — stableApiWriteBatch controls when each actually fires
+      const trainerNames = [];
+      const noteItems = [];
       newArticles.forEach(article => {
-        tasks.push(() => stableApiWrite("POST", "/trainers", { name: article.trainer }));
+        trainerNames.push(article.trainer);
         (article.horses || []).forEach(h => {
-          tasks.push(() => stableApiWrite("POST", "/notes", {
+          noteItems.push({
             trainer: article.trainer,
             horse: h.horse,
             note: h.text,
@@ -3436,15 +3413,19 @@
             source: article.title,
             link: article.link,
             autoImported: true,
-          }));
+          });
           importedHorses++;
         });
         stableSeenArticles.push(article.guid);
       });
-      await stableApiWriteBatch(tasks, task => task());
+      // One write for all trainers, one write for all notes — regardless of
+      // how many articles/horses this poll picked up (see /trainers/bulk and
+      // /notes/bulk in the Worker for why: KV write quota is a hard daily cap).
+      if (trainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: trainerNames });
+      if (noteItems.length) await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
       saveStableSeenArticles();
 
-      if (tasks.length){
+      if (trainerNames.length || noteItems.length){
         const fresh = await loadStableData();
         stableTrainers = fresh.trainers;
         stableNotes = fresh.notes;

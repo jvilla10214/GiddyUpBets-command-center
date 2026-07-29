@@ -79,6 +79,24 @@ async function handleRequest(request, env) {
       return json({ trainers: state.trainers }, 200, { "Cache-Control": "no-store" });
     }
 
+    if (url.pathname === "/trainers/bulk" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const names = Array.isArray(body.names) ? body.names.map(n => (n || "").trim()).filter(Boolean) : [];
+      if (!names.length) return json({ error: "Missing names" }, 400);
+      const state = await readState(env);
+      // One KV write for the whole batch instead of one per name — KV write
+      // quota is a hard daily cap (free tier: 1,000/day, account-wide), and
+      // a 100-name bulk-add used to cost 100+ writes on its own.
+      for (const name of names) {
+        const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
+        if (!exists) state.trainers.push(name);
+      }
+      state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      return json({ trainers: state.trainers }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/trainers" && request.method === "DELETE") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
@@ -117,6 +135,37 @@ async function handleRequest(request, env) {
       state.notes.push(note);
       await env.STABLE_KV.put("notes", JSON.stringify(state.notes));
       return json({ note }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/notes/bulk" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const items = Array.isArray(body.notes) ? body.notes : [];
+      if (!items.length) return json({ error: "Missing notes" }, 400);
+      const state = await readState(env);
+      const results = [];
+      for (const item of items) {
+        if (!item.trainer || !item.horse || !item.note) continue;
+        if (item.link) {
+          const dup = state.notes.find(n => n.trainer === item.trainer && n.horse === item.horse && n.link === item.link);
+          if (dup) { results.push({ note: dup, duplicate: true }); continue; }
+        }
+        const note = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          trainer: item.trainer,
+          horse: item.horse,
+          note: item.note,
+          date: item.date || "",
+          source: item.source || "",
+          link: item.link || "",
+          autoImported: !!item.autoImported,
+          capturedAt: new Date().toISOString(),
+        };
+        state.notes.push(note);
+        results.push({ note });
+      }
+      await env.STABLE_KV.put("notes", JSON.stringify(state.notes)); // one write for the whole batch
+      return json({ results }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/notes" && request.method === "DELETE") {
