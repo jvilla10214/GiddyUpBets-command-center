@@ -41,6 +41,17 @@ const WRITE_PASSPHRASE = "giddyup";
 
 export default {
   async fetch(request, env) {
+    try {
+      return await handleRequest(request, env);
+    } catch (err) {
+      // Surface the real failure as JSON instead of Cloudflare's opaque
+      // "error code: 1101" page, which gives no clue what actually broke.
+      return json({ error: `Unhandled: ${err.message}`, stack: String(err.stack || "").slice(0, 500) }, 500);
+    }
+  },
+};
+
+async function handleRequest(request, env) {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -164,8 +175,7 @@ export default {
       fetchedAt: new Date().toISOString(),
       articles,
     }, 200, { "Cache-Control": "public, max-age=900" }); // 15 min — this content updates infrequently
-  },
-};
+}
 
 function isAuthorized(request) {
   return request.headers.get("X-Stable-Key") === WRITE_PASSPHRASE;
