@@ -1218,6 +1218,8 @@
   #stableFeedSaveBtn:hover{ background: #ffc94d; }
   #stableFeedCheckBtn{ background:none; border: 1px solid var(--sky); color: var(--sky); }
   #stableFeedCheckBtn:hover{ background: rgba(111,168,201,0.1); }
+  #stableResetImportHistoryBtn{ background:none; border: 1px solid var(--parchment-dim); color: var(--parchment-dim); }
+  #stableResetImportHistoryBtn:hover{ background: rgba(255,255,255,0.06); color: var(--parchment); }
   .stable-bulk-import{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
@@ -2122,6 +2124,7 @@
           <div class="bias-form-actions">
             <button type="button" id="stableFeedSaveBtn">Save</button>
             <button type="button" id="stableFeedCheckBtn">Check Now</button>
+            <button type="button" id="stableResetImportHistoryBtn" title="Forget which articles this browser already imported, so the next check re-fetches everything into the shared store">Reset Auto-Import History</button>
           </div>
           <div class="log-note" id="stableFeedStatus">
             Trainers and notes are stored centrally on this Worker — everyone using the same URL sees the same
@@ -3444,6 +3447,21 @@
     fetchStableTourFeed();
   });
   $("stableFeedCheckBtn").addEventListener("click", fetchStableTourFeed);
+  // Auto-import "seen" tracking lives in THIS browser's localStorage (per
+  // device, deliberately not moved to the shared backend) so it survives
+  // switching Worker URLs — but that means moving Stable Tour to a fresh
+  // shared store (or pointing at a different Worker) leaves this device
+  // thinking it already imported articles the new store has never seen.
+  // This clears that local memory and re-runs both auto-import checks.
+  $("stableResetImportHistoryBtn").addEventListener("click", () => {
+    stableSeenArticles = [];
+    saveStableSeenArticles();
+    stableNewsSeen = new Set();
+    saveStableNewsSeen();
+    $("stableFeedStatus").textContent = "Import history cleared — checking now…";
+    fetchStableTourFeed();
+    fetchNewsWire();
+  });
 
   // ---------- Unified alert feed ----------
   // STAGE 1: detection + storage only. Alerts are console.logged for now;
