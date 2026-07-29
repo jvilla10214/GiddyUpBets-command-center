@@ -2227,6 +2227,41 @@
       // reading into a 0-1 "how full is the tidal range" fraction.
       tideStationId: "9410230", tideRangeFt: 5.32,
     },
+    belmont: {
+      id: "belmont", name: "Belmont Park", shortName: "Belmont",
+      city: "Elmont, NY",
+      lat: 40.7160, lon: -73.7225,
+      timezone: "America/New_York",
+      // Grandstand/homestretch side verified via Hempstead Turnpike's real
+      // position (south of the oval, the venue's own address road) rather
+      // than guessed from the satellite image alone — the classic grandstand
+      // silhouette isn't reliably identifiable mid-rebuild ($455M
+      // reconstruction, reopening Sept. 2026). Home straight runs along the
+      // south side, so heading follows the same counterclockwise-oval
+      // derivation as every other track here.
+      heading: { homestretch: 80, backstretch: 260 },
+      nyraCode: "BEL", scratchesUrl: null,
+      photo: "assets/track-belmont.png", photoAlt: "Aerial view of Belmont Park",
+      tideStationId: null, tideRangeFt: null,
+    },
+    colonialdowns: {
+      id: "colonialdowns", name: "Colonial Downs", shortName: "Colonial Downs",
+      city: "New Kent, VA",
+      lat: 37.4850, lon: -77.0055,
+      timezone: "America/New_York",
+      // Grandstand/parking complex sits directly north of the oval (clearly
+      // visible in satellite imagery), so the home straight is the north
+      // side — opposite orientation from Belmont despite both running
+      // roughly east-west.
+      heading: { homestretch: 260, backstretch: 80 },
+      // Not NYRA-owned and no dedicated scratches/conditions page found
+      // (checked colonialdowns.com and its redirect target directly) —
+      // falls back to the generic scratches panel like Saratoga's non-NYRA
+      // peers without one.
+      nyraCode: null, scratchesUrl: null,
+      photo: "assets/track-colonialdowns.png", photoAlt: "Aerial view of Colonial Downs",
+      tideStationId: null, tideRangeFt: null,
+    },
   };
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
