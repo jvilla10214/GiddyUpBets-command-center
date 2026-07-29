@@ -2094,24 +2094,24 @@
         <span class="tag">AUTO-IMPORT + MANUAL</span>
       </div>
 
-      <div class="log-controls">
-        <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
-        <button type="button" id="addTrainerBtn">+ Add Trainer</button>
-        <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
-          color. Shared with everyone using this site (see Setup below); paste article text into a
-          trainer's section below (Extract Horses) or add entries by hand otherwise.</span>
-      </div>
-      <div class="log-note stable-api-status" id="stableApiStatus"></div>
-
       <div class="stable-search-row">
         <input type="search" id="stableSearchInput" placeholder="Search trainers or horses…">
       </div>
 
       <div class="stable-trainer-list" id="stableTrainerList">
-        <div class="log-empty">No trainers added yet — add one above to get started.</div>
+        <div class="log-empty">No trainers added yet — add one below to get started.</div>
       </div>
 
       <div class="stable-setup-section">
+        <div class="log-controls">
+          <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
+          <button type="button" id="addTrainerBtn">+ Add Trainer</button>
+          <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
+            color. Shared with everyone using this site; paste article text into a trainer's section below
+            (Extract Horses) or add entries by hand otherwise.</span>
+        </div>
+        <div class="log-note stable-api-status" id="stableApiStatus"></div>
+
         <div class="stable-autoimport">
           <div class="bias-form-row">
             <label>Shared Data Source (Worker URL)
@@ -3125,7 +3125,7 @@
   function renderStableTour(){
     const list = $("stableTrainerList");
     if (!stableTrainers.length){
-      list.innerHTML = `<div class="log-empty">No trainers added yet — add one above to get started.</div>`;
+      list.innerHTML = `<div class="log-empty">No trainers added yet — add one below to get started.</div>`;
       return;
     }
     const query = stableSearchQuery.trim().toLowerCase();
