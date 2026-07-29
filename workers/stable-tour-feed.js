@@ -1,17 +1,29 @@
-// Cloudflare Worker: Stable Tour auto-import feed
+// Cloudflare Worker: Stable Tour shared data + auto-import feed
 // -----------------------------------------------------------------------
-// Fetches thisishorseracing.com's dedicated Stable Tour category feed,
-// keeps only the pieces that profile a single trainer (skips "Stable Tour
-// Rewind" roundups, which cover multiple days/events, not one barn), fetches
-// each qualifying article's full page, and extracts a horse-by-horse note
-// list from it. The dashboard (index.html) polls this Worker instead of
-// thisishorseracing.com directly, since that site has no CORS headers and
-// the free public CORS proxies tested against it were unreliable (500s,
-// gateway timeouts) — this Worker is the replacement for those.
+// Two jobs in one Worker:
 //
-// Deploy: free Cloudflare account -> `wrangler deploy` (or paste into the
-// dashboard's Workers editor) -> paste the resulting workers.dev URL into
-// the Stable Tour page's "Auto-import source" field.
+// 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
+//    trainer/notes store so every visitor's browser reads and writes the
+//    SAME data instead of each device keeping its own separate localStorage
+//    copy. Reads are open to anyone with the URL; writes require the
+//    X-Stable-Key header to match WRITE_PASSPHRASE below — not real auth
+//    (the passphrase ships in client-side JS, so anyone motivated enough to
+//    view-source can find it), just a deterrent against someone stumbling
+//    on the URL and vandalizing the shared list.
+//
+// 2. Auto-import feed (GET /, unchanged from before) — fetches
+//    thisishorseracing.com's dedicated Stable Tour category feed, keeps
+//    only the pieces that profile a single trainer (skips "Stable Tour
+//    Rewind" roundups, which cover multiple days/events, not one barn),
+//    fetches each qualifying article's full page, and extracts a
+//    horse-by-horse note list from it. The dashboard polls this instead of
+//    thisishorseracing.com directly, since that site has no CORS headers
+//    and the free public CORS proxies tested against it were unreliable
+//    (500s, gateway timeouts).
+//
+// Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
+// namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
+// for job #1 to work — job #2 (the /  feed route) works without it.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -25,13 +37,87 @@ const MAX_ARTICLES_PER_RUN = 8; // caps subrequests/runtime per poll
 // itself didn't seem to care, but using a real UA everywhere here anyway
 // rather than relying on that being a permanent distinction.
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+const WRITE_PASSPHRASE = "giddyup";
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
 
+    if (url.pathname === "/data" && request.method === "GET") {
+      const state = await readState(env);
+      return json(state, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/trainers" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const name = (body.name || "").trim();
+      if (!name) return json({ error: "Missing name" }, 400);
+      const state = await readState(env);
+      const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
+      if (!exists) {
+        state.trainers.push(name);
+        state.trainers.sort((a, b) => a.localeCompare(b));
+        await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      }
+      return json({ trainers: state.trainers }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/trainers" && request.method === "DELETE") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const name = body.name;
+      const state = await readState(env);
+      const trainers = state.trainers.filter(t => t !== name);
+      const notes = state.notes.filter(n => n.trainer !== name); // cascade — no orphaned notes for a removed trainer
+      await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      return json({ trainers, notes }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/notes" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      if (!body.trainer || !body.horse || !body.note) return json({ error: "Missing required fields" }, 400);
+      const state = await readState(env);
+      // Multiple devices independently auto-importing the same article would
+      // otherwise each file a duplicate note — dedupe on (trainer, horse,
+      // link) when a link is present, which auto-imported notes always have.
+      if (body.link) {
+        const dup = state.notes.find(n => n.trainer === body.trainer && n.horse === body.horse && n.link === body.link);
+        if (dup) return json({ note: dup, duplicate: true }, 200, { "Cache-Control": "no-store" });
+      }
+      const note = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        trainer: body.trainer,
+        horse: body.horse,
+        note: body.note,
+        date: body.date || "",
+        source: body.source || "",
+        link: body.link || "",
+        autoImported: !!body.autoImported,
+        capturedAt: new Date().toISOString(),
+      };
+      state.notes.push(note);
+      await env.STABLE_KV.put("notes", JSON.stringify(state.notes));
+      return json({ note }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/notes" && request.method === "DELETE") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const state = await readState(env);
+      const notes = state.notes.filter(n => n.id !== body.id);
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      return json({ notes }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Falls through to the original feed-scrape behavior for GET / (and any
+    // other unmatched path) — unchanged from before this shared-storage work.
     let feedRes;
     try {
       feedRes = await fetch(FEED_URL, { headers: { "User-Agent": BROWSER_UA }, cf: { cacheTtl: 900, cacheEverything: true } });
@@ -76,22 +162,37 @@ export default {
       source: FEED_URL,
       fetchedAt: new Date().toISOString(),
       articles,
-    });
+    }, 200, { "Cache-Control": "public, max-age=900" }); // 15 min — this content updates infrequently
   },
 };
+
+function isAuthorized(request) {
+  return request.headers.get("X-Stable-Key") === WRITE_PASSPHRASE;
+}
+
+async function readState(env) {
+  const [trainersRaw, notesRaw] = await Promise.all([
+    env.STABLE_KV.get("trainers"),
+    env.STABLE_KV.get("notes"),
+  ]);
+  return {
+    trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
+    notes: notesRaw ? JSON.parse(notesRaw) : [],
+  };
+}
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "public, max-age=900", // 15 min — this content updates infrequently
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Stable-Key",
   };
 }
 
-function json(data, status = 200) {
+function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "Content-Type": "application/json", ...corsHeaders() },
+    headers: { "Content-Type": "application/json", ...corsHeaders(), ...extraHeaders },
   });
 }
 

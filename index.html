@@ -1262,6 +1262,8 @@
     align-self: flex-start;
   }
   .stable-bulk-import button:hover{ background: #ffc94d; }
+  .stable-api-status:empty{ display:none; }
+  .stable-api-status{ color: var(--silk-red); margin: -6px 0 10px; }
   .stable-search-row{ margin-bottom: 12px; }
   .stable-search-row input{
     width: 100%;
@@ -2094,9 +2096,10 @@
         <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
         <button type="button" id="addTrainerBtn">+ Add Trainer</button>
         <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
-          color. Auto-imported when a source is configured (see Setup below); paste article text into a
+          color. Shared with everyone using this site (see Setup below); paste article text into a
           trainer's section below (Extract Horses) or add entries by hand otherwise.</span>
       </div>
+      <div class="log-note stable-api-status" id="stableApiStatus"></div>
 
       <div class="stable-search-row">
         <input type="search" id="stableSearchInput" placeholder="Search trainers or horses…">
@@ -2109,8 +2112,11 @@
       <div class="stable-setup-section">
         <div class="stable-autoimport">
           <div class="bias-form-row">
-            <label>Auto-Import Source (Worker URL)
+            <label>Shared Data Source (Worker URL)
               <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
+            </label>
+            <label>Edit Passphrase
+              <input type="password" id="stableApiKeyInput" placeholder="Ask whoever set this up">
             </label>
           </div>
           <div class="bias-form-actions">
@@ -2118,9 +2124,10 @@
             <button type="button" id="stableFeedCheckBtn">Check Now</button>
           </div>
           <div class="log-note" id="stableFeedStatus">
-            Not configured yet — deploy workers/stable-tour-feed.js to Cloudflare and paste its URL above. Once set,
-            this checks thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per
-            detected horse, same review-free auto-add as everything else in this app once a source is trusted.
+            Trainers and notes are stored centrally on this Worker — everyone using the same URL sees the same
+            data. The passphrase is required to add/edit/remove anything (ask whoever deployed the Worker for it);
+            without it you can still view everyone's notes, just not change them. This also checks
+            thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per detected horse.
           </div>
         </div>
 
@@ -2136,7 +2143,8 @@
       </div>
 
       <div class="log-disclaimer">
-        Stable Tour entries are stored locally in this browser only (no backend, no sync across devices yet).
+        Stable Tour entries are stored centrally on the configured Worker and shared with everyone using this
+        site — not private to this browser.
       </div>
     </div>
   </div>
@@ -2952,8 +2960,14 @@
   // Escaped (unlike Bias Tracker's own notes field) since this is meant to
   // eventually hold scraped/pasted third-party quotes, not just your own
   // typed text — same reasoning the News Wire already uses for RSS content.
-  const STABLE_TRAINERS_KEY = "giddyupbets_stable_trainers_v1";
-  const STABLE_NOTES_KEY = "giddyupbets_stable_notes_v1";
+  // Trainers/notes live on the Worker (Cloudflare KV), not localStorage —
+  // every visitor reading from the same Worker URL sees the same shared
+  // data instead of each device keeping its own separate copy. Reads are
+  // open; writes require STABLE_API_KEY (below) to match what the Worker
+  // was deployed with.
+  const STABLE_WORKER_URL_DEFAULT = "https://stable-tour-feed.jvilla10214.workers.dev/";
+  const STABLE_FEED_URL_KEY = "giddyupbets_stable_feed_url_v1";
+  const STABLE_API_KEY_KEY = "giddyupbets_stable_api_key_v1";
   let stableTrainers = [];
   let stableNotes = [];
   let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
@@ -2964,64 +2978,92 @@
     return div.innerHTML;
   }
 
-  function loadStableTrainers(){
+  function loadStableFeedUrl(){
     try{
-      const raw = localStorage.getItem(STABLE_TRAINERS_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch(err){
-      console.error("Stable trainers failed to load", err);
-      return [];
-    }
+      const saved = localStorage.getItem(STABLE_FEED_URL_KEY);
+      return saved !== null ? saved : STABLE_WORKER_URL_DEFAULT;
+    } catch(err){ return STABLE_WORKER_URL_DEFAULT; }
   }
-  function saveStableTrainers(){
-    try{ localStorage.setItem(STABLE_TRAINERS_KEY, JSON.stringify(stableTrainers)); }
-    catch(err){ console.error("Stable trainers failed to save", err); }
+  function saveStableFeedUrl(url){
+    try{ localStorage.setItem(STABLE_FEED_URL_KEY, url); }
+    catch(err){ console.error("Stable feed URL failed to save", err); }
   }
-  function loadStableNotes(){
-    try{
-      const raw = localStorage.getItem(STABLE_NOTES_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch(err){
-      console.error("Stable notes failed to load", err);
-      return [];
-    }
+  function loadStableApiKey(){
+    try{ return localStorage.getItem(STABLE_API_KEY_KEY) || ""; }
+    catch(err){ return ""; }
   }
-  function saveStableNotes(){
-    try{ localStorage.setItem(STABLE_NOTES_KEY, JSON.stringify(stableNotes)); }
-    catch(err){ console.error("Stable notes failed to save", err); }
+  function saveStableApiKey(key){
+    try{ localStorage.setItem(STABLE_API_KEY_KEY, key); }
+    catch(err){ console.error("Stable API key failed to save", err); }
   }
 
-  function addStableTrainer(name){
-    const trimmed = name.trim();
-    if (!trimmed || stableTrainers.some(t => t.toLowerCase() === trimmed.toLowerCase())) return;
-    stableTrainers.push(trimmed);
-    stableTrainers.sort((a, b) => a.localeCompare(b));
-    saveStableTrainers();
-    renderStableTour();
+  function stableApiUrl(path){
+    return loadStableFeedUrl().replace(/\/$/, "") + path;
   }
-  function removeStableTrainer(name){
-    stableTrainers = stableTrainers.filter(t => t !== name);
-    stableNotes = stableNotes.filter(n => n.trainer !== name);
-    stableOpenTrainers.delete(name);
-    saveStableTrainers();
-    saveStableNotes();
-    renderStableTour();
+  async function stableApiGet(path){
+    const res = await fetch(stableApiUrl(path), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
   }
-  function addStableNote(trainer, note){
-    stableNotes.push({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      trainer, ...note,
-      capturedAt: new Date().toISOString(),
+  async function stableApiWrite(method, path, body){
+    const res = await fetch(stableApiUrl(path), {
+      method,
+      headers: { "Content-Type": "application/json", "X-Stable-Key": loadStableApiKey() },
+      body: JSON.stringify(body),
     });
-    saveStableNotes();
-    renderStableTour();
+    if (res.status === 401) throw new Error("wrong or missing passphrase — set it in Setup below");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
   }
-  function removeStableNote(id){
-    stableNotes = stableNotes.filter(n => n.id !== id);
-    saveStableNotes();
-    renderStableTour();
+  function stableApiError(action, err){
+    console.error(`Stable Tour: ${action} failed`, err);
+    $("stableApiStatus").textContent = `Couldn't ${action}: ${err.message}`;
+  }
+
+  async function loadStableData(){
+    try{
+      const data = await stableApiGet("/data");
+      return {
+        trainers: Array.isArray(data.trainers) ? data.trainers : [],
+        notes: Array.isArray(data.notes) ? data.notes : [],
+      };
+    } catch(err){
+      stableApiError("load shared data", err);
+      return { trainers: [], notes: [] };
+    }
+  }
+
+  async function addStableTrainer(name){
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try{
+      const data = await stableApiWrite("POST", "/trainers", { name: trimmed });
+      stableTrainers = data.trainers;
+      renderStableTour();
+    } catch(err){ stableApiError("add trainer", err); }
+  }
+  async function removeStableTrainer(name){
+    try{
+      const data = await stableApiWrite("DELETE", "/trainers", { name });
+      stableTrainers = data.trainers;
+      stableNotes = data.notes;
+      stableOpenTrainers.delete(name);
+      renderStableTour();
+    } catch(err){ stableApiError("remove trainer", err); }
+  }
+  async function addStableNote(trainer, note){
+    try{
+      const data = await stableApiWrite("POST", "/notes", { trainer, ...note });
+      if (!data.duplicate) stableNotes.push(data.note);
+      renderStableTour();
+    } catch(err){ stableApiError("save note", err); }
+  }
+  async function removeStableNote(id){
+    try{
+      const data = await stableApiWrite("DELETE", "/notes", { id });
+      stableNotes = data.notes;
+      renderStableTour();
+    } catch(err){ stableApiError("remove note", err); }
   }
 
   function fmtStableDate(dateStr){
@@ -3207,7 +3249,7 @@
       .trim();
   }
 
-  $("stableBulkAddBtn").addEventListener("click", () => {
+  $("stableBulkAddBtn").addEventListener("click", async () => {
     const input = $("stableBulkTrainerInput");
     const statusEl = $("stableBulkStatus");
     const raw = input.value.trim();
@@ -3217,10 +3259,22 @@
     const rawNames = (raw.includes("\n") ? raw.split("\n") : raw.split(/,(?!\s*(?:Jr\.?|Sr\.?|II|III|IV)\b)/))
       .map(s => s.trim()).filter(Boolean);
     if (!rawNames.length){ input.focus(); return; }
+    statusEl.textContent = `Adding ${rawNames.length} trainer${rawNames.length === 1 ? "" : "s"}…`;
     const before = stableTrainers.length;
-    rawNames.forEach(raw => addStableTrainer(normalizeTrainerName(raw)));
-    const added = stableTrainers.length - before;
-    statusEl.textContent = `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
+    try{
+      // Fired in parallel, then one final read of the merged state — much
+      // faster than posting one at a time, and correct regardless of which
+      // request lands first since the Worker itself dedupes on insert.
+      await Promise.all(rawNames.map(name => stableApiWrite("POST", "/trainers", { name: normalizeTrainerName(name) })));
+      const data = await loadStableData();
+      stableTrainers = data.trainers;
+      stableNotes = data.notes;
+      renderStableTour();
+      const added = stableTrainers.length - before;
+      statusEl.textContent = `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
+    } catch(err){
+      stableApiError("bulk-add trainers", err);
+    }
     input.value = "";
   });
 
@@ -3318,18 +3372,9 @@
   // asked for hands-off import — the "Auto" badge + source link on each
   // note keep it easy to spot-check and remove anything wrong after the
   // fact instead.
-  const STABLE_FEED_URL_KEY = "giddyupbets_stable_feed_url_v1";
   const STABLE_SEEN_ARTICLES_KEY = "giddyupbets_stable_seen_articles_v1";
   let stableSeenArticles = [];
 
-  function loadStableFeedUrl(){
-    try{ return localStorage.getItem(STABLE_FEED_URL_KEY) || ""; }
-    catch(err){ return ""; }
-  }
-  function saveStableFeedUrl(url){
-    try{ localStorage.setItem(STABLE_FEED_URL_KEY, url); }
-    catch(err){ console.error("Stable feed URL failed to save", err); }
-  }
   function loadStableSeenArticles(){
     try{
       const raw = localStorage.getItem(STABLE_SEEN_ARTICLES_KEY);
@@ -3346,36 +3391,39 @@
   }
 
   async function fetchStableTourFeed(){
-    const url = loadStableFeedUrl();
     const statusEl = $("stableFeedStatus");
-    if (!url){
-      statusEl.textContent = "Not configured yet — deploy workers/stable-tour-feed.js to Cloudflare and paste its URL above.";
-      return;
-    }
     statusEl.textContent = "Checking…";
     try{
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
+      const data = await stableApiGet("/"); // Worker's root path — the thisishorseracing.com scrape, unrelated to /data
       const newArticles = (data.articles || []).filter(a => !stableSeenArticles.includes(a.guid));
 
       let importedHorses = 0;
+      const writes = [];
       newArticles.forEach(article => {
-        addStableTrainer(article.trainer); // no-ops if this trainer already exists
+        writes.push(stableApiWrite("POST", "/trainers", { name: article.trainer }));
         (article.horses || []).forEach(h => {
-          addStableNote(article.trainer, {
+          writes.push(stableApiWrite("POST", "/notes", {
+            trainer: article.trainer,
             horse: h.horse,
             note: h.text,
             date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
             source: article.title,
             link: article.link,
             autoImported: true,
-          });
+          }));
           importedHorses++;
         });
         stableSeenArticles.push(article.guid);
       });
+      await Promise.all(writes);
       saveStableSeenArticles();
+
+      if (writes.length){
+        const fresh = await loadStableData();
+        stableTrainers = fresh.trainers;
+        stableNotes = fresh.notes;
+        renderStableTour();
+      }
 
       const checkedAt = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
       statusEl.textContent = newArticles.length
@@ -3389,9 +3437,11 @@
 
   $("stableFeedSaveBtn").addEventListener("click", () => {
     const url = $("stableFeedUrlInput").value.trim();
-    saveStableFeedUrl(url);
-    $("stableFeedStatus").textContent = url ? "Saved — click Check Now to fetch." : "Cleared.";
-    if (url) fetchStableTourFeed();
+    const key = $("stableApiKeyInput").value;
+    saveStableFeedUrl(url || STABLE_WORKER_URL_DEFAULT);
+    saveStableApiKey(key);
+    $("stableFeedStatus").textContent = "Saved — click Check Now to fetch.";
+    fetchStableTourFeed();
   });
   $("stableFeedCheckBtn").addEventListener("click", fetchStableTourFeed);
 
@@ -4971,14 +5021,38 @@
   renderBiasTable();
   renderBiasTrends();
 
-  stableTrainers = loadStableTrainers();
-  stableNotes = loadStableNotes();
-  renderStableTour();
-
   stableSeenArticles = loadStableSeenArticles();
   $("stableFeedUrlInput").value = loadStableFeedUrl();
-  fetchStableTourFeed(); // no-ops with a status message if nothing's configured yet
+  $("stableApiKeyInput").value = loadStableApiKey();
+  (async () => {
+    const data = await loadStableData();
+    stableTrainers = data.trainers;
+    stableNotes = data.notes;
+    renderStableTour();
+    fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
+  })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
+
+  // Refresh from the shared source periodically and whenever the tab
+  // regains focus, so a friend's changes on another device show up without
+  // a manual reload — but never while a paste box or note field has
+  // something typed and unsaved, so a background refresh can't silently
+  // wipe someone's in-progress entry.
+  function stableHasUnsavedInput(){
+    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse";
+    return [...document.querySelectorAll(selector)].some(el => el.value.trim().length > 0);
+  }
+  async function refreshStableDataIfIdle(){
+    if (stableHasUnsavedInput()) return;
+    const data = await loadStableData();
+    stableTrainers = data.trainers;
+    stableNotes = data.notes;
+    renderStableTour();
+  }
+  setInterval(refreshStableDataIfIdle, 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refreshStableDataIfIdle();
+  });
 
   document.querySelectorAll(".bias-window-btn").forEach(btn => {
     btn.addEventListener("click", () => {
