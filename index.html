@@ -3023,6 +3023,26 @@
     $("stableApiStatus").textContent = `Couldn't ${action}: ${err.message}`;
   }
 
+  // Firing many requests at once trips a real concurrency limit — confirmed
+  // directly: 100 simultaneous requests to the Worker had ~10% fail with a
+  // generic network error even though the Worker itself was fine. This caps
+  // how many run at once and retries whatever failed once before giving up
+  // on it, so a big batch (bulk-add, or a heavy auto-import poll) completes
+  // reliably instead of one flaky request failing the whole thing.
+  async function stableApiWriteBatch(items, requestFn, batchSize = 8){
+    let pending = items;
+    for (let attempt = 0; attempt < 2 && pending.length; attempt++){
+      const stillFailed = [];
+      for (let i = 0; i < pending.length; i += batchSize){
+        const batch = pending.slice(i, i + batchSize);
+        const results = await Promise.allSettled(batch.map(requestFn));
+        results.forEach((r, idx) => { if (r.status === "rejected") stillFailed.push(batch[idx]); });
+      }
+      pending = stillFailed;
+    }
+    return pending; // whatever's still failed after the retry pass
+  }
+
   async function loadStableData(){
     try{
       const data = await stableApiGet("/data");
@@ -3264,17 +3284,20 @@
     if (!rawNames.length){ input.focus(); return; }
     statusEl.textContent = `Adding ${rawNames.length} trainer${rawNames.length === 1 ? "" : "s"}…`;
     const before = stableTrainers.length;
+    const names = rawNames.map(normalizeTrainerName);
     try{
-      // Fired in parallel, then one final read of the merged state — much
-      // faster than posting one at a time, and correct regardless of which
-      // request lands first since the Worker itself dedupes on insert.
-      await Promise.all(rawNames.map(name => stableApiWrite("POST", "/trainers", { name: normalizeTrainerName(name) })));
+      // Batched + retried, then one final read of the merged state — see
+      // stableApiWriteBatch for why (a flat-out parallel blast of 100
+      // requests reliably drops some to a generic network error).
+      const stillFailed = await stableApiWriteBatch(names, name => stableApiWrite("POST", "/trainers", { name }));
       const data = await loadStableData();
       stableTrainers = data.trainers;
       stableNotes = data.notes;
       renderStableTour();
       const added = stableTrainers.length - before;
-      statusEl.textContent = `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
+      statusEl.textContent = stillFailed.length
+        ? `Added ${added} new trainer${added === 1 ? "" : "s"} — ${stillFailed.length} failed after retrying (network hiccup), click Add All again to retry just those: ${stillFailed.join(", ")}`
+        : `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
     } catch(err){
       stableApiError("bulk-add trainers", err);
     }
@@ -3401,11 +3424,11 @@
       const newArticles = (data.articles || []).filter(a => !stableSeenArticles.includes(a.guid));
 
       let importedHorses = 0;
-      const writes = [];
+      const tasks = []; // deferred thunks — stableApiWriteBatch controls when each actually fires
       newArticles.forEach(article => {
-        writes.push(stableApiWrite("POST", "/trainers", { name: article.trainer }));
+        tasks.push(() => stableApiWrite("POST", "/trainers", { name: article.trainer }));
         (article.horses || []).forEach(h => {
-          writes.push(stableApiWrite("POST", "/notes", {
+          tasks.push(() => stableApiWrite("POST", "/notes", {
             trainer: article.trainer,
             horse: h.horse,
             note: h.text,
@@ -3418,10 +3441,10 @@
         });
         stableSeenArticles.push(article.guid);
       });
-      await Promise.all(writes);
+      await stableApiWriteBatch(tasks, task => task());
       saveStableSeenArticles();
 
-      if (writes.length){
+      if (tasks.length){
         const fresh = await loadStableData();
         stableTrainers = fresh.trainers;
         stableNotes = fresh.notes;
