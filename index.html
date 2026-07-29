@@ -196,6 +196,52 @@
   }
   .storm-banner-radar-link:hover{ opacity: 1; }
 
+  /* Static single-file site with no service worker or build step — a
+     browser (mobile Safari especially) can sit on a stale cached copy well
+     past a normal refresh. This banner is the only signal a visitor gets
+     that a newer version actually exists. */
+  .update-banner[hidden]{ display:none; }
+  .update-banner{
+    display:flex;
+    flex-wrap: wrap;
+    align-items:center;
+    gap: 10px;
+    padding: 10px 18px;
+    margin: 14px 0 0;
+    border-radius: var(--radius);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--sky);
+    background: rgba(111,168,201,0.10);
+    color: var(--parchment);
+  }
+  .update-banner-icon{ font-size: 16px; line-height: 1; }
+  .update-banner-reload{
+    margin-left: auto;
+    background: var(--sky);
+    border: none;
+    color: var(--ink);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .update-banner-dismiss{
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.7;
+    padding: 0 2px;
+  }
+  .update-banner-dismiss:hover{ opacity: 1; }
+
   #refreshBtn{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
@@ -1558,6 +1604,13 @@
     </div>
   </div>
 </header>
+
+<div class="update-banner" id="updateBanner" hidden>
+  <span class="update-banner-icon">🔄</span>
+  <span>A newer version of this page is available.</span>
+  <button type="button" class="update-banner-reload" id="updateBannerReloadBtn">Reload now</button>
+  <button type="button" class="update-banner-dismiss" id="updateBannerDismissBtn" title="Dismiss">×</button>
+</div>
 
 <div class="storm-banner" id="stormBanner" hidden>
   <span class="storm-banner-icon" id="stormBannerIcon">🌧️</span>
@@ -4963,6 +5016,43 @@
   document.querySelectorAll(".radar-mode-btn").forEach(btn => {
     btn.addEventListener("click", () => setRadarMode(btn.dataset.mode));
   });
+
+  // ---------- Update checker ----------
+  // Static single-file site on GitHub Pages, no service worker — a browser
+  // (mobile Safari especially) can sit on a stale cached copy well past a
+  // normal refresh. HEAD-checks this page's own URL with the cache bypassed
+  // and compares against what was loaded at bootstrap, surfacing a banner
+  // instead of silently serving stale content indefinitely.
+  const UPDATE_CHECK_MS = 5 * 60 * 1000;
+  let pageVersionTag = null;
+
+  async function fetchPageVersionTag(){
+    try{
+      const res = await fetch(location.pathname, { method: "HEAD", cache: "no-store" });
+      if (!res.ok) return null;
+      return res.headers.get("etag") || res.headers.get("last-modified");
+    } catch(err){
+      return null; // offline, or a host that doesn't expose these headers — fail silent, not disruptive
+    }
+  }
+
+  async function checkForUpdate(){
+    const latest = await fetchPageVersionTag();
+    if (!latest || !pageVersionTag || latest === pageVersionTag) return;
+    $("updateBanner").hidden = false;
+  }
+
+  $("updateBannerReloadBtn").addEventListener("click", () => {
+    location.href = location.pathname + "?_v=" + Date.now(); // cache-busting query string guarantees a fresh fetch
+  });
+  $("updateBannerDismissBtn").addEventListener("click", () => {
+    $("updateBanner").hidden = true;
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkForUpdate();
+  });
+  fetchPageVersionTag().then(tag => { pageVersionTag = tag; }); // baseline from the copy actually running
+  setInterval(checkForUpdate, UPDATE_CHECK_MS);
 
   initWindFlow();
   refreshNyraFrame();
