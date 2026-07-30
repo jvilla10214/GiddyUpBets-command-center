@@ -2236,9 +2236,17 @@
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
       city: "Oceanport, NJ",
-      lat: 40.3058, lon: -74.0087,
+      // lon corrected: -74.0087 was ~230m outside the track's actual
+      // footprint (verified against OpenStreetMap).
+      lat: 40.3058, lon: -74.0198,
       timezone: "America/New_York",
-      heading: { homestretch: 70, backstretch: 250 },
+      // Re-measured directly (see Saratoga's comment for method): the
+      // grandstand sits on the track's WEST side, and the oval's long axis
+      // runs NNE-SSW, not the ENE-WSW axis the old 70/250 value implied —
+      // that was off by roughly 130°, not a refinement. Two independent
+      // point-pairs along the grandstand roofline / outer rail agreed
+      // within 7° (207.2 / 199.9).
+      heading: { homestretch: 204, backstretch: 24 },
       nyraCode: null, scratchesUrl: "https://www.monmouthpark.com/horse-racing/scratches-and-changes/",
       photo: "assets/track-monmouth.png", photoAlt: "Aerial view of Monmouth Park",
       tideStationId: null, tideRangeFt: null,
@@ -2246,9 +2254,15 @@
     delmar: {
       id: "delmar", name: "Del Mar", shortName: "Del Mar",
       city: "Del Mar, CA",
-      lat: 32.9718, lon: -117.2575,
+      // lat corrected: 32.9718 was ~300m south of the track's actual
+      // footprint (verified against OpenStreetMap).
+      lat: 32.9765, lon: -117.2575,
       timezone: "America/Los_Angeles",
-      heading: { homestretch: 320, backstretch: 140 },
+      // Re-measured directly: grandstand is on the SOUTH side, oval's long
+      // axis runs roughly east-west, not the NNW-SSE axis the old 320/140
+      // value implied (off by ~124°). Traced the south outer rail directly
+      // at the corrected coordinates above.
+      heading: { homestretch: 84, backstretch: 264 },
       nyraCode: null, scratchesUrl: "https://www.dmtc.com/racing/changes",
       photo: "assets/track-delmar.png", photoAlt: "Aerial view of Del Mar racetrack",
       // Del Mar's main track sits right along the coast, and the sales-page
@@ -2271,8 +2285,10 @@
       // silhouette isn't reliably identifiable mid-rebuild ($455M
       // reconstruction, reopening Sept. 2026). Home straight runs along the
       // south side, so heading follows the same counterclockwise-oval
-      // derivation as every other track here.
-      heading: { homestretch: 80, backstretch: 260 },
+      // derivation as every other track here. Re-measured with precise
+      // pixel-to-latlon math (same method as Saratoga): 72/252, a minor
+      // 8-degree refinement from the original 80/260 visual estimate.
+      heading: { homestretch: 72, backstretch: 252 },
       nyraCode: "BEL", scratchesUrl: null,
       photo: "assets/track-belmont.png", photoAlt: "Aerial view of Belmont Park",
       tideStationId: null, tideRangeFt: null,
