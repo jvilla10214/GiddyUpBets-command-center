@@ -3137,7 +3137,8 @@
       const data = await stableApiWrite("POST", "/notes", { trainer, ...note });
       if (!data.duplicate) stableNotes.push(data.note);
       renderStableTour();
-    } catch(err){ stableApiError("save note", err); }
+      return true;
+    } catch(err){ stableApiError("save note", err); return false; }
   }
   async function removeStableNote(id){
     try{
@@ -4042,7 +4043,7 @@
       .sort((a, b) => b.ts - a.ts)
       .slice(0, NEWS_ITEM_CAP);
     renderNewsWire(merged);
-    scanNewsForTrainerMentions(merged);
+    await scanNewsForTrainerMentions(merged);
   }
 
   // ---------- News Wire -> Stable Tour trainer-mention auto-import ----------
@@ -4080,7 +4081,7 @@
     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  function scanNewsForTrainerMentions(items){
+  async function scanNewsForTrainerMentions(items){
     if (!stableTrainers.length) return;
     let added = false;
     for (const item of items){
@@ -4090,8 +4091,11 @@
         const seenKey = `${item.link}|${trainer}`;
         if (stableNewsSeen.has(seenKey)) continue;
         if (!new RegExp(`\\b${escapeRegExp(trainer)}\\b`, "i").test(haystack)) continue;
-        stableNewsSeen.add(seenKey);
-        addStableNote(trainer, {
+        // Only mark seen once the save actually succeeds — marking it first
+        // (the old behavior) meant a failed write (bad passphrase, network
+        // blip, a KV quota outage) silently and permanently dropped that
+        // mention, since it would never be retried on this device again.
+        const ok = await addStableNote(trainer, {
           horse: item.title,
           note: bodyText.slice(0, 1200),
           date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
@@ -4099,7 +4103,7 @@
           link: item.link,
           autoImported: true,
         });
-        added = true;
+        if (ok){ stableNewsSeen.add(seenKey); added = true; }
       }
     }
     if (added) saveStableNewsSeen();
