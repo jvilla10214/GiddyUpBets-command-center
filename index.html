@@ -2279,6 +2279,32 @@
       photo: "assets/track-colonialdowns.png", photoAlt: "Aerial view of Colonial Downs",
       tideStationId: null, tideRangeFt: null,
     },
+    churchilldowns: {
+      id: "churchilldowns", name: "Churchill Downs", shortName: "Churchill Downs",
+      city: "Louisville, KY",
+      lat: 38.2031, lon: -85.7700,
+      timezone: "America/New_York", // Louisville is in Eastern time, not Central
+      // Unlike every other track here, this oval's long axis runs roughly
+      // north-south, not east-west — obvious in satellite imagery from the
+      // Twin Spires grandstand landmark sitting squarely on the WEST side.
+      // Same counterclockwise derivation, just rotated: west + ccw = south.
+      heading: { homestretch: 185, backstretch: 5 },
+      nyraCode: null, scratchesUrl: "https://www.churchilldowns.com/scratches-and-changes/",
+      photo: "assets/track-churchilldowns.png", photoAlt: "Aerial view of Churchill Downs",
+      tideStationId: null, tideRangeFt: null,
+    },
+    santaanita: {
+      id: "santaanita", name: "Santa Anita Park", shortName: "Santa Anita",
+      city: "Arcadia, CA",
+      lat: 34.1406, lon: -118.0444,
+      timezone: "America/Los_Angeles",
+      // Grandstand (the famous art-deco building, spectators facing the San
+      // Gabriel Mountains to the north) sits on the SOUTH side of the oval.
+      heading: { homestretch: 80, backstretch: 260 },
+      nyraCode: null, scratchesUrl: "https://www.santaanita.com/racing-information/changes/",
+      photo: "assets/track-santaanita.png", photoAlt: "Aerial view of Santa Anita Park",
+      tideStationId: null, tideRangeFt: null,
+    },
   };
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
@@ -4674,7 +4700,7 @@
       if (activeTrack.id !== requestedTrackId) return; // stale — track changed while this was in flight
       render(data);
       setStatus(true, "Live");
-      $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'});
+      $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit', timeZone: activeTrack.timezone});
       fetchNwsAlerts(); // separate free-standing API — a hiccup here shouldn't affect the weather status pill
     } catch(err){
       console.error(err);
