@@ -2179,8 +2179,8 @@
         <div class="news-wire-empty">Loading racing news…</div>
       </div>
       <div class="news-wire-disclaimer" id="newsWireDisclaimer">
-        Pulled from DRF, TDN, America's Best Racing, and BloodHorse RSS feeds — general racing-industry news, not just
-        Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
+        Pulled from DRF, TDN, America's Best Racing, BloodHorse, and Horse Racing Nation RSS feeds — general
+        racing-industry news, not just Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
       </div>
     </div>
   </div>
@@ -3939,6 +3939,7 @@
     { name: "TDN", kind: "bridge", url: "https://www.thoroughbreddailynews.com/feed/" },
     { name: "ABR", kind: "bridge", url: "https://www.americasbestracing.net/rss" },
     { name: "BloodHorse", kind: "bridge", url: "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing" },
+    { name: "HRN", kind: "bridge", url: "https://www.horseracingnation.com/rss/newsfeed.aspx" },
   ];
 
   function parseRssXml(xmlText){
@@ -4928,8 +4929,8 @@
     $("radarFrame").title = `${track.name} radar and storm forecast`;
     $("radarPanelTrackName").textContent = track.shortName;
     $("newsWireDisclaimer").textContent =
-      `Pulled from DRF, TDN, America's Best Racing, and BloodHorse RSS feeds — general racing-industry news, not just ` +
-      `${track.shortName}. Items mentioning ${track.shortName} by name are flagged. Refreshes every 15 minutes.`;
+      `Pulled from DRF, TDN, America's Best Racing, BloodHorse, and Horse Racing Nation RSS feeds — general ` +
+      `racing-industry news, not just ${track.shortName}. Items mentioning ${track.shortName} by name are flagged. Refreshes every 15 minutes.`;
     $("footerWeatherSource").textContent =
       `Weather data: Open-Meteo (no API key required) · ${track.name}, ${track.city} (${track.lat}, ${track.lon})`;
     updateNyraWidgetVisibility(track);
