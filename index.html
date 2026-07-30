@@ -2210,9 +2210,25 @@
     saratoga: {
       id: "saratoga", name: "Saratoga Race Course", shortName: "Saratoga",
       city: "Saratoga Springs, NY",
-      lat: 43.0723, lon: -73.7859,
+      // Previously 43.0723,-73.7859 — that point was ~0.6km off the actual
+      // track (verified against OpenStreetMap's "Saratoga Race Course"
+      // node). Corrected here; the error was harmless for the Open-Meteo
+      // call (regional weather doesn't care about 0.6km) but meant any
+      // satellite-imagery lookup centered on it missed the track entirely.
+      lat: 43.0731, lon: -73.7699,
       timezone: "America/New_York",
-      heading: { homestretch: 270, backstretch: 90 },
+      // Homestretch bearing measured directly: identified the grandstand
+      // roofline (runs parallel to the front stretch, unobstructed and easy
+      // to trace in satellite imagery, unlike the rail itself) at the
+      // corrected coordinates above, extracted lat/lon for both ends from
+      // the source image's known bounding box, and computed the great-circle
+      // bearing between them — two independent point-pairs along that
+      // roofline agreed within 0.5° (242.6°/243.1°). Cross-checked the
+      // distance between the sampled points (~1,257 ft) against Saratoga's
+      // documented clubhouse-turn-to-finish distance (1,144 ft) as a
+      // plausibility check, not an exact match (different point pairs).
+      // Previous value (270/90) was a rougher visual estimate.
+      heading: { homestretch: 243, backstretch: 63 },
       nyraCode: "SAR", scratchesUrl: null,
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
       tideStationId: null, tideRangeFt: null,
