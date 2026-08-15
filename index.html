@@ -1906,6 +1906,7 @@
           <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
         </div>
         <div class="tsub" id="rainRate">Current rate —</div>
+        <div class="tsub" id="rainTodayOutlook" hidden>—</div>
       </div>
       <div class="tvalue"><span id="rainTotal">—</span><span class="tunit">in</span></div>
     </div>
@@ -2405,6 +2406,9 @@
   // data-window values.
   let rainWindowTotals = { today: null, "6h": null, "24h": null, "48h": null };
   const RAIN_WINDOW_ALERT_THRESHOLD = { today: 0.5, "6h": 0.5, "24h": 0.5, "48h": 1.0 };
+  // Full-day predicted total + rain start time, shown only under the Today
+  // tab — see computeTodayRainOutlook().
+  let todayRainOutlookData = null;
 
   const WMO = {
     0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
@@ -2520,6 +2524,44 @@
       }
     }
     return null;
+  }
+
+  // "Today only" rainfall outlook — pairs with the Rainfall tile's Today tab.
+  // Distinct from upcomingRainOutlook() above (the top-of-page storm banner,
+  // which only looks a few hours ahead and hides itself while it's already
+  // raining): this always covers the full day and reports both the model's
+  // predicted full-day total and when rain did or is expected to start,
+  // whether that's earlier today or still ahead.
+  function computeTodayRainOutlook({ hourlyTimes, hourlyPrecip, hourlyWeatherCode, correctedPrecip, todayStartIdx, todayEndIdx, nowHourIdx }){
+    if (todayStartIdx < 0 || todayEndIdx < 0 || !hourlyTimes) return null;
+
+    const RAIN_THRESHOLD = 0.05; // matches upcomingRainOutlook()'s own threshold
+
+    // Elapsed hours first — did it already rain today? Uses the
+    // archive-corrected values, same as the Rainfall tile's other totals.
+    let startIdx = -1;
+    for (let i = todayStartIdx; i <= Math.min(nowHourIdx, todayEndIdx); i++){
+      if ((correctedPrecip?.[i] ?? 0) > RAIN_THRESHOLD){ startIdx = i; break; }
+    }
+    const alreadyStarted = startIdx >= 0;
+
+    // Nothing yet today — look ahead through the rest of today using the
+    // forecast endpoint's own values (the archive can't cover the future).
+    if (!alreadyStarted){
+      for (let i = Math.max(nowHourIdx + 1, todayStartIdx); i <= todayEndIdx; i++){
+        const p = hourlyPrecip?.[i] ?? 0;
+        const code = hourlyWeatherCode?.[i];
+        const thunder = code != null && STORM_WMO_CODES.has(code);
+        if (p > RAIN_THRESHOLD || thunder){ startIdx = i; break; }
+      }
+    }
+
+    let total = 0;
+    for (let i = todayStartIdx; i <= todayEndIdx; i++){
+      total += i <= nowHourIdx ? (correctedPrecip?.[i] ?? 0) : (hourlyPrecip?.[i] ?? 0);
+    }
+
+    return { total, startTime: startIdx >= 0 ? hourlyTimes[startIdx] : null, alreadyStarted };
   }
 
   // Top-of-page banner, visible on every sidebar page (not just Dashboard)
@@ -4795,11 +4837,30 @@
   function activeRainWindowKey(){
     return document.querySelector(".rain-tab-btn.active")?.dataset.window || "today";
   }
+  function describeTodayRainOutlook(outlook){
+    const totalStr = `Predicted total today ${outlook.total.toFixed(2)} in`;
+    if (outlook.startTime){
+      return outlook.alreadyStarted
+        ? `${totalStr} — started ~${fmtTime(outlook.startTime)}`
+        : `${totalStr} — starting ~${fmtTime(outlook.startTime)}`;
+    }
+    // No hour crosses the "meaningful rain" threshold, but trace amounts
+    // (drizzle under 0.05in/hr) can still add up to a nonzero total.
+    return outlook.total > 0 ? `${totalStr} — light/trace rain only` : `${totalStr} — no rain expected`;
+  }
   function renderRainTile(){
     const key = activeRainWindowKey();
     const total = rainWindowTotals[key];
     $("rainTotal").textContent = total != null ? total.toFixed(2) : "—";
     $("rainTile").classList.toggle("alert", total != null && total > RAIN_WINDOW_ALERT_THRESHOLD[key]);
+
+    const outlookEl = $("rainTodayOutlook");
+    if (key === "today" && todayRainOutlookData){
+      outlookEl.hidden = false;
+      outlookEl.textContent = describeTodayRainOutlook(todayRainOutlookData);
+    } else {
+      outlookEl.hidden = true;
+    }
   }
   function setRainWindow(key){
     document.querySelectorAll(".rain-tab-btn").forEach(btn => {
@@ -4962,6 +5023,18 @@
       "24h": nowHourIdx >= 0 ? rain24h : null,
       "48h": nowHourIdx >= 0 ? rain48h : null,
     };
+
+    let todayEndIdx = todayStartIdx;
+    if (todayStartIdx >= 0){
+      while (todayEndIdx + 1 < data.hourly.time.length && data.hourly.time[todayEndIdx + 1].startsWith(todayStr)){
+        todayEndIdx++;
+      }
+    }
+    todayRainOutlookData = computeTodayRainOutlook({
+      hourlyTimes: data.hourly?.time, hourlyPrecip: data.hourly?.precipitation,
+      hourlyWeatherCode: data.hourly?.weather_code, correctedPrecip,
+      todayStartIdx, todayEndIdx, nowHourIdx,
+    });
     renderRainTile();
 
     if (data.daily?.sunrise?.[todayIdx] && data.daily?.sunset?.[todayIdx]){
@@ -5133,6 +5206,7 @@
     rainHistoryByTime = null;
     rainHistoryTrackId = null;
     rainWindowTotals = { today: null, "6h": null, "24h": null, "48h": null };
+    todayRainOutlookData = null;
     renderRainTile();
     flowAngleDeg = 90;
     flowSpeedMph = 0;
