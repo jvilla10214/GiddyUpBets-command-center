@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stable Tour shared data + auto-import feed + weather log
 // -----------------------------------------------------------------------
-// Four jobs in one Worker:
+// Five jobs in one Worker:
 //
 // 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
 //    trainer/notes store so every visitor's browser reads and writes the
@@ -40,9 +40,24 @@
 //    fields, same division of labor as job #2 (worker extracts structure,
 //    client interprets it).
 //
+// 5. Shared Bias Tracker (GET/POST/DELETE /biaslog, one KV key per track) —
+//    same shape as job #3 (weatherlog), also deliberately open with no
+//    passphrase gate. This one DOES carry free-text a visitor could
+//    vandalize with junk (unlike weatherlog, which is pure computed
+//    numbers) — that's a real, accepted tradeoff, not an oversight: gating
+//    writes behind Stable Tour's passphrase would also block every ordinary
+//    visitor from saving their own manual bias read, since that passphrase
+//    is a team-internal secret, not something a random visitor is expected
+//    to have. Manual entries have always been freely editable by anyone
+//    (previously just stuck in their own browser, unseen by others); making
+//    that shared keeps the same openness it already had rather than adding
+//    new friction. The NYRA Track Trends auto-import (job #4) also writes
+//    through this same open endpoint — see autoImportNyraTrends() client-side
+//    for how it protects manual entries from being overwritten by a re-scrape.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1 and #3 to work — jobs #2 and #4 (fetch-and-parse only, no
+// for jobs #1, #3, and #5 to work — jobs #2 and #4 (fetch-and-parse only, no
 // storage) work without it.
 // -----------------------------------------------------------------------
 
@@ -248,6 +263,59 @@ async function handleRequest(request, env) {
       return json({ entries }, 200, { "Cache-Control": "no-store" });
     }
 
+    if (url.pathname === "/biaslog" && request.method === "GET") {
+      const track = (url.searchParams.get("track") || "").trim();
+      if (!track) return json({ error: "Missing track" }, 400);
+      const entries = await readBiasLog(env, track);
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/biaslog" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const entry = body.entry;
+      if (!track || !entry || !entry.date) return json({ error: "Missing track or entry" }, 400);
+      const entries = await readBiasLog(env, track);
+      const filtered = entries.filter(e => e.date !== entry.date);
+      filtered.push(entry);
+      filtered.sort((a, b) => b.date.localeCompare(a.date));
+      await env.STABLE_KV.put(biasLogKvKey(track), JSON.stringify(filtered));
+      return json({ entries: filtered }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Unconditional per-item upsert (overwrite by date), unlike weatherlog's
+    // bulk route — used both for the one-time local-history migration (seeding
+    // an empty store, where "overwrite" and "insert if missing" are the same
+    // thing) and for autoImportNyraTrends()'s batched re-scrape updates,
+    // which already decided client-side exactly which dates are safe to
+    // touch (see its own comment on never overwriting a manual entry).
+    if (url.pathname === "/biaslog/bulk" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const items = Array.isArray(body.entries) ? body.entries : [];
+      if (!track || !items.length) return json({ error: "Missing track or entries" }, 400);
+      const entries = await readBiasLog(env, track);
+      for (const item of items) {
+        if (!item?.date) continue;
+        const idx = entries.findIndex(e => e.date === item.date);
+        if (idx === -1) entries.push(item);
+        else entries[idx] = item;
+      }
+      entries.sort((a, b) => b.date.localeCompare(a.date));
+      await env.STABLE_KV.put(biasLogKvKey(track), JSON.stringify(entries)); // one write for the whole batch
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/biaslog" && request.method === "DELETE") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date;
+      if (!track || !date) return json({ error: "Missing track or date" }, 400);
+      const entries = (await readBiasLog(env, track)).filter(e => e.date !== date);
+      await env.STABLE_KV.put(biasLogKvKey(track), JSON.stringify(entries));
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/nyra-trends" && request.method === "GET") {
       const track = url.searchParams.get("track") || "saratoga";
       if (track !== "saratoga") return json({ error: "Not supported for this track" }, 400);
@@ -337,6 +405,16 @@ function weatherLogKvKey(track) {
 
 async function readWeatherLog(env, track) {
   const raw = await env.STABLE_KV.get(weatherLogKvKey(track));
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function biasLogKvKey(track) {
+  return `biaslog:${track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40)}`;
+}
+
+async function readBiasLog(env, track) {
+  const raw = await env.STABLE_KV.get(biasLogKvKey(track));
   const parsed = raw ? JSON.parse(raw) : [];
   return Array.isArray(parsed) ? parsed : [];
 }

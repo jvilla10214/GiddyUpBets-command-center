@@ -2114,11 +2114,11 @@
       </div>
 
       <div class="log-disclaimer">
-        Bias Tracker entries are stored locally in this browser only (no backend, no sync across devices yet).
+        Bias Tracker is shared — every visitor sees the same entries for this track, manual or auto-imported.
         Rows tagged <strong>NYRA</strong> are auto-imported from NYRA's own Saratoga Track Trends page (Andy
         Serling's daily analysis) — the running-style bias is a keyword heuristic over his write-up, not something
-        NYRA itself categorizes, so read the full note before trusting the tag. Untagged rows are your own manual
-        read of how a card played.
+        NYRA itself categorizes, so read the full note before trusting the tag. Untagged rows are someone's own
+        manual read of how a card played.
       </div>
     </div>
   </div>
@@ -2738,35 +2738,81 @@
   };
   let biasLog = [];
 
-  function loadBiasLog(){
+  // Pre-shared-storage localStorage copy — read-only now, kept only as a
+  // one-time migration source (see loadBiasLog() below). activeTrack must
+  // already be set to the track being loaded before this is called.
+  function loadLocalBiasLogLegacy(){
     try{
       const raw = localStorage.getItem(trackScopedKey(BIAS_LOG_KEY_BASE));
       const parsed = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
+    } catch(err){ return []; }
+  }
+
+  const BIASLOG_MIGRATED_KEY = "giddyupbets_biaslog_migrated_v1";
+  function biasLogMigratedTracks(){
+    try{ return new Set(JSON.parse(localStorage.getItem(BIASLOG_MIGRATED_KEY) || "[]")); }
+    catch(err){ return new Set(); }
+  }
+  function markBiasLogMigrated(trackId){
+    try{
+      const set = biasLogMigratedTracks();
+      set.add(trackId);
+      localStorage.setItem(BIASLOG_MIGRATED_KEY, JSON.stringify([...set]));
+    } catch(err){ /* best-effort — worst case this track's migration check just runs again next load */ }
+  }
+
+  // Bias Tracker used to be localStorage-only, same as the Daily Log before
+  // it — now every visitor reads and writes the same shared copy off the
+  // Stable Tour worker (see biasLogApi* above and the worker's own comment
+  // on why manual entries are open too, not just the NYRA auto-import). The
+  // one-time migration below seeds the shared store from local history if
+  // (and only if) the shared store is still empty for this track, so a
+  // browser's pre-existing manual notes aren't silently orphaned.
+  async function loadBiasLog(){
+    const trackId = activeTrack.id;
+    try{
+      let entries = await biasLogApiGet(trackId);
+      if (!entries.length && !biasLogMigratedTracks().has(trackId)){
+        const localEntries = loadLocalBiasLogLegacy();
+        if (localEntries.length){
+          try{ entries = await biasLogApiBulk(trackId, localEntries); }
+          catch(err){ console.error("Bias log migration failed", err); }
+        }
+      }
+      markBiasLogMigrated(trackId);
+      entries.sort((a, b) => b.date.localeCompare(a.date));
+      return entries;
     } catch(err){
       console.error("Bias log failed to load", err);
       return [];
     }
   }
-  function saveBiasLog(){
-    try{ localStorage.setItem(trackScopedKey(BIAS_LOG_KEY_BASE), JSON.stringify(biasLog)); }
-    catch(err){ console.error("Bias log failed to save", err); }
-  }
 
-  function upsertBiasEntry(entry){
-    biasLog = biasLog.filter(e => e.date !== entry.date);
-    biasLog.push(entry);
-    biasLog.sort((a, b) => b.date.localeCompare(a.date));
-    saveBiasLog();
-    renderBiasTable();
-    renderBiasTrends();
-    pushAlert(makeAlert("bias", `${fmtLogDateShort(entry.date)} bias noted: ${entry.runningStyleBias}${entry.railNote ? " — Rail: " + entry.railNote : ""}`));
+  async function upsertBiasEntry(entry){
+    const trackId = activeTrack.id;
+    try{
+      const entries = await biasLogApiUpsert(trackId, entry);
+      if (activeTrack.id !== trackId) return;
+      biasLog = entries;
+      renderBiasTable();
+      renderBiasTrends();
+      pushAlert(makeAlert("bias", `${fmtLogDateShort(entry.date)} bias noted: ${entry.runningStyleBias}${entry.railNote ? " — Rail: " + entry.railNote : ""}`));
+    } catch(err){
+      console.error("Bias entry failed to save", err);
+    }
   }
-  function removeBiasEntry(dateStr){
-    biasLog = biasLog.filter(e => e.date !== dateStr);
-    saveBiasLog();
-    renderBiasTable();
-    renderBiasTrends();
+  async function removeBiasEntry(dateStr){
+    const trackId = activeTrack.id;
+    try{
+      const entries = await biasLogApiRemove(trackId, dateStr);
+      if (activeTrack.id !== trackId) return;
+      biasLog = entries;
+      renderBiasTable();
+      renderBiasTrends();
+    } catch(err){
+      console.error("Bias entry failed to remove", err);
+    }
   }
 
   // ---------- NYRA Track Trends auto-import (Saratoga only) ----------
@@ -2856,23 +2902,30 @@
     try{ raws = await nyraTrendsApiGet(); }
     catch(err){ console.error("NYRA track trends fetch failed", err); return; }
 
-    let added = 0;
+    // Decide the whole batch locally first — never touch a date with a real
+    // manual entry — then send it as one bulk write instead of one request
+    // per day (32 individual POSTs on a first-ever import would be wasteful
+    // and non-atomic; this way it's a single KV write on the worker side).
+    const trackId = "saratoga";
+    const toUpsert = [];
     for (const raw of raws){
-      if (activeTrack.id !== "saratoga") return; // stale — track changed mid-loop
       const existing = biasLog.find(e => e.date === raw.date);
       if (existing && !existing.autoImported) continue; // never clobber a manual entry
       const entry = buildBiasEntryFromNyra(raw);
       if (existing && existing.notes === entry.notes && existing.runningStyleBias === entry.runningStyleBias) continue;
-      biasLog = biasLog.filter(e => e.date !== entry.date);
-      biasLog.push(entry);
-      added++;
+      toUpsert.push(entry);
     }
-    if (added){
-      biasLog.sort((a, b) => b.date.localeCompare(a.date));
-      saveBiasLog();
+    if (!toUpsert.length) return;
+
+    try{
+      const entries = await biasLogApiBulk(trackId, toUpsert);
+      if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+      biasLog = entries;
       renderBiasTable();
       renderBiasTrends();
-      pushAlert(makeAlert("bias", `Imported ${added} day${added === 1 ? "" : "s"} of NYRA Track Trends into Bias Tracker`));
+      pushAlert(makeAlert("bias", `Imported ${toUpsert.length} day${toUpsert.length === 1 ? "" : "s"} of NYRA Track Trends into Bias Tracker`));
+    } catch(err){
+      console.error("NYRA track trends import failed to save", err);
     }
   }
 
@@ -3553,6 +3606,46 @@
   }
   async function weatherLogApiBulk(track, entries){
     const res = await fetch(stableApiUrl("/weatherlog/bulk"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, entries }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+
+  // ---------- Shared Bias Tracker (same worker, no passphrase — see the
+  // worker's own comment on why manual entries are open too, not just the
+  // NYRA auto-import) ----------
+  async function biasLogApiGet(track){
+    const res = await fetch(stableApiUrl(`/biaslog?track=${encodeURIComponent(track)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  async function biasLogApiUpsert(track, entry){
+    const res = await fetch(stableApiUrl("/biaslog"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, entry }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  async function biasLogApiRemove(track, date){
+    const res = await fetch(stableApiUrl("/biaslog"), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, date }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  async function biasLogApiBulk(track, entries){
+    const res = await fetch(stableApiUrl("/biaslog/bulk"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track, entries }),
@@ -5530,9 +5623,15 @@
       renderBiasTable();
       renderBiasTrends();
     });
-    biasLog = loadBiasLog();
+    biasLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
     renderBiasTable();
     renderBiasTrends();
+    loadBiasLog().then(entries => {
+      if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
+      biasLog = entries;
+      renderBiasTable();
+      renderBiasTrends();
+    });
     alertState = loadAlertState();
 
     // Cheap re-flag of already-fetched news items under the new track name —
@@ -5666,9 +5765,11 @@
     renderBiasTrends();
   });
 
-  biasLog = loadBiasLog();
-  renderBiasTable();
-  renderBiasTrends();
+  loadBiasLog().then(entries => {
+    biasLog = entries;
+    renderBiasTable();
+    renderBiasTrends();
+  });
 
   stableSeenArticles = loadStableSeenArticles();
   $("stableFeedUrlInput").value = loadStableFeedUrl();
