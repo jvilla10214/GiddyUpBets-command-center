@@ -2362,6 +2362,35 @@
       photo: "assets/track-santaanita.png", photoAlt: "Aerial view of Santa Anita Park",
       tideStationId: null, tideRangeFt: null,
     },
+    keeneland: {
+      id: "keeneland", name: "Keeneland Race Course", shortName: "Keeneland",
+      city: "Lexington, KY",
+      lat: 38.0463, lon: -84.6087,
+      timezone: "America/New_York",
+      // Grandstand/clubhouse complex sits on the EAST side of the oval —
+      // measured directly off the grandstand roofline (two independent point
+      // pairs, agreed within 1.5°), then cross-checked against the
+      // counterclockwise-oval convention (predicted ~311° from the oval's
+      // center vs. ~324° measured — consistent, same NW-ish quadrant).
+      heading: { homestretch: 324, backstretch: 144 },
+      nyraCode: null, scratchesUrl: "https://www.keeneland.com/racing/scratches-changes",
+      photo: null, photoAlt: "Aerial view of Keeneland Race Course",
+      tideStationId: null, tideRangeFt: null,
+    },
+    gulfstreampark: {
+      id: "gulfstreampark", name: "Gulfstream Park", shortName: "Gulfstream Park",
+      city: "Hallandale Beach, FL",
+      lat: 25.9793, lon: -80.1363,
+      timezone: "America/New_York",
+      // Grandstand/clubhouse sits on the WEST side of the oval, which runs
+      // nearly due north-south — measured directly off the west rail (two
+      // independent point pairs, ~181°/~184°), matching the counterclockwise
+      // convention's prediction of exactly 180° almost exactly.
+      heading: { homestretch: 183, backstretch: 3 },
+      nyraCode: null, scratchesUrl: "https://www.gulfstreampark.com/racing-information/",
+      photo: null, photoAlt: "Aerial view of Gulfstream Park",
+      tideStationId: null, tideRangeFt: null,
+    },
   };
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
