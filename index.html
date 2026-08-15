@@ -2545,6 +2545,79 @@
   // free archive API (ERA5 reanalysis), no key required, ~5 day lag.
   const LOG_STORAGE_KEY_BASE = "giddyupbets_weather_log_v1";
   const ARCHIVE_API_BASE = "https://archive-api.open-meteo.com/v1/archive";
+
+  // Pure calendar-day arithmetic on a "YYYY-MM-DD" string — treated as UTC
+  // just to do the subtraction safely, never used as a real wall-clock time.
+  function daysBeforeDateStr(dateStr, days){
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() - days);
+    return dt.toISOString().slice(0, 10);
+  }
+
+  // The forecast endpoint's past_days hourly precipitation is a blended
+  // reanalysis that's measurably inaccurate for recent history at some
+  // locations/dates (confirmed: it reported near-zero rain for a day the
+  // archive/reanalysis endpoint shows real, sustained rain for). This fetches
+  // the archive's corrected values for the trailing days so render() can
+  // overwrite the forecast endpoint's history with the real thing, while
+  // still using the forecast endpoint for current/future hours (the archive
+  // can't serve those at all).
+  let rainHistoryByTime = null; // Map<timeStr, inches>, keyed to match hourly.time exactly
+  let rainHistoryTrackId = null;
+
+  function currentRainHistoryUrl(){
+    const t = activeTrack;
+    const { date: today } = nowInTrackTZ();
+    // 4 days back covers the 72h decayedRainIndex lookback plus a buffer.
+    const startStr = daysBeforeDateStr(today, 4);
+    return `${ARCHIVE_API_BASE}?latitude=${t.lat}&longitude=${t.lon}` +
+      `&start_date=${startStr}&end_date=${today}` +
+      `&hourly=precipitation&precipitation_unit=inch&timezone=${encodeURIComponent(t.timezone)}`;
+  }
+
+  async function fetchRainHistory(){
+    const requestedTrackId = activeTrack.id;
+    try{
+      const res = await fetch(currentRainHistoryUrl());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      if (activeTrack.id !== requestedTrackId) return; // stale — track changed while this was in flight
+      const times = data.hourly?.time ?? [];
+      const precip = data.hourly?.precipitation ?? [];
+      const map = new Map();
+      for (let i = 0; i < times.length; i++){
+        if (precip[i] != null) map.set(times[i], precip[i]);
+      }
+      rainHistoryByTime = map;
+      rainHistoryTrackId = requestedTrackId;
+    } catch(err){
+      // Leave any existing cache in place — stale-but-real archive data beats
+      // silently falling back to the forecast endpoint's inaccurate one, and
+      // the trackId guard below still prevents cross-track contamination.
+      console.error("rain history fetch failed", err);
+    }
+  }
+
+  // Overlays archive-sourced values onto the forecast endpoint's own
+  // precipitation array for anything older than a few hours. The most recent
+  // hours and all future hours keep the forecast endpoint's own values —
+  // archive data isn't available for the future, and its own current-day
+  // data can lag briefly, so it isn't trusted for very recent hours either.
+  function correctedHourlyPrecip(data, nowHourIdx){
+    const forecastPrecip = data.hourly?.precipitation;
+    if (!forecastPrecip) return forecastPrecip;
+    if (!rainHistoryByTime || rainHistoryTrackId !== activeTrack.id) return forecastPrecip;
+    const times = data.hourly.time;
+    const RECENT_BUFFER_HOURS = 3;
+    const corrected = forecastPrecip.slice();
+    for (let i = 0; i < corrected.length; i++){
+      if (nowHourIdx >= 0 && i > nowHourIdx - RECENT_BUFFER_HOURS) continue;
+      const archiveVal = rainHistoryByTime.get(times[i]);
+      if (archiveVal != null) corrected[i] = archiveVal;
+    }
+    return corrected;
+  }
   let weatherLog = [];
 
   // ---------- Bias Tracker ----------
@@ -4731,7 +4804,10 @@
     // bleeding onto a freshly-switched-to Del Mar).
     const requestedTrackId = activeTrack.id;
     try{
-      const res = await fetch(currentApiUrl());
+      // fetchRainHistory() never rejects (own try/catch) — Promise.all just
+      // lets the archive lookup happen alongside the main request instead of
+      // adding a second sequential round-trip to every refresh.
+      const [res] = await Promise.all([fetch(currentApiUrl()), fetchRainHistory()]);
       if(!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       if (activeTrack.id !== requestedTrackId) return; // stale — track changed while this was in flight
@@ -4808,11 +4884,16 @@
     // Rolling last-24-hours total (past_days=2 gives us prior hourly data so
     // this window doesn't just reset at midnight like "Today" does)
     let nowHourIdx = data.hourly?.time?.findIndex(t => t.startsWith(nowHourPrefix)) ?? -1;
+    // Backward-looking totals use the archive-corrected array (see
+    // correctedHourlyPrecip) — the forecast endpoint's own past_days history
+    // is measurably unreliable. upcomingRainOutlook() below is forward-looking
+    // and deliberately keeps using data.hourly.precipitation unmodified.
+    const correctedPrecip = correctedHourlyPrecip(data, nowHourIdx);
     const sumPrecip = (fromIdx, toIdx) => {
-      if (nowHourIdx < 0 || !data.hourly?.precipitation || toIdx < 0) return 0;
+      if (nowHourIdx < 0 || !correctedPrecip || toIdx < 0) return 0;
       let total = 0;
       for (let i = Math.max(0, fromIdx); i <= toIdx; i++){
-        total += data.hourly.precipitation[i] ?? 0;
+        total += correctedPrecip[i] ?? 0;
       }
       return total;
     };
@@ -4843,7 +4924,7 @@
     const rainRate = c.rain ?? c.precipitation ?? 0;
 
     const dirtEst = estimateDirtCondition({
-      hourlyPrecip: data.hourly?.precipitation, nowHourIdx, rainRate,
+      hourlyPrecip: correctedPrecip, nowHourIdx, rainRate,
       cloudCover: c.cloud_cover, windSpeed: c.wind_speed_10m,
     });
     $("dirtConditionValue").className = "tc-value " + dirtEst.cls;
@@ -4851,7 +4932,7 @@
     const dirtLabel = dirtEst.label;
 
     const turfEst = estimateTurfCondition({
-      hourlyPrecip: data.hourly?.precipitation, nowHourIdx, rainRate,
+      hourlyPrecip: correctedPrecip, nowHourIdx, rainRate,
       cloudCover: c.cloud_cover, windSpeed: c.wind_speed_10m,
     });
     $("turfConditionValue").className = "tc-value " + turfEst.cls;
@@ -5000,6 +5081,8 @@
     lastApparentTemp = null;
     forecastSteps = [];
     lastAiSummaryCtx = null;
+    rainHistoryByTime = null;
+    rainHistoryTrackId = null;
     flowAngleDeg = 90;
     flowSpeedMph = 0;
     $("aqiValue").textContent = "—";
