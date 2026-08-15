@@ -1046,6 +1046,24 @@
   .bias-neutral{ background: rgba(169,164,150,0.15); color: var(--parchment-dim); }
   .bias-mixed{ background: rgba(192,120,48,0.15); color: var(--clay); }
   .bias-notes-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
+  .bias-notes-text{
+    max-height: 4.8em; /* ~3 lines at this cell's line-height */
+    overflow: hidden;
+  }
+  .bias-notes-cell.expanded .bias-notes-text{ max-height: none; }
+  .bias-notes-expand{
+    display: block;
+    margin-top: 4px;
+    background: none;
+    border: none;
+    color: var(--sky);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+  }
+  .bias-notes-expand:hover{ color: var(--tote-amber); }
 
   /* ---------- Bias Tracker trends ---------- */
   .bias-trends{
@@ -2997,6 +3015,31 @@
     return sentences.filter(s => /\brail\b/i.test(s)).join(" ").trim();
   }
 
+  // NYRA's trackCondition field is "DIRT / TURF" (e.g. "Fast / Firm"), but on
+  // a day where conditions changed mid-card it can carry per-race detail too
+  // ("Fast ( 1,4,5,7,8 ); Sloppy ( sealed ) 10 / Firm ( 2,3,6 ); Yielding ( 9
+  // )") — this takes just the first-listed (primary) condition on each side
+  // and normalizes it to this app's own dirt/turf label vocabulary, same as
+  // what the live Dashboard badges use, so the Bias Tracker table can show a
+  // single condition per column rather than the full multi-race string.
+  const NYRA_DIRT_LABEL_MAP = { fast: "FAST", good: "GOOD", sloppy: "SLOPPY / WET", muddy: "MUDDY" };
+  const NYRA_TURF_LABEL_MAP = { firm: "FIRM", good: "GOOD", yielding: "YIELDING", soft: "SOFT", hard: "FIRM" };
+  function parseNyraTrackCondition(trackCondition){
+    if (!trackCondition) return { dirtLabel: null, turfLabel: null };
+    const [dirtPart, turfPart] = trackCondition.split("/").map(s => s?.trim());
+    const firstWord = (s) => {
+      if (!s) return null;
+      const m = s.match(/^([A-Za-z\s]+?)(?:\s*\(|\s*;|$)/);
+      return (m ? m[1] : s).trim().toLowerCase();
+    };
+    const dirtRaw = firstWord(dirtPart);
+    const turfRaw = firstWord(turfPart);
+    return {
+      dirtLabel: dirtRaw ? (NYRA_DIRT_LABEL_MAP[dirtRaw] ?? dirtRaw.toUpperCase()) : null,
+      turfLabel: turfRaw ? (NYRA_TURF_LABEL_MAP[turfRaw] ?? turfRaw.toUpperCase()) : null,
+    };
+  }
+
   function buildBiasEntryFromNyra(raw){
     const header = [
       raw.trackCondition && `Track Condition: ${raw.trackCondition}`,
@@ -3006,11 +3049,14 @@
     ].filter(Boolean).join(" | ");
     const notes = [header, raw.analysis].filter(Boolean).join("\n\n") +
       "\n\n— Source: NYRA Track Trends (Andy Serling), auto-imported";
+    const { dirtLabel, turfLabel } = parseNyraTrackCondition(raw.trackCondition);
     return {
       date: raw.date,
       runningStyleBias: classifyNyraTrend(raw.analysis || raw.trackCondition || ""),
       railNote: extractRailNote(raw.analysis),
       notes,
+      nyraDirtLabel: dirtLabel,
+      nyraTurfLabel: turfLabel,
       capturedAt: new Date().toISOString(),
       autoImported: true,
     };
@@ -3044,7 +3090,8 @@
       const existing = biasLog.find(e => e.date === raw.date);
       if (existing && !existing.autoImported) continue; // never clobber a manual entry
       const entry = buildBiasEntryFromNyra(raw);
-      if (existing && existing.notes === entry.notes && existing.runningStyleBias === entry.runningStyleBias) continue;
+      if (existing && existing.notes === entry.notes && existing.runningStyleBias === entry.runningStyleBias
+        && existing.nyraDirtLabel === entry.nyraDirtLabel && existing.nyraTurfLabel === entry.nyraTurfLabel) continue;
       toUpsert.push(entry);
     }
     if (!toUpsert.length) return;
@@ -3144,22 +3191,44 @@
       return;
     }
     biasLog.forEach(entry => {
+      // NYRA-imported rows carry their own reported dirt/turf condition
+      // (parseNyraTrackCondition() off the official Track Trends page) —
+      // that's the real stewards' call for that date, so it takes priority
+      // over the Daily Log join, which is this app's own weather-computed
+      // guess and may not even have an entry that far back.
       const matchingLog = weatherLog.find(e => e.date === entry.date);
+      const dirtDisplay = entry.nyraDirtLabel ?? matchingLog?.dirtConditionLabel ?? "—";
+      const turfDisplay = entry.nyraTurfLabel ?? matchingLog?.turfConditionLabel ?? "—";
       const tr = document.createElement("tr");
       const styleClass = BIAS_STYLE_CLASS[entry.runningStyleBias] ?? "bias-neutral";
+      const notesId = `biasNotes-${entry.date}`;
+      const notesText = entry.notes || "—";
+      // Only worth a toggle when there's actually enough text to clamp —
+      // roughly more than the ~3 lines .bias-notes-text shows by default.
+      const showExpand = notesText.length > 150;
       tr.innerHTML = `
         <td>${entry.date}${entry.autoImported ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
-        <td>${matchingLog?.dirtConditionLabel ?? "—"}</td>
-        <td>${matchingLog?.turfConditionLabel ?? "—"}</td>
+        <td>${dirtDisplay}</td>
+        <td>${turfDisplay}</td>
         <td><span class="bias-tag ${styleClass}">${entry.runningStyleBias}</span></td>
         <td>${entry.railNote || "—"}</td>
-        <td class="bias-notes-cell">${entry.notes || "—"}</td>
+        <td class="bias-notes-cell" id="${notesId}">
+          <div class="bias-notes-text">${notesText}</div>
+          ${showExpand ? `<button type="button" class="bias-notes-expand" data-target="${notesId}">Show more</button>` : ""}
+        </td>
         <td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>
       `;
       tbody.appendChild(tr);
     });
     tbody.querySelectorAll(".log-remove").forEach(btn => {
       btn.addEventListener("click", () => removeBiasEntry(btn.dataset.date));
+    });
+    tbody.querySelectorAll(".bias-notes-expand").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const cell = document.getElementById(btn.dataset.target);
+        const expanded = cell.classList.toggle("expanded");
+        btn.textContent = expanded ? "Show less" : "Show more";
+      });
     });
   }
 
