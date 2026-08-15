@@ -2734,14 +2734,23 @@
   // up or tapering off, then leans on current wind + sun (low cloud cover)
   // since a track dries out faster when it's windy and sunny than on a still,
   // overcast day with identical rainfall totals.
+  //
+  // Threshold matches RAIN_THRESHOLD in computeTodayRainOutlook() (0.05in) —
+  // was previously 0.02in, which is sensitive enough that a real but tiny
+  // trace (~0.02-0.03in from a brief shower hours ago, long since stopped)
+  // could still read "Wetting" well after the track had actually gone back
+  // to drying out. 0.05in is this app's own established bar for "meaningful"
+  // rain elsewhere; using a different, far more sensitive one just here was
+  // the inconsistency, not a deliberately looser check.
   function trackTrend(rainLast6, rainPrior6, windSpeed, cloudCover){
     const windy = windSpeed >= 8;
     const sunny = cloudCover <= 40;
+    const RAIN_THRESHOLD = 0.05;
 
-    if (rainLast6 > 0.02 && rainLast6 > rainPrior6 * 1.2){
+    if (rainLast6 > RAIN_THRESHOLD && rainLast6 > rainPrior6 * 1.2){
       return { label: "Wetting", arrow: "↓", cls: "trend-wet" };
     }
-    if (rainLast6 <= 0.02 && (windy || sunny)){
+    if (rainLast6 <= RAIN_THRESHOLD && (windy || sunny)){
       return { label: "Drying", arrow: "↑", cls: "trend-dry" };
     }
     return { label: "Holding", arrow: "→", cls: "trend-hold" };
@@ -2817,16 +2826,26 @@
   }
 
   // Overlays archive-sourced values onto the forecast endpoint's own
-  // precipitation array for anything older than a few hours. The most recent
-  // hours and all future hours keep the forecast endpoint's own values —
-  // archive data isn't available for the future, and its own current-day
-  // data can lag briefly, so it isn't trusted for very recent hours either.
+  // precipitation array for every hour that has fully elapsed. Only the
+  // current still-in-progress hour and all future hours keep the forecast
+  // endpoint's own values — archive can't have real data for those yet.
+  //
+  // This used to hold back a 3-hour buffer (not just the current hour) on
+  // the assumption that archive's current-day data could lag briefly. Direct
+  // evidence against that: on 2026-08-15, Saratoga's forecast endpoint
+  // reported 0.071in at the hour that had ended just ~1h20m earlier, while
+  // archive already had a confirmed 0.0 for that same fully-elapsed hour —
+  // i.e. it was the FORECAST value that was wrong, and the buffer was
+  // actively preventing the correct archive value from overriding it. A
+  // 1-hour buffer (just the in-progress hour) still protects against
+  // archive's genuinely-unprocessed current hour without also trusting
+  // forecast over archive for hours that already fully happened.
   function correctedHourlyPrecip(data, nowHourIdx){
     const forecastPrecip = data.hourly?.precipitation;
     if (!forecastPrecip) return forecastPrecip;
     if (!rainHistoryByTime || rainHistoryTrackId !== activeTrack.id) return forecastPrecip;
     const times = data.hourly.time;
-    const RECENT_BUFFER_HOURS = 3;
+    const RECENT_BUFFER_HOURS = 1;
     const corrected = forecastPrecip.slice();
     for (let i = 0; i < corrected.length; i++){
       if (nowHourIdx >= 0 && i > nowHourIdx - RECENT_BUFFER_HOURS) continue;
