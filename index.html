@@ -843,6 +843,11 @@
     width: 50%;
   }
   .bias-score-bar-fill-speed.favored, .bias-score-bar-fill-closer.favored{ background: var(--tote-amber); }
+  /* Mixed signals: real countervailing factors canceling out, not just an
+     absence of signal — a third distinct color so it doesn't read the same
+     as genuine calm (plain gray) or a real lean (gold). */
+  .bias-score-bar-fill-speed.mixed, .bias-score-bar-fill-closer.mixed{ background: var(--sky); }
+  .tag-mixed{ background: var(--sky); color: var(--ink); }
   .bias-score-lean{
     margin-top: 10px;
     font-family:'IBM Plex Mono', monospace;
@@ -850,6 +855,7 @@
     color: var(--parchment-dim);
     text-align:center;
   }
+  .bias-score-lean.mixed{ color: var(--sky); }
 
   /* ---------- Track play analysis ---------- */
   .analysis-panel{ margin-top: 18px; }
@@ -1837,6 +1843,7 @@
       <div class="panel-title">
         Weather Bias Predictor Score
         <span class="tag">HEURISTIC</span>
+        <span class="tag tag-mixed" id="biasScoreMixedTag" hidden>MIXED SIGNALS</span>
       </div>
       <div class="bias-score-row">
         <div class="bias-score-side" id="biasScoreSpeedSide">
@@ -5070,26 +5077,31 @@
     const { speed, dir, dirtLabel, tide } = ctx;
     if (speed == null || dir == null) return null;
     let score = 5; // neutral
+    // Sum of |each adjustment| applied, regardless of direction — lets
+    // renderBiasPredictorScore() tell "nothing is happening" (near-zero
+    // totalPush) apart from "real countervailing factors happen to cancel
+    // out" (meaningful totalPush that still nets out near neutral).
+    let totalPush = 0;
 
     const home = windComponents(speed, dir, activeTrack.heading.homestretch);
     const homeDesc = describeStretchWind(home.headwind, home.crosswind);
     const PUSH = { light: 0.8, moderate: 1.6, strong: 2.5 };
-    if (homeDesc.kind === "tailwind") score += PUSH[homeDesc.strength]; // loose leader, hard to reel in
-    if (homeDesc.kind === "headwind") score -= PUSH[homeDesc.strength]; // hot fractions come back
+    if (homeDesc.kind === "tailwind"){ score += PUSH[homeDesc.strength]; totalPush += PUSH[homeDesc.strength]; } // loose leader, hard to reel in
+    if (homeDesc.kind === "headwind"){ score -= PUSH[homeDesc.strength]; totalPush += PUSH[homeDesc.strength]; } // hot fractions come back
 
     const back = windComponents(speed, dir, activeTrack.heading.backstretch);
     const backDesc = describeStretchWind(back.headwind, back.crosswind);
-    if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind") score -= 1.0; // shields closers early, helps them finish
-    if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind") score -= 0.5; // early aid runs into late resistance
+    if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){ score -= 1.0; totalPush += 1.0; } // shields closers early, helps them finish
+    if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){ score -= 0.5; totalPush += 0.5; } // early aid runs into late resistance
 
-    if (dirtLabel === "SLOPPY / WET") score += 1.5; // wet track already favors speed
-    else if (dirtLabel === "MUDDY") score += 0.8;
+    if (dirtLabel === "SLOPPY / WET"){ score += 1.5; totalPush += 1.5; } // wet track already favors speed
+    else if (dirtLabel === "MUDDY"){ score += 0.8; totalPush += 0.8; }
 
-    if (tide?.label === "Low") score += 1.5; // Del Mar only — "golden rail" language already in AI summary
-    else if (tide?.label === "High") score -= 1.5;
+    if (tide?.label === "Low"){ score += 1.5; totalPush += 1.5; } // Del Mar only — "golden rail" language already in AI summary
+    else if (tide?.label === "High"){ score -= 1.5; totalPush += 1.5; }
 
     score = Math.max(0, Math.min(10, score));
-    return { insideSpeed: score, outsideClosers: 10 - score };
+    return { insideSpeed: score, outsideClosers: 10 - score, totalPush };
   }
 
   function renderBiasPredictorScore(ctx){
@@ -5099,6 +5111,7 @@
     const barSpeed = $("biasScoreBarSpeed");
     const barCloser = $("biasScoreBarCloser");
     const lean = $("biasScoreLean");
+    const mixedTag = $("biasScoreMixedTag");
 
     if (!result){
       $("biasScoreSpeedValue").innerHTML = `—<span class="bias-score-denom">/10</span>`;
@@ -5107,26 +5120,42 @@
       barCloser.style.width = "50%";
       speedSide.classList.remove("favored");
       closerSide.classList.remove("favored");
-      barSpeed.classList.remove("favored");
-      barCloser.classList.remove("favored");
+      barSpeed.classList.remove("favored", "mixed");
+      barCloser.classList.remove("favored", "mixed");
+      lean.classList.remove("mixed");
+      mixedTag.hidden = true;
       lean.textContent = "Waiting on live conditions…";
       return;
     }
 
-    const { insideSpeed, outsideClosers } = result;
+    const { insideSpeed, outsideClosers, totalPush } = result;
     $("biasScoreSpeedValue").innerHTML = `${insideSpeed.toFixed(1)}<span class="bias-score-denom">/10</span>`;
     $("biasScoreCloserValue").innerHTML = `${outsideClosers.toFixed(1)}<span class="bias-score-denom">/10</span>`;
     barSpeed.style.width = `${insideSpeed * 10}%`;
     barCloser.style.width = `${outsideClosers * 10}%`;
 
-    const speedFavored = insideSpeed > outsideClosers;
-    const closerFavored = outsideClosers > insideSpeed;
+    // Near-neutral (within half a point either side of dead center) covers
+    // two very different situations that shouldn't look the same: genuine
+    // calm (nothing pushed the score anywhere) vs. real countervailing
+    // factors (wind, track condition, tide) that happen to cancel out.
+    // totalPush distinguishes them — see computeBiasPredictorScore().
+    const isNearNeutral = Math.abs(insideSpeed - outsideClosers) < 1.0;
+    const isMixed = isNearNeutral && totalPush >= 2.0;
+    const speedFavored = !isNearNeutral && insideSpeed > outsideClosers;
+    const closerFavored = !isNearNeutral && outsideClosers > insideSpeed;
+
     speedSide.classList.toggle("favored", speedFavored);
     closerSide.classList.toggle("favored", closerFavored);
     barSpeed.classList.toggle("favored", speedFavored);
     barCloser.classList.toggle("favored", closerFavored);
+    barSpeed.classList.toggle("mixed", isMixed);
+    barCloser.classList.toggle("mixed", isMixed);
+    lean.classList.toggle("mixed", isMixed);
+    mixedTag.hidden = !isMixed;
 
-    if (Math.abs(insideSpeed - outsideClosers) < 0.5){
+    if (isMixed){
+      lean.textContent = "Mixed signals — real countervailing factors (wind, track condition, tide) are canceling out, not simply calm.";
+    } else if (isNearNeutral){
       lean.textContent = "Conditions read close to neutral — no strong lean either way.";
     } else if (speedFavored){
       lean.textContent = "Current wind + track conditions lean toward early/lone speed.";
