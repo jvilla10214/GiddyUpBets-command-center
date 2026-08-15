@@ -2230,11 +2230,11 @@
         <table class="log-table">
           <thead>
             <tr>
-              <th>Date</th><th>Dirt</th><th>Turf</th><th>Bias</th><th>Rail</th><th>Notes</th><th></th>
+              <th>Date</th><th>Dirt</th><th>Turf</th><th>Bias</th><th>Rail</th><th></th>
             </tr>
           </thead>
           <tbody id="biasTableBody">
-            <tr><td colspan="7" class="log-empty">Loading…</td></tr>
+            <tr><td colspan="6" class="log-empty">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -3306,7 +3306,7 @@
     const tbody = $("biasTableBody");
     tbody.innerHTML = "";
     if (!biasLog.length){
-      tbody.innerHTML = `<tr><td colspan="7" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
       return;
     }
     biasLog.forEach(entry => {
@@ -3326,7 +3326,6 @@
         <td>${turfDisplay}</td>
         <td><span class="bias-tag ${styleClass}">${entry.runningStyleBias}</span></td>
         ${renderClampedCell("biasRail", entry.date, entry.railNote)}
-        ${renderClampedCell("biasNotes", entry.date, entry.notes)}
         <td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>
       `;
       tbody.appendChild(tr);
