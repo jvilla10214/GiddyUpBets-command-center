@@ -1110,7 +1110,7 @@
     transition: background .15s;
   }
   .log-controls button:hover{ background: #ffc94d; }
-  .log-controls input[type="date"], .log-controls input[type="text"]{
+  .log-controls input[type="date"], .log-controls input[type="text"], .log-controls select{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
     color: var(--parchment);
@@ -1120,7 +1120,7 @@
     border-radius: 6px;
     outline: none;
   }
-  .log-controls input[type="date"]:focus, .log-controls input[type="text"]:focus{ border-color: var(--tote-amber); }
+  .log-controls input[type="date"]:focus, .log-controls input[type="text"]:focus, .log-controls select:focus{ border-color: var(--tote-amber); }
   .log-note{
     font-family:'IBM Plex Mono', monospace;
     font-size: 11px;
@@ -1993,6 +1993,7 @@
       <div class="log-tab-panel" id="logTabDaily">
         <div class="log-controls">
           <button type="button" id="logNowBtn">+ Log Today's Snapshot Now</button>
+          <select id="logMonthSelect" aria-label="Month"></select>
           <span class="log-note">Automatically logs the most recently completed day once it's over.</span>
         </div>
         <div class="log-table-wrap">
@@ -3198,18 +3199,63 @@
     `;
   }
 
+  // "YYYY-MM" of whichever month is currently selected in the Daily Log's
+  // month dropdown — null means "not yet initialized," which renderLogTable()
+  // resolves to the current month. Reset to null on a track switch so each
+  // track's log defaults back to its own current month rather than carrying
+  // over whatever month was being browsed on the previous track.
+  let selectedLogMonth = null;
+
+  function monthKeyOf(dateStr){ return dateStr.slice(0, 7); }
+  function monthLabelOf(monthKey){
+    const [y, m] = monthKey.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  }
+
+  // Groups the Daily Log by month so a track with a year of history doesn't
+  // dump 300+ rows on screen at once — defaults to the current month with no
+  // dropdown interaction needed, and every other month that actually has an
+  // entry is one click away.
   function renderLogTable(){
     const tbody = $("logTableBody");
     const tag = $("logTag");
-    tag.textContent = `${weatherLog.length} ${weatherLog.length === 1 ? "ENTRY" : "ENTRIES"}`;
+    const select = $("logMonthSelect");
+
+    const { date: todayStr } = nowInTrackTZ();
+    const currentMonthKey = monthKeyOf(todayStr);
+    if (!selectedLogMonth) selectedLogMonth = currentMonthKey;
+
+    // Every month that actually has an entry, plus the current month always
+    // available even before it has any — so "this month" never looks
+    // broken/missing on a track with little history yet.
+    const monthKeys = new Set(weatherLog.map(e => monthKeyOf(e.date)));
+    monthKeys.add(currentMonthKey);
+    const sortedMonths = [...monthKeys].sort((a, b) => b.localeCompare(a));
+    if (!sortedMonths.includes(selectedLogMonth)) selectedLogMonth = currentMonthKey;
+
+    select.innerHTML = "";
+    sortedMonths.forEach(key => {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = key === currentMonthKey ? `${monthLabelOf(key)} (current)` : monthLabelOf(key);
+      select.appendChild(opt);
+    });
+    select.value = selectedLogMonth;
+
+    const monthEntries = weatherLog.filter(e => monthKeyOf(e.date) === selectedLogMonth);
+    tag.textContent = `${monthEntries.length} ${monthEntries.length === 1 ? "ENTRY" : "ENTRIES"}`;
     tbody.innerHTML = "";
 
-    if (!weatherLog.length){
-      tbody.innerHTML = `<tr><td colspan="11" class="log-empty">No entries yet — one logs automatically once a day completes, or click "Log Today's Snapshot Now."</td></tr>`;
+    if (!monthEntries.length){
+      tbody.innerHTML = `<tr><td colspan="11" class="log-empty">${
+        selectedLogMonth === currentMonthKey
+          ? `No entries yet this month — one logs automatically once a day completes, or click "Log Today's Snapshot Now."`
+          : `No entries logged for ${monthLabelOf(selectedLogMonth)}.`
+      }</td></tr>`;
       return;
     }
 
-    weatherLog.forEach(entry => {
+    monthEntries.forEach(entry => {
       const tr = document.createElement("tr");
       if (entry.isPartial) tr.classList.add("log-partial");
       tr.innerHTML = `${fmtLogRow(entry)}<td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>`;
@@ -5335,6 +5381,7 @@
 
     // Per-track storage-backed collections.
     weatherLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
+    selectedLogMonth = null; // default back to this track's own current month, not whatever was being browsed before
     renderLogTable();
     loadWeatherLog().then(entries => {
       if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
@@ -5403,6 +5450,10 @@
   LOG_TABS.forEach(({ btn }) => $(btn).addEventListener("click", () => setActiveLogTab(btn)));
 
   $("logNowBtn").addEventListener("click", logSnapshotNow);
+  $("logMonthSelect").addEventListener("change", (e) => {
+    selectedLogMonth = e.target.value;
+    renderLogTable();
+  });
   $("historyLookupBtn").addEventListener("click", () => {
     const val = $("historyDateInput").value;
     if (!val) { $("historyStatus").textContent = "Pick a date first."; return; }
