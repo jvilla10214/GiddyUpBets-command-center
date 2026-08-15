@@ -786,6 +786,71 @@
     background: var(--tote-amber);
   }
 
+  /* ---------- Weather Bias Predictor Score ---------- */
+  .bias-score-panel{
+    margin-top: 18px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+  .bias-score-row{
+    display:flex;
+    align-items:center;
+    gap: 14px;
+    margin-top: 10px;
+  }
+  .bias-score-side{
+    text-align:center;
+    min-width: 84px;
+  }
+  .bias-score-label{
+    font-family:'Oswald', sans-serif;
+    text-transform:uppercase;
+    letter-spacing: 0.5px;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-bottom: 4px;
+    transition: color .3s ease;
+  }
+  .bias-score-value{
+    font-family:'Oswald', sans-serif;
+    font-weight: 700;
+    font-size: 32px;
+    color: var(--parchment);
+    line-height: 1;
+    transition: color .3s ease;
+  }
+  .bias-score-value .bias-score-denom{
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--parchment-dim);
+  }
+  .bias-score-side.favored .bias-score-value{ color: var(--tote-amber); }
+  .bias-score-side.favored .bias-score-label{ color: var(--tote-amber); }
+  .bias-score-bar{
+    flex:1;
+    display:flex;
+    height: 14px;
+    border-radius: 7px;
+    overflow:hidden;
+    background: var(--ink);
+    border: 1px solid var(--panel-border);
+  }
+  .bias-score-bar-fill-speed, .bias-score-bar-fill-closer{
+    background: var(--parchment-dim);
+    transition: width .3s ease, background .3s ease;
+    width: 50%;
+  }
+  .bias-score-bar-fill-speed.favored, .bias-score-bar-fill-closer.favored{ background: var(--tote-amber); }
+  .bias-score-lean{
+    margin-top: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    text-align:center;
+  }
+
   /* ---------- Track play analysis ---------- */
   .analysis-panel{ margin-top: 18px; }
   .analysis-context{
@@ -1766,6 +1831,28 @@
       <div class="forecast-readout" id="forecastReadout">Showing current live conditions</div>
       <input type="range" id="forecastSlider" min="0" max="0" step="1" value="0">
       <div class="forecast-scale" id="forecastScale"></div>
+    </div>
+
+    <div class="bias-score-panel" id="biasScorePanel">
+      <div class="panel-title">
+        Weather Bias Predictor Score
+        <span class="tag">HEURISTIC</span>
+      </div>
+      <div class="bias-score-row">
+        <div class="bias-score-side" id="biasScoreSpeedSide">
+          <div class="bias-score-label">Inside Speed</div>
+          <div class="bias-score-value" id="biasScoreSpeedValue">—<span class="bias-score-denom">/10</span></div>
+        </div>
+        <div class="bias-score-bar">
+          <div class="bias-score-bar-fill-speed" id="biasScoreBarSpeed"></div>
+          <div class="bias-score-bar-fill-closer" id="biasScoreBarCloser"></div>
+        </div>
+        <div class="bias-score-side" id="biasScoreCloserSide">
+          <div class="bias-score-label">Outside Closers</div>
+          <div class="bias-score-value" id="biasScoreCloserValue">—<span class="bias-score-denom">/10</span></div>
+        </div>
+      </div>
+      <div class="bias-score-lean" id="biasScoreLean">Waiting on live conditions…</div>
     </div>
 
     <div class="analysis-panel">
@@ -4966,9 +5053,92 @@
     return sentences.slice(0, 12).join(" ");
   }
 
+  // ---------- Weather Bias Predictor Score (0-10 scale) ----------
+  // A single continuous "lean" aggregated from the same wind-vs-stretch-
+  // geometry and track-condition signals that already drive Track Play
+  // Analysis / AI Racing Summary above — this just turns them into two
+  // numbers instead of leaving the lean only inside prose. The weights below
+  // are a reasonable starting heuristic, not a validated model — same
+  // caveat as every other threshold in this app (e.g. the rain-alert
+  // cutoffs). Historical Bias Tracker/Daily Log entries are NOT factored in
+  // yet — this is live-conditions-only, matching what buildAiRacingSummary()
+  // itself already has access to.
+  // outsideClosers is always exactly 10 - insideSpeed (not independently
+  // derived) so the badge reads as one coherent lean rather than two numbers
+  // that could ambiguously both look high or low at once.
+  function computeBiasPredictorScore(ctx){
+    const { speed, dir, dirtLabel, tide } = ctx;
+    if (speed == null || dir == null) return null;
+    let score = 5; // neutral
+
+    const home = windComponents(speed, dir, activeTrack.heading.homestretch);
+    const homeDesc = describeStretchWind(home.headwind, home.crosswind);
+    const PUSH = { light: 0.8, moderate: 1.6, strong: 2.5 };
+    if (homeDesc.kind === "tailwind") score += PUSH[homeDesc.strength]; // loose leader, hard to reel in
+    if (homeDesc.kind === "headwind") score -= PUSH[homeDesc.strength]; // hot fractions come back
+
+    const back = windComponents(speed, dir, activeTrack.heading.backstretch);
+    const backDesc = describeStretchWind(back.headwind, back.crosswind);
+    if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind") score -= 1.0; // shields closers early, helps them finish
+    if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind") score -= 0.5; // early aid runs into late resistance
+
+    if (dirtLabel === "SLOPPY / WET") score += 1.5; // wet track already favors speed
+    else if (dirtLabel === "MUDDY") score += 0.8;
+
+    if (tide?.label === "Low") score += 1.5; // Del Mar only — "golden rail" language already in AI summary
+    else if (tide?.label === "High") score -= 1.5;
+
+    score = Math.max(0, Math.min(10, score));
+    return { insideSpeed: score, outsideClosers: 10 - score };
+  }
+
+  function renderBiasPredictorScore(ctx){
+    const result = computeBiasPredictorScore(ctx);
+    const speedSide = $("biasScoreSpeedSide");
+    const closerSide = $("biasScoreCloserSide");
+    const barSpeed = $("biasScoreBarSpeed");
+    const barCloser = $("biasScoreBarCloser");
+    const lean = $("biasScoreLean");
+
+    if (!result){
+      $("biasScoreSpeedValue").innerHTML = `—<span class="bias-score-denom">/10</span>`;
+      $("biasScoreCloserValue").innerHTML = `—<span class="bias-score-denom">/10</span>`;
+      barSpeed.style.width = "50%";
+      barCloser.style.width = "50%";
+      speedSide.classList.remove("favored");
+      closerSide.classList.remove("favored");
+      barSpeed.classList.remove("favored");
+      barCloser.classList.remove("favored");
+      lean.textContent = "Waiting on live conditions…";
+      return;
+    }
+
+    const { insideSpeed, outsideClosers } = result;
+    $("biasScoreSpeedValue").innerHTML = `${insideSpeed.toFixed(1)}<span class="bias-score-denom">/10</span>`;
+    $("biasScoreCloserValue").innerHTML = `${outsideClosers.toFixed(1)}<span class="bias-score-denom">/10</span>`;
+    barSpeed.style.width = `${insideSpeed * 10}%`;
+    barCloser.style.width = `${outsideClosers * 10}%`;
+
+    const speedFavored = insideSpeed > outsideClosers;
+    const closerFavored = outsideClosers > insideSpeed;
+    speedSide.classList.toggle("favored", speedFavored);
+    closerSide.classList.toggle("favored", closerFavored);
+    barSpeed.classList.toggle("favored", speedFavored);
+    barCloser.classList.toggle("favored", closerFavored);
+
+    if (Math.abs(insideSpeed - outsideClosers) < 0.5){
+      lean.textContent = "Conditions read close to neutral — no strong lean either way.";
+    } else if (speedFavored){
+      lean.textContent = "Current wind + track conditions lean toward early/lone speed.";
+    } else {
+      lean.textContent = "Current wind + track conditions lean toward closers/rallying types.";
+    }
+  }
+
   function renderAiRacingSummary(ctx){
     lastAiSummaryCtx = ctx;
     $("aiSummaryBody").textContent = buildAiRacingSummary(ctx);
+    renderBiasPredictorScore(ctx);
   }
 
   function setStatus(ok, msg){
@@ -5615,6 +5785,7 @@
     $("stormBanner").hidden = true;
     $("aiSummaryBody").textContent = "Waiting on live conditions…";
     $("analysisBody").innerHTML = "<p>Waiting on live conditions…</p>";
+    renderBiasPredictorScore({ speed: null, dir: null });
     $("windSpeed").textContent = "—";
     $("windDir").textContent = "—";
     $("dirtConditionValue").textContent = "—";
