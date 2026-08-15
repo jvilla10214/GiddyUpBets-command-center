@@ -673,13 +673,6 @@
     text-decoration: none;
   }
   .news-item a:hover{ color: var(--tote-amber); text-decoration: underline; }
-  .news-wire-disclaimer{
-    margin-top: 10px;
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 10.5px;
-    color: var(--parchment-dim);
-    line-height: 1.5;
-  }
 
   /* ---------- NYRA scratches / rail / track conditions embed ---------- */
   .nyra-panel{ margin-top: 18px; }
@@ -698,13 +691,6 @@
     width: 100%;
     height: 100%;
     border: 0;
-  }
-  .nyra-readout{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 11px;
-    color: var(--parchment-dim);
-    margin-top: 8px;
-    line-height: 1.5;
   }
   .twitter-link-card{
     display:flex;
@@ -1182,13 +1168,35 @@
     letter-spacing: 0.5px;
   }
   #historyAddBtn:hover{ background: var(--tote-amber); color: var(--ink); }
-  .log-disclaimer{
+
+  /* ---------- Collapsed-by-default provenance/explanation text ----------
+     A small tappable (not hover-only) info toggle next to a widget's title
+     or control, revealing a disclosure block with the "why this works this
+     way" copy that used to sit permanently visible on the page. */
+  .info-toggle{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:18px; height:18px; border-radius:50%;
+    border:1px solid var(--parchment-dim); color:var(--parchment-dim);
+    font-size:11px; font-family:'IBM Plex Mono', monospace;
+    cursor:pointer; background:none; margin-left:6px; flex-shrink:0;
+    padding:0; line-height:1;
+    transition:border-color .15s, color .15s;
+  }
+  .info-toggle:hover, .info-toggle:focus-visible{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .info-toggle[aria-expanded="true"]{ border-color: var(--tote-amber); color: var(--tote-amber); background: rgba(230,168,0,0.1); }
+  .info-disclosure{
+    display:none;
     margin-top: 10px;
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
     font-family:'IBM Plex Mono', monospace;
     font-size: 10.5px;
     color: var(--parchment-dim);
     line-height: 1.5;
   }
+  .info-disclosure.open{ display:block; }
 
   /* ---------- Stable Tour ---------- */
   .stable-autoimport{
@@ -1790,6 +1798,7 @@
       <div class="panel-title" style="margin-bottom:10px;">
         Track Conditions &amp; Rail — NYRA Scratches
         <span class="tag">LIVE · NYRA.COM</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="nyraScratchesInfo" title="Why this works this way">ⓘ</button>
       </div>
       <div class="nyra-frame-wrap">
         <iframe
@@ -1799,7 +1808,7 @@
           title="Saratoga scratches, official track conditions, and turf rail settings from NYRA">
         </iframe>
       </div>
-      <div class="nyra-readout">
+      <div class="info-disclosure" id="nyraScratchesInfo">
         Official scratches, track/turf conditions, and rail settings, straight from NYRA's own live page —
         this is the real stewards' call, not our heuristic estimate above.
       </div>
@@ -1809,6 +1818,7 @@
       <div class="panel-title" style="margin-bottom:10px;">
         Track Conditions &amp; Rail
         <span class="tag" id="scratchesLinkTag">LIVE</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="scratchesLinkInfo" title="Why this works this way">ⓘ</button>
       </div>
       <a class="twitter-link-card" id="scratchesLinkCard" href="#" target="_blank" rel="noopener noreferrer">
         <span class="twitter-link-card-icon">↗</span>
@@ -1817,7 +1827,7 @@
           <span class="twitter-link-card-sub">Opens in a new tab</span>
         </span>
       </a>
-      <div class="nyra-readout">
+      <div class="info-disclosure" id="scratchesLinkInfo">
         We don't embed this track's scratches page directly — the page isn't a clean widget the way
         NYRA's is, so this links out instead of pulling its full site (and whatever else is on it)
         into this dashboard.
@@ -1828,6 +1838,7 @@
       <div class="panel-title" style="margin-bottom:10px;">
         NYRA on X/Twitter
         <span class="tag">X.COM/THENYRA</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="nyraXInfo" title="Why this works this way">ⓘ</button>
       </div>
       <a class="twitter-link-card" href="https://x.com/TheNYRA" target="_blank" rel="noopener noreferrer">
         <span class="twitter-link-card-icon">X</span>
@@ -1836,7 +1847,7 @@
           <span class="twitter-link-card-sub">@TheNYRA — opens in a new tab</span>
         </span>
       </a>
-      <div class="nyra-readout">
+      <div class="info-disclosure" id="nyraXInfo">
         X's own embed widget wasn't rendering reliably across the browsers we tested (even for
         major accounts, not just NYRA), so this links out directly instead of embedding a live
         timeline that might just show blank.
@@ -1847,10 +1858,11 @@
       <div class="panel-title" style="margin-bottom:10px;">
         Track Conditions &amp; Rail
         <span class="tag">NOT AVAILABLE</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="nyraFallbackInfo" title="Why this works this way">ⓘ</button>
       </div>
-      <div class="nyra-readout" id="nyraFallbackText">
-        Live scratches/rail widget isn't available for this track yet — check the track's own site for
-        official conditions.
+      <div class="info-disclosure" id="nyraFallbackInfo">
+        <span id="nyraFallbackText">Live scratches/rail widget isn't available for this track yet — check the track's own site for
+        official conditions.</span>
       </div>
     </div>
 
@@ -1983,6 +1995,7 @@
       <div class="panel-title">
         Historical Weather Data
         <span class="tag" id="logTag">0 ENTRIES</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="dailyLogInfo" title="Why this works this way">ⓘ</button>
       </div>
 
       <div class="log-tabs">
@@ -1994,7 +2007,6 @@
         <div class="log-controls">
           <button type="button" id="logNowBtn">+ Log Today's Snapshot Now</button>
           <select id="logMonthSelect" aria-label="Month"></select>
-          <span class="log-note">Automatically logs the most recently completed day once it's over.</span>
         </div>
         <div class="log-table-wrap">
           <table class="log-table">
@@ -2030,7 +2042,9 @@
         </div>
       </div>
 
-      <div class="log-disclaimer">
+      <div class="info-disclosure" id="dailyLogInfo">
+        Automatically logs the most recently completed day once it's over.
+        <br><br>
         Daily Log is shared — every visitor sees the same entries for this track, auto-logged once a day completes.
         Track condition columns use the same dirt/turf heuristics as the live badges on the Dashboard, adapted to a
         full day rather than a rolling window.
@@ -2043,13 +2057,11 @@
       <div class="panel-title">
         Bias Tracker
         <span class="tag">MANUAL ENTRY</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="biasInfo" title="Why this works this way">ⓘ</button>
       </div>
 
       <div class="log-controls">
         <button type="button" id="addBiasBtn">+ Add Bias Note</button>
-        <span class="log-note">Your own read of how a card actually played, entered after racing — there's no free
-          automated source for this, so it's manual by design. Dirt/Turf columns are pulled from the matching Daily
-          Log entry for that date so you can compare at a glance.</span>
       </div>
 
       <div class="bias-trends" id="biasTrends">
@@ -2113,7 +2125,11 @@
         </table>
       </div>
 
-      <div class="log-disclaimer">
+      <div class="info-disclosure" id="biasInfo">
+        Your own read of how a card actually played, entered after racing — there's no free
+        automated source for this, so it's manual by design. Dirt/Turf columns are pulled from the matching Daily
+        Log entry for that date so you can compare at a glance.
+        <br><br>
         Bias Tracker is shared — every visitor sees the same entries for this track, manual or auto-imported.
         Rows tagged <strong>NYRA</strong> are auto-imported from NYRA's own Saratoga Track Trends page (Andy
         Serling's daily analysis) — the running-style bias is a keyword heuristic over his write-up, not something
@@ -2128,6 +2144,7 @@
       <div class="panel-title">
         Stable Tour
         <span class="tag">AUTO-IMPORT + MANUAL</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableInfo" title="Why this works this way">ⓘ</button>
       </div>
 
       <div class="stable-search-row">
@@ -2142,9 +2159,6 @@
         <div class="log-controls">
           <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
           <button type="button" id="addTrainerBtn">+ Add Trainer</button>
-          <span class="log-note">What trainers say about their own horses — barn reports, quotes, morning-line
-            color. Shared with everyone using this site; paste article text into a trainer's section below
-            (Extract Horses) or add entries by hand otherwise.</span>
         </div>
         <div class="log-note stable-api-status" id="stableApiStatus"></div>
 
@@ -2181,7 +2195,11 @@
         </div>
       </div>
 
-      <div class="log-disclaimer">
+      <div class="info-disclosure" id="stableInfo">
+        What trainers say about their own horses — barn reports, quotes, morning-line
+        color. Shared with everyone using this site; paste article text into a trainer's section below
+        (Extract Horses) or add entries by hand otherwise.
+        <br><br>
         Stable Tour entries are stored centrally on the configured Worker and shared with everyone using this
         site — not private to this browser.
       </div>
@@ -2202,11 +2220,12 @@
       <div class="panel-title">
         Racing News Wire
         <span class="tag" id="newsWireTag">LOADING</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="newsWireDisclaimer" title="Why this works this way">ⓘ</button>
       </div>
       <div class="news-wire-list news-wire-list-full" id="newsWireList">
         <div class="news-wire-empty">Loading racing news…</div>
       </div>
-      <div class="news-wire-disclaimer" id="newsWireDisclaimer">
+      <div class="info-disclosure" id="newsWireDisclaimer">
         Pulled from DRF, TDN, America's Best Racing, BloodHorse, and Horse Racing Nation RSS feeds — general
         racing-industry news, not just Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
       </div>
@@ -5843,6 +5862,18 @@
 
   document.querySelectorAll(".rain-tab-btn").forEach(btn => {
     btn.addEventListener("click", () => setRainWindow(btn.dataset.window));
+  });
+
+  // Collapsed-by-default provenance/explanation text — a tap or click toggles
+  // the matching .info-disclosure open/closed. Real <button>s, not a hover
+  // tooltip, so this works identically on mobile as on desktop.
+  document.querySelectorAll(".info-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const target = document.getElementById(btn.getAttribute("aria-controls"));
+      if (!target) return;
+      const open = target.classList.toggle("open");
+      btn.setAttribute("aria-expanded", String(open));
+    });
   });
 
   // ---------- Update checker ----------
