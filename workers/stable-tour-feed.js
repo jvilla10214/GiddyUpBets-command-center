@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stable Tour shared data + auto-import feed + weather log
 // -----------------------------------------------------------------------
-// Three jobs in one Worker:
+// Four jobs in one Worker:
 //
 // 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
 //    trainer/notes store so every visitor's browser reads and writes the
@@ -30,12 +30,24 @@
 //    Tour's notes isn't worth the setup step here — this is meant to Just
 //    Work for every visitor with zero configuration.
 //
+// 4. NYRA Track Trends scrape (GET /nyra-trends?track=saratoga) — fetches
+//    NYRA's own official Saratoga track-trends page (Andy Serling's daily
+//    bias analysis) and parses each day into structured fields. Same CORS
+//    problem as job #2 (nyra.com sets no Access-Control-Allow-Origin), same
+//    fix. Only Saratoga is wired up — that's the only track-trends URL NYRA
+//    publishes at this path. The client does the bias-category inference
+//    and Bias Tracker upsert; this endpoint only returns the raw parsed
+//    fields, same division of labor as job #2 (worker extracts structure,
+//    client interprets it).
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1 and #3 to work — job #2 (the /  feed route) works without it.
+// for jobs #1 and #3 to work — jobs #2 and #4 (fetch-and-parse only, no
+// storage) work without it.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
+const NYRA_TRENDS_URL = "https://www.nyra.com/saratoga/racing/track-trends/";
 // Lock this to the dashboard's real origin once it has one; "*" is fine
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
@@ -234,6 +246,24 @@ async function handleRequest(request, env) {
       const entries = (await readWeatherLog(env, track)).filter(e => e.date !== date);
       await env.STABLE_KV.put(weatherLogKvKey(track), JSON.stringify(entries));
       return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/nyra-trends" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "saratoga";
+      if (track !== "saratoga") return json({ error: "Not supported for this track" }, 400);
+      let trendsRes;
+      try {
+        trendsRes = await fetch(NYRA_TRENDS_URL, {
+          headers: { "User-Agent": BROWSER_UA },
+          cf: { cacheTtl: 3600, cacheEverything: true }, // updates once/day at most
+        });
+      } catch (err) {
+        return json({ error: `NYRA fetch failed: ${err.message}` }, 502);
+      }
+      if (!trendsRes.ok) return json({ error: `NYRA returned HTTP ${trendsRes.status}` }, 502);
+      const html = await trendsRes.text();
+      const entries = parseNyraTrackTrends(html);
+      return json({ entries }, 200, { "Cache-Control": "public, max-age=3600" });
     }
 
     // Falls through to the original feed-scrape behavior for GET / (and any
@@ -447,4 +477,70 @@ function decodeEntities(str) {
     .replace(/&hellip;/g, "…")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
+}
+
+// ---------- NYRA Track Trends parser ----------
+// This page's markup (verified directly, not guessed) is server-rendered,
+// static HTML — a plain regex walk is reliable here the same way it is for
+// the RSS feed above, no headless browser needed. Structure per year:
+//   <h2>2026</h2>
+//   <div class="mb-4">
+//     <div class="font-bold mb-4"><h3 class="text-sm">Friday, August 14</h3></div>
+//     <div>
+//       <div class="row">
+//         <div>Track Condition: ...</div>
+//         <div>Weather: ...</div>
+//         <div>Temperature: ...</div>
+//         <div>Wind: ...</div>
+//       </div>
+//       <div class="mt-3"><div><p>analysis text...</p></div></div>
+//     </div>
+//   </div>
+const NYRA_MONTHS = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+};
+
+function parseNyraTrackTrends(html) {
+  const entries = [];
+  // Split on year headings — yearParts alternates [preamble, year, section, year, section, ...]
+  const yearParts = html.split(/<h2>(\d{4})<\/h2>/);
+  for (let i = 1; i < yearParts.length; i += 2) {
+    const year = yearParts[i];
+    const section = yearParts[i + 1] || "";
+    const dayChunks = section.split(/<h3 class="text-sm">/).slice(1);
+    for (const chunk of dayChunks) {
+      const dateMatch = chunk.match(/^([^<]+)<\/h3>/);
+      if (!dateMatch) continue;
+      const dateLabel = decodeEntities(dateMatch[1]).trim(); // "Friday, August 14"
+      const rest = chunk.slice(dateMatch[0].length);
+
+      const monthDayMatch = dateLabel.match(/,\s*([A-Za-z]+)\s+(\d{1,2})/);
+      if (!monthDayMatch) continue;
+      const month = NYRA_MONTHS[monthDayMatch[1].toLowerCase()];
+      if (!month) continue;
+      const day = parseInt(monthDayMatch[2], 10);
+      const isoDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+      const field = (label) => {
+        const m = rest.match(new RegExp(`${label}:\\s*([\\s\\S]*?)</div>`));
+        if (!m) return "";
+        return decodeEntities(m[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+      };
+      const trackCondition = field("Track Condition");
+      const weather = field("Weather");
+      const temperature = field("Temperature");
+      const wind = field("Wind");
+
+      const analysisMatch = rest.match(/<p>([\s\S]*?)<\/p>/);
+      const analysis = analysisMatch
+        ? decodeEntities(analysisMatch[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim()
+        : "";
+
+      if (trackCondition || analysis) {
+        entries.push({ date: isoDate, dateLabel, trackCondition, weather, temperature, wind, analysis });
+      }
+    }
+  }
+  return entries;
 }
