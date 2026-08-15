@@ -546,6 +546,26 @@
   .tile.alert{ border-color: var(--silk-red); }
   .tile.alert .tvalue{ color: var(--silk-red); }
 
+  .rain-tab-toggle{
+    display:flex;
+    gap: 4px;
+    margin: 5px 0 3px;
+  }
+  .rain-tab-btn{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.3px;
+    padding: 3px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .rain-tab-btn:hover{ border-color: var(--tote-amber); }
+  .rain-tab-btn.active{ background: var(--tote-amber); border-color: var(--tote-amber); color: var(--ink); }
+
   /* ---------- Radar & storm forecast (Windy.com embed, two modes) ---------- */
   .radar-panel{ display: block; }
   .radar-mode-toggle{
@@ -1876,13 +1896,16 @@
       <div class="tvalue"><span id="tideHeight">—</span><span class="tunit">ft</span></div>
     </div>
 
-    <div class="tile" id="rainTile">
+    <div class="tile tile-rain" id="rainTile">
       <div>
-        <div class="tlabel">Rainfall — Today</div>
+        <div class="tlabel">Rainfall</div>
+        <div class="rain-tab-toggle">
+          <button type="button" class="rain-tab-btn active" data-window="today">Today</button>
+          <button type="button" class="rain-tab-btn" data-window="6h">6h</button>
+          <button type="button" class="rain-tab-btn" data-window="24h">24h</button>
+          <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
+        </div>
         <div class="tsub" id="rainRate">Current rate —</div>
-        <div class="tsub" id="rain6h">Last 6h —</div>
-        <div class="tsub" id="rain24h">Last 24h —</div>
-        <div class="tsub" id="rain48h">Last 48h —</div>
       </div>
       <div class="tvalue"><span id="rainTotal">—</span><span class="tunit">in</span></div>
     </div>
@@ -2376,6 +2399,12 @@
   let lastTide = null; // filled in by fetchTideData() (Del Mar only), same separate-fetch pattern as AQI
   let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
   let lastNewsItems = []; // cached so switchTrack() can re-flag matches without a network refetch
+
+  // Rainfall tile totals for all four windows, computed once per render() so
+  // switching tabs is instant (no refetch) — keyed to match .rain-tab-btn's
+  // data-window values.
+  let rainWindowTotals = { today: null, "6h": null, "24h": null, "48h": null };
+  const RAIN_WINDOW_ALERT_THRESHOLD = { today: 0.5, "6h": 0.5, "24h": 0.5, "48h": 1.0 };
 
   const WMO = {
     0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
@@ -4762,6 +4791,23 @@
     }
   }
 
+  // ---------- Rainfall tile (Today / 6h / 24h / 48h tabs) ----------
+  function activeRainWindowKey(){
+    return document.querySelector(".rain-tab-btn.active")?.dataset.window || "today";
+  }
+  function renderRainTile(){
+    const key = activeRainWindowKey();
+    const total = rainWindowTotals[key];
+    $("rainTotal").textContent = total != null ? total.toFixed(2) : "—";
+    $("rainTile").classList.toggle("alert", total != null && total > RAIN_WINDOW_ALERT_THRESHOLD[key]);
+  }
+  function setRainWindow(key){
+    document.querySelectorAll(".rain-tab-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.window === key);
+    });
+    renderRainTile();
+  }
+
   // ---------- Radar & storm forecast (Windy.com embed, two modes) ----------
   // Consolidated from two separate widgets (a RainViewer/Leaflet radar map +
   // a standalone Windy forecast embed) into one: same iframe, we just swap
@@ -4904,16 +4950,19 @@
     // that have actually elapsed, same technique as the 6h/24h/48h windows.
     const todayStartIdx = data.hourly?.time?.findIndex(t => t.startsWith(todayStr)) ?? -1;
     const rainToday = sumPrecip(todayStartIdx, nowHourIdx);
-    $("rainTotal").textContent = rainToday.toFixed(2);
-    $("rainTile").classList.toggle("alert", rainToday > 0.5);
 
     const rain24h = sumPrecip(nowHourIdx - 23, nowHourIdx);
     const rain48h = sumPrecip(nowHourIdx - 47, nowHourIdx);
     const rainLast6h = sumPrecip(nowHourIdx - 5, nowHourIdx);
     const rainPrior6h = sumPrecip(nowHourIdx - 11, nowHourIdx - 6);
-    $("rain6h").textContent = nowHourIdx >= 0 ? `Last 6h ${rainLast6h.toFixed(2)} in` : "Last 6h —";
-    $("rain24h").textContent = nowHourIdx >= 0 ? `Last 24h ${rain24h.toFixed(2)} in` : "Last 24h —";
-    $("rain48h").textContent = nowHourIdx >= 0 ? `Last 48h ${rain48h.toFixed(2)} in` : "Last 48h —";
+
+    rainWindowTotals = {
+      today: nowHourIdx >= 0 ? rainToday : null,
+      "6h": nowHourIdx >= 0 ? rainLast6h : null,
+      "24h": nowHourIdx >= 0 ? rain24h : null,
+      "48h": nowHourIdx >= 0 ? rain48h : null,
+    };
+    renderRainTile();
 
     if (data.daily?.sunrise?.[todayIdx] && data.daily?.sunset?.[todayIdx]){
       $("sunTimes").textContent = `Sunrise ${fmtTime(data.daily.sunrise[todayIdx])} / Sunset ${fmtTime(data.daily.sunset[todayIdx])}`;
@@ -5083,6 +5132,8 @@
     lastAiSummaryCtx = null;
     rainHistoryByTime = null;
     rainHistoryTrackId = null;
+    rainWindowTotals = { today: null, "6h": null, "24h": null, "48h": null };
+    renderRainTile();
     flowAngleDeg = 90;
     flowSpeedMph = 0;
     $("aqiValue").textContent = "—";
@@ -5309,6 +5360,10 @@
 
   document.querySelectorAll(".radar-mode-btn").forEach(btn => {
     btn.addEventListener("click", () => setRadarMode(btn.dataset.mode));
+  });
+
+  document.querySelectorAll(".rain-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => setRainWindow(btn.dataset.window));
   });
 
   // ---------- Update checker ----------
