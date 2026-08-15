@@ -1,6 +1,6 @@
-// Cloudflare Worker: Stable Tour shared data + auto-import feed
+// Cloudflare Worker: Stable Tour shared data + auto-import feed + weather log
 // -----------------------------------------------------------------------
-// Two jobs in one Worker:
+// Three jobs in one Worker:
 //
 // 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
 //    trainer/notes store so every visitor's browser reads and writes the
@@ -21,9 +21,18 @@
 //    and the free public CORS proxies tested against it were unreliable
 //    (500s, gateway timeouts).
 //
+// 3. Shared Daily Weather Log (GET/POST/DELETE /weatherlog, one KV key per
+//    track) — same "everyone sees the same data" idea as job #1, but
+//    deliberately with NO passphrase gate. Every entry is a deterministic
+//    computation from Open-Meteo data (auto-logged, or a user clicking
+//    "Log Now"/"+ Add to Log"), not free-text anyone could vandalize with
+//    junk content, so the write-friction that makes sense for Stable
+//    Tour's notes isn't worth the setup step here — this is meant to Just
+//    Work for every visitor with zero configuration.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for job #1 to work — job #2 (the /  feed route) works without it.
+// for jobs #1 and #3 to work — job #2 (the /  feed route) works without it.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -177,6 +186,56 @@ async function handleRequest(request, env) {
       return json({ notes }, 200, { "Cache-Control": "no-store" });
     }
 
+    if (url.pathname === "/weatherlog" && request.method === "GET") {
+      const track = (url.searchParams.get("track") || "").trim();
+      if (!track) return json({ error: "Missing track" }, 400);
+      const entries = await readWeatherLog(env, track);
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/weatherlog" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const entry = body.entry;
+      if (!track || !entry || !entry.date) return json({ error: "Missing track or entry" }, 400);
+      const entries = await readWeatherLog(env, track);
+      const filtered = entries.filter(e => e.date !== entry.date);
+      filtered.push(entry);
+      filtered.sort((a, b) => b.date.localeCompare(a.date));
+      await env.STABLE_KV.put(weatherLogKvKey(track), JSON.stringify(filtered));
+      return json({ entries: filtered }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // One KV write for the whole batch — used only for the one-time,
+    // per-browser migration of pre-existing local-only log history into the
+    // shared store (see loadWeatherLog() client-side). Existing dated
+    // entries win over incoming ones so this can never clobber a value
+    // another device already wrote for that date.
+    if (url.pathname === "/weatherlog/bulk" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const items = Array.isArray(body.entries) ? body.entries : [];
+      if (!track || !items.length) return json({ error: "Missing track or entries" }, 400);
+      const entries = await readWeatherLog(env, track);
+      for (const item of items) {
+        if (!item?.date) continue;
+        if (!entries.some(e => e.date === item.date)) entries.push(item);
+      }
+      entries.sort((a, b) => b.date.localeCompare(a.date));
+      await env.STABLE_KV.put(weatherLogKvKey(track), JSON.stringify(entries));
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/weatherlog" && request.method === "DELETE") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date;
+      if (!track || !date) return json({ error: "Missing track or date" }, 400);
+      const entries = (await readWeatherLog(env, track)).filter(e => e.date !== date);
+      await env.STABLE_KV.put(weatherLogKvKey(track), JSON.stringify(entries));
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Falls through to the original feed-scrape behavior for GET / (and any
     // other unmatched path) — unchanged from before this shared-storage work.
     let feedRes;
@@ -237,6 +296,19 @@ function isAuthorized(request) {
 function lastNameKey(fullName) {
   const parts = fullName.trim().split(/\s+/);
   return parts[parts.length - 1].toLowerCase();
+}
+
+// Track IDs come straight from the client's fixed TRACKS registry (7 known
+// values today) but this strips anything unexpected anyway before it ever
+// touches a KV key, just in case that registry grows in an unexpected way.
+function weatherLogKvKey(track) {
+  return `weatherlog:${track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40)}`;
+}
+
+async function readWeatherLog(env, track) {
+  const raw = await env.STABLE_KV.get(weatherLogKvKey(track));
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 async function readState(env) {

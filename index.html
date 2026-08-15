@@ -2030,9 +2030,9 @@
       </div>
 
       <div class="log-disclaimer">
-        Daily Log is stored locally in this browser only (no backend, no sync across devices yet). Track condition
-        columns use the same dirt/turf heuristics as the live badges on the Dashboard, adapted to a full day rather
-        than a rolling window.
+        Daily Log is shared — every visitor sees the same entries for this track, auto-logged once a day completes.
+        Track condition columns use the same dirt/turf heuristics as the live badges on the Dashboard, adapted to a
+        full day rather than a rolling window.
       </div>
     </div>
   </div>
@@ -2985,22 +2985,55 @@
     return d.toISOString().slice(0, 10);
   }
 
-  function loadWeatherLog(){
+  // Pre-shared-storage localStorage copy — read-only now, kept only as a
+  // one-time migration source (see loadWeatherLog() below). activeTrack must
+  // already be set to the track being loaded before this is called.
+  function loadLocalWeatherLogLegacy(){
     try{
       const raw = localStorage.getItem(trackScopedKey(LOG_STORAGE_KEY_BASE));
       const parsed = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
+    } catch(err){ return []; }
+  }
+
+  const WEATHERLOG_MIGRATED_KEY = "giddyupbets_weatherlog_migrated_v1";
+  function weatherLogMigratedTracks(){
+    try{ return new Set(JSON.parse(localStorage.getItem(WEATHERLOG_MIGRATED_KEY) || "[]")); }
+    catch(err){ return new Set(); }
+  }
+  function markWeatherLogMigrated(trackId){
+    try{
+      const set = weatherLogMigratedTracks();
+      set.add(trackId);
+      localStorage.setItem(WEATHERLOG_MIGRATED_KEY, JSON.stringify([...set]));
+    } catch(err){ /* best-effort — worst case this track's migration check just runs again next load */ }
+  }
+
+  // The Daily Log used to be localStorage-only (one separate copy per
+  // browser). Now every visitor reads and writes the same shared copy off
+  // the Stable Tour worker (see weatherLogApi* above and the worker's own
+  // comment on why this endpoint is deliberately open, unlike Stable Tour's
+  // passphrase-gated writes). The one-time migration below exists so a
+  // browser's pre-existing local history isn't silently orphaned the first
+  // time it loads post-switchover — it seeds the shared store from local
+  // history if (and only if) the shared store is still empty for this track.
+  async function loadWeatherLog(){
+    const trackId = activeTrack.id;
+    try{
+      let entries = await weatherLogApiGet(trackId);
+      if (!entries.length && !weatherLogMigratedTracks().has(trackId)){
+        const localEntries = loadLocalWeatherLogLegacy();
+        if (localEntries.length){
+          try{ entries = await weatherLogApiBulk(trackId, localEntries); }
+          catch(err){ console.error("Weather log migration failed", err); }
+        }
+      }
+      markWeatherLogMigrated(trackId);
+      entries.sort((a, b) => b.date.localeCompare(a.date));
+      return entries;
     } catch(err){
       console.error("Weather log failed to load", err);
       return [];
-    }
-  }
-
-  function saveWeatherLog(){
-    try{
-      localStorage.setItem(trackScopedKey(LOG_STORAGE_KEY_BASE), JSON.stringify(weatherLog));
-    } catch(err){
-      console.error("Weather log failed to save", err);
     }
   }
 
@@ -3080,8 +3113,12 @@
   // "today" daily aggregate blends forecast for hours that haven't happened
   // yet, so it isn't a trustworthy final record until the day has fully
   // elapsed). Runs on every weather refresh; no-ops once yesterday's final
-  // entry already exists.
-  function maybeAutoLogYesterday(data){
+  // entry already exists. Only the first browser to run this after a given
+  // track's local midnight actually writes — every later refresh (on any
+  // device) sees the finalized entry already in the shared store from
+  // loadWeatherLog()/the returned entries below and skips.
+  async function maybeAutoLogYesterday(data){
+    const trackId = activeTrack.id;
     const { date: todayStr } = nowInTrackTZ();
     const yesterdayStr = shiftDateStr(todayStr, -1);
     if (weatherLog.some(e => e.date === yesterdayStr && !e.isPartial)) return;
@@ -3093,19 +3130,27 @@
     const stats = computeDayStatsFromDaily(data.daily, data.hourly, yesterdayStr, prevRain);
     if (!stats) return;
 
-    weatherLog = weatherLog.filter(e => e.date !== yesterdayStr); // drop any stale partial
-    weatherLog.push({ ...stats, isPartial: false, capturedAt: new Date().toISOString() });
-    weatherLog.sort((a, b) => b.date.localeCompare(a.date));
-    saveWeatherLog();
-    renderLogTable();
-    pushBiasAlertForEntry(stats);
+    const entry = { ...stats, isPartial: false, capturedAt: new Date().toISOString() };
+    try{
+      const entries = await weatherLogApiUpsert(trackId, entry);
+      if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+      weatherLog = entries;
+      renderLogTable();
+      pushBiasAlertForEntry(stats);
+    } catch(err){
+      // Deliberately don't touch local weatherLog state on failure — the
+      // guard above only skips once a *confirmed* finalized entry exists,
+      // so leaving it untouched means the next refresh just retries.
+      console.error("Weather log auto-save failed", err);
+    }
   }
 
   // On-demand: snapshots TODAY right now, flagged partial since the day
   // hasn't fully played out (repeated clicks replace the prior partial
   // rather than piling up duplicates).
-  function logSnapshotNow(){
+  async function logSnapshotNow(){
     if (!lastWeatherData) return;
+    const trackId = activeTrack.id;
     const { date: todayStr } = nowInTrackTZ();
     const yesterdayStr = shiftDateStr(todayStr, -1);
     const yIdx = lastWeatherData.daily?.time?.findIndex(t => t === yesterdayStr) ?? -1;
@@ -3114,18 +3159,28 @@
     const stats = computeDayStatsFromDaily(lastWeatherData.daily, lastWeatherData.hourly, todayStr, prevRain);
     if (!stats) return;
 
-    weatherLog = weatherLog.filter(e => e.date !== todayStr);
-    weatherLog.push({ ...stats, isPartial: true, capturedAt: new Date().toISOString() });
-    weatherLog.sort((a, b) => b.date.localeCompare(a.date));
-    saveWeatherLog();
-    renderLogTable();
-    pushBiasAlertForEntry(stats);
+    const entry = { ...stats, isPartial: true, capturedAt: new Date().toISOString() };
+    try{
+      const entries = await weatherLogApiUpsert(trackId, entry);
+      if (activeTrack.id !== trackId) return;
+      weatherLog = entries;
+      renderLogTable();
+      pushBiasAlertForEntry(stats);
+    } catch(err){
+      console.error("Weather log snapshot failed to save", err);
+    }
   }
 
-  function removeLogEntry(dateStr){
-    weatherLog = weatherLog.filter(e => e.date !== dateStr);
-    saveWeatherLog();
-    renderLogTable();
+  async function removeLogEntry(dateStr){
+    const trackId = activeTrack.id;
+    try{
+      const entries = await weatherLogApiRemove(trackId, dateStr);
+      if (activeTrack.id !== trackId) return;
+      weatherLog = entries;
+      renderLogTable();
+    } catch(err){
+      console.error("Weather log entry failed to remove", err);
+    }
   }
 
   function fmtLogRow(entry){
@@ -3194,14 +3249,20 @@
       status.textContent = "";
       $("historyTableBody").innerHTML = `<tr>${fmtLogRow(stats)}<td><button id="historyAddBtn" title="Add to Daily Log">+ Add to Log</button></td></tr>`;
       table.hidden = false;
-      $("historyAddBtn").addEventListener("click", () => {
-        weatherLog = weatherLog.filter(e => e.date !== stats.date);
-        weatherLog.push({ ...stats, isPartial: false, capturedAt: new Date().toISOString() });
-        weatherLog.sort((a, b) => b.date.localeCompare(a.date));
-        saveWeatherLog();
-        renderLogTable();
-        pushBiasAlertForEntry(stats);
-        status.textContent = `Added ${dateStr} to the Daily Log.`;
+      $("historyAddBtn").addEventListener("click", async () => {
+        const trackId = activeTrack.id;
+        const entry = { ...stats, isPartial: false, capturedAt: new Date().toISOString() };
+        try{
+          const entries = await weatherLogApiUpsert(trackId, entry);
+          if (activeTrack.id !== trackId) return;
+          weatherLog = entries;
+          renderLogTable();
+          pushBiasAlertForEntry(stats);
+          status.textContent = `Added ${dateStr} to the Daily Log.`;
+        } catch(err){
+          console.error("Weather log failed to save", err);
+          status.textContent = `Couldn't add ${dateStr}: ${err.message}`;
+        }
       });
     } catch(err){
       console.error(err);
@@ -3275,6 +3336,45 @@
   function stableApiError(action, err){
     console.error(`Stable Tour: ${action} failed`, err);
     $("stableApiStatus").textContent = `Couldn't ${action}: ${err.message}`;
+  }
+
+  // ---------- Shared Daily Weather Log (same worker, no passphrase — see
+  // the worker's own comment on why this endpoint is deliberately open) ----------
+  async function weatherLogApiGet(track){
+    const res = await fetch(stableApiUrl(`/weatherlog?track=${encodeURIComponent(track)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  async function weatherLogApiUpsert(track, entry){
+    const res = await fetch(stableApiUrl("/weatherlog"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, entry }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  async function weatherLogApiRemove(track, date){
+    const res = await fetch(stableApiUrl("/weatherlog"), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, date }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  async function weatherLogApiBulk(track, entries){
+    const res = await fetch(stableApiUrl("/weatherlog/bulk"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, entries }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
   }
 
   async function loadStableData(){
@@ -5189,7 +5289,7 @@
     select.addEventListener("change", () => switchTrack(select.value));
   }
 
-  function switchTrack(trackId){
+  async function switchTrack(trackId){
     const track = TRACKS[trackId];
     if (!track || track === activeTrack) return;
     activeTrack = track;
@@ -5234,8 +5334,15 @@
     setRadarMode(currentRadarMode());
 
     // Per-track storage-backed collections.
-    weatherLog = loadWeatherLog();
+    weatherLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
     renderLogTable();
+    loadWeatherLog().then(entries => {
+      if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
+      weatherLog = entries;
+      renderLogTable();
+      renderBiasTable();
+      renderBiasTrends();
+    });
     biasLog = loadBiasLog();
     renderBiasTable();
     renderBiasTrends();
@@ -5359,8 +5466,14 @@
   populateTrackSelect();
   renderStaticTrackChrome(activeTrack);
 
-  weatherLog = loadWeatherLog();
-  renderLogTable();
+  loadWeatherLog().then(entries => {
+    weatherLog = entries;
+    renderLogTable();
+    // Bias Tracker joins against weatherLog by date — re-render once it's
+    // actually populated so that join isn't stuck showing blanks.
+    renderBiasTable();
+    renderBiasTrends();
+  });
 
   biasLog = loadBiasLog();
   renderBiasTable();
