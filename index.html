@@ -1045,13 +1045,15 @@
   .bias-closer{ background: rgba(111,168,201,0.15); color: var(--sky); }
   .bias-neutral{ background: rgba(169,164,150,0.15); color: var(--parchment-dim); }
   .bias-mixed{ background: rgba(192,120,48,0.15); color: var(--clay); }
-  .bias-notes-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
-  .bias-notes-text{
+  /* Shared by both the Rail and Notes columns — long NYRA-sourced text
+     clamps to ~3 lines by default with a per-cell Show more/less toggle. */
+  .bias-clamp-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
+  .bias-clamp-text{
     max-height: 4.8em; /* ~3 lines at this cell's line-height */
     overflow: hidden;
   }
-  .bias-notes-cell.expanded .bias-notes-text{ max-height: none; }
-  .bias-notes-expand{
+  .bias-clamp-cell.expanded .bias-clamp-text{ max-height: none; }
+  .bias-clamp-expand{
     display: block;
     margin-top: 4px;
     background: none;
@@ -1063,7 +1065,7 @@
     padding: 0;
     text-decoration: underline;
   }
-  .bias-notes-expand:hover{ color: var(--tote-amber); }
+  .bias-clamp-expand:hover{ color: var(--tote-amber); }
 
   /* ---------- Bias Tracker trends ---------- */
   .bias-trends{
@@ -3183,6 +3185,24 @@
     }
   }
 
+  // Shared by the Rail and Notes columns — both can carry long NYRA-sourced
+  // text (Rail notes run up to 350+ characters some days, pulled verbatim
+  // from Andy Serling's write-up) that used to render on the table's default
+  // single-line nowrap and visually cut off. Clamps to ~3 lines by default
+  // with a Show more/less toggle; only bothers with the toggle when there's
+  // actually enough text to clamp.
+  function renderClampedCell(idPrefix, date, text){
+    const id = `${idPrefix}-${date}`;
+    const safeText = text || "—";
+    const showExpand = safeText.length > 150;
+    return `
+      <td class="bias-clamp-cell" id="${id}">
+        <div class="bias-clamp-text">${safeText}</div>
+        ${showExpand ? `<button type="button" class="bias-clamp-expand" data-target="${id}">Show more</button>` : ""}
+      </td>
+    `;
+  }
+
   function renderBiasTable(){
     const tbody = $("biasTableBody");
     tbody.innerHTML = "";
@@ -3201,21 +3221,13 @@
       const turfDisplay = entry.nyraTurfLabel ?? matchingLog?.turfConditionLabel ?? "—";
       const tr = document.createElement("tr");
       const styleClass = BIAS_STYLE_CLASS[entry.runningStyleBias] ?? "bias-neutral";
-      const notesId = `biasNotes-${entry.date}`;
-      const notesText = entry.notes || "—";
-      // Only worth a toggle when there's actually enough text to clamp —
-      // roughly more than the ~3 lines .bias-notes-text shows by default.
-      const showExpand = notesText.length > 150;
       tr.innerHTML = `
         <td>${entry.date}${entry.autoImported ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
         <td>${dirtDisplay}</td>
         <td>${turfDisplay}</td>
         <td><span class="bias-tag ${styleClass}">${entry.runningStyleBias}</span></td>
-        <td>${entry.railNote || "—"}</td>
-        <td class="bias-notes-cell" id="${notesId}">
-          <div class="bias-notes-text">${notesText}</div>
-          ${showExpand ? `<button type="button" class="bias-notes-expand" data-target="${notesId}">Show more</button>` : ""}
-        </td>
+        ${renderClampedCell("biasRail", entry.date, entry.railNote)}
+        ${renderClampedCell("biasNotes", entry.date, entry.notes)}
         <td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>
       `;
       tbody.appendChild(tr);
@@ -3223,7 +3235,7 @@
     tbody.querySelectorAll(".log-remove").forEach(btn => {
       btn.addEventListener("click", () => removeBiasEntry(btn.dataset.date));
     });
-    tbody.querySelectorAll(".bias-notes-expand").forEach(btn => {
+    tbody.querySelectorAll(".bias-clamp-expand").forEach(btn => {
       btn.addEventListener("click", () => {
         const cell = document.getElementById(btn.dataset.target);
         const expanded = cell.classList.toggle("expanded");
