@@ -21,14 +21,15 @@
 //    and the free public CORS proxies tested against it were unreliable
 //    (500s, gateway timeouts).
 //
-// 3. Shared Daily Weather Log (GET/POST/DELETE /weatherlog, one KV key per
-//    track) — same "everyone sees the same data" idea as job #1, but
-//    deliberately with NO passphrase gate. Every entry is a deterministic
-//    computation from Open-Meteo data (auto-logged, or a user clicking
-//    "Log Now"/"+ Add to Log"), not free-text anyone could vandalize with
-//    junk content, so the write-friction that makes sense for Stable
-//    Tour's notes isn't worth the setup step here — this is meant to Just
-//    Work for every visitor with zero configuration.
+// 3. Shared Daily Weather Log (GET/POST/DELETE /weatherlog, plus /bulk and
+//    /bulk-upsert variants, one KV key per track) — same "everyone sees the
+//    same data" idea as job #1, but deliberately with NO passphrase gate.
+//    Every entry is a deterministic computation from Open-Meteo data (auto-
+//    logged, "Log Now"/"+ Add to Log", or NYRA-enriched by job #4's
+//    backfill), not free-text anyone could vandalize with junk content, so
+//    the write-friction that makes sense for Stable Tour's notes isn't
+//    worth the setup step here — this is meant to Just Work for every
+//    visitor with zero configuration.
 //
 // 4. NYRA Track Trends scrape (GET /nyra-trends?track=saratoga) — fetches
 //    NYRA's own official Saratoga track-trends page (Andy Serling's daily
@@ -38,7 +39,11 @@
 //    publishes at this path. The client does the bias-category inference
 //    and Bias Tracker upsert; this endpoint only returns the raw parsed
 //    fields, same division of labor as job #2 (worker extracts structure,
-//    client interprets it).
+//    client interprets it). Two client-side consumers: the Bias Tracker
+//    auto-import (job #5), and the Daily Log backfill (job #3) — NYRA only
+//    publishes trends for days it actually raced, so the backfill uses this
+//    for racing days and falls back to its own Open-Meteo archive
+//    computation for the non-racing days NYRA has no entry for.
 //
 // 5. Shared Bias Tracker (GET/POST/DELETE /biaslog, one KV key per track) —
 //    same shape as job #3 (weatherlog), also deliberately open with no
@@ -250,6 +255,29 @@ async function handleRequest(request, env) {
       }
       entries.sort((a, b) => b.date.localeCompare(a.date));
       await env.STABLE_KV.put(weatherLogKvKey(track), JSON.stringify(entries));
+      return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Distinct from /weatherlog/bulk above (which only inserts, existing
+    // dates always win — that one is safety-first, built for a one-time
+    // local->shared migration). This one overwrites by date, same "replace
+    // or append" semantics as /biaslog/bulk — used to backfill/enrich Daily
+    // Log history with NYRA Track Trends condition data, which needs to be
+    // able to update a date that already has a Command-Center-only entry.
+    if (url.pathname === "/weatherlog/bulk-upsert" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const items = Array.isArray(body.entries) ? body.entries : [];
+      if (!track || !items.length) return json({ error: "Missing track or entries" }, 400);
+      const entries = await readWeatherLog(env, track);
+      for (const item of items) {
+        if (!item?.date) continue;
+        const idx = entries.findIndex(e => e.date === item.date);
+        if (idx === -1) entries.push(item);
+        else entries[idx] = item;
+      }
+      entries.sort((a, b) => b.date.localeCompare(a.date));
+      await env.STABLE_KV.put(weatherLogKvKey(track), JSON.stringify(entries)); // one write for the whole batch
       return json({ entries }, 200, { "Cache-Control": "no-store" });
     }
 

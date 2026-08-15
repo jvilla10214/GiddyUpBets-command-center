@@ -2889,6 +2889,11 @@
     "Mixed / Inconsistent": "bias-mixed",
   };
   let biasLog = [];
+  // Whether backfillDailyLogFromNyra() has already run for the current
+  // track load — it fetches a wide Archive API date range in one request,
+  // not something worth redoing on every 5-minute weather refresh. Reset on
+  // track switch so a newly-selected track gets its own run.
+  let dailyLogNyraBackfillDone = false;
 
   // Pre-shared-storage localStorage copy — read-only now, kept only as a
   // one-time migration source (see loadBiasLog() below). activeTrack must
@@ -3107,6 +3112,100 @@
       pushAlert(makeAlert("bias", `Imported ${toUpsert.length} day${toUpsert.length === 1 ? "" : "s"} of NYRA Track Trends into Bias Tracker`));
     } catch(err){
       console.error("NYRA track trends import failed to save", err);
+    }
+  }
+
+  // Enriches the Daily Log with NYRA's own reported track condition —
+  // parseNyraTrackCondition() off the same Track Trends page as
+  // autoImportNyraTrends() above, the real stewards' call rather than this
+  // app's own Open-Meteo-computed guess. NYRA only publishes a day when
+  // Saratoga actually raced, so non-racing days are left exactly as the
+  // existing Command-Center computation already produces them — this only
+  // ever overrides the condition/description fields, never the numeric
+  // weather stats (temp/wind/rain), which stay Open-Meteo-sourced either
+  // way since NYRA's own text doesn't give clean structured numbers for those.
+  //
+  // Covers NYRA's full published history in one shot (one Archive API
+  // request for the whole date range, same field list lookupHistoricalDay()
+  // already uses) rather than one lookup per day — 70+ individual archive
+  // calls for a first-ever backfill would be slow and needless. Runs once
+  // per track-load (dailyLogNyraBackfillDone), not every 5-minute refresh.
+  async function backfillDailyLogFromNyra(){
+    if (activeTrack.id !== "saratoga") return;
+    if (dailyLogNyraBackfillDone) return;
+    dailyLogNyraBackfillDone = true; // set up front — a failed attempt shouldn't retry every render tick
+
+    let raws;
+    try{ raws = await nyraTrendsApiGet(); }
+    catch(err){ console.error("NYRA track trends fetch failed (Daily Log backfill)", err); return; }
+    if (!raws.length) return;
+
+    const nyraByDate = new Map(raws.map(r => [r.date, r]));
+    const dates = raws.map(r => r.date).sort();
+    const startDate = dates[0];
+    const { date: todayStr } = nowInTrackTZ();
+    const endDate = shiftDateStr(todayStr, -1); // yesterday — today's still in progress, same rule maybeAutoLogYesterday() uses
+    if (startDate > endDate) return;
+
+    const trackId = activeTrack.id;
+    let data;
+    try{
+      const url = `${ARCHIVE_API_BASE}?latitude=${activeTrack.lat}&longitude=${activeTrack.lon}` +
+        `&start_date=${startDate}&end_date=${endDate}` +
+        `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_gusts_10m_max,weather_code` +
+        `&hourly=wind_speed_10m,wind_direction_10m,precipitation` +
+        `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=${encodeURIComponent(activeTrack.timezone)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      data = await res.json();
+    } catch(err){
+      console.error("Archive fetch failed (Daily Log backfill)", err);
+      return;
+    }
+    if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+
+    const toUpsert = [];
+    for (let cursor = startDate; cursor <= endDate; cursor = shiftDateStr(cursor, 1)){
+      const dayIdx = data.daily?.time?.findIndex(t => t === cursor) ?? -1;
+      if (dayIdx < 0) continue; // archive has no data for this date (yet) — not an error, just skip it
+
+      const prevDateStr = shiftDateStr(cursor, -1);
+      const prevIdx = data.daily?.time?.findIndex(t => t === prevDateStr) ?? -1;
+      const prevRain = prevIdx >= 0 ? (data.daily.precipitation_sum?.[prevIdx] ?? 0) : 0;
+      const stats = computeDayStatsFromDaily(data.daily, data.hourly, cursor, prevRain);
+      if (!stats) continue;
+
+      const raw = nyraByDate.get(cursor);
+      let nyraSourced = false;
+      if (raw){
+        const { dirtLabel, turfLabel } = parseNyraTrackCondition(raw.trackCondition);
+        if (dirtLabel) stats.dirtConditionLabel = dirtLabel;
+        if (turfLabel) stats.turfConditionLabel = turfLabel;
+        if (raw.weather) stats.conditionsDesc = raw.weather;
+        nyraSourced = !!(dirtLabel || turfLabel || raw.weather);
+      }
+
+      const entry = { ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString() };
+      const existing = weatherLog.find(e => e.date === cursor);
+      const changed = !existing
+        || existing.dirtConditionLabel !== entry.dirtConditionLabel
+        || existing.turfConditionLabel !== entry.turfConditionLabel
+        || existing.conditionsDesc !== entry.conditionsDesc
+        || existing.nyraSourced !== entry.nyraSourced;
+      if (changed) toUpsert.push(entry);
+    }
+    if (!toUpsert.length) return;
+
+    try{
+      const entries = await weatherLogApiBulkUpsert(trackId, toUpsert);
+      if (activeTrack.id !== trackId) return;
+      weatherLog = entries;
+      renderLogTable();
+      renderBiasTable(); // Bias Tracker's Dirt/Turf columns join against weatherLog too
+      renderBiasTrends();
+      pushAlert(makeAlert("weather", `Backfilled ${toUpsert.length} day${toUpsert.length === 1 ? "" : "s"} of Daily Log history (NYRA Track Trends + Open-Meteo archive)`));
+    } catch(err){
+      console.error("Daily Log NYRA backfill failed to save", err);
     }
   }
 
@@ -3591,7 +3690,7 @@
 
   function fmtLogRow(entry){
     return `
-      <td>${entry.date}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}</td>
+      <td>${entry.date}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}${entry.nyraSourced ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
       <td>${entry.tempHigh != null ? Math.round(entry.tempHigh) + "°" : "—"}</td>
       <td>${entry.tempLow != null ? Math.round(entry.tempLow) + "°" : "—"}</td>
       <td>${entry.windAvg != null ? Math.round(entry.windAvg) + " mph" : "—"}</td>
@@ -3819,6 +3918,20 @@
   }
   async function weatherLogApiBulk(track, entries){
     const res = await fetch(stableApiUrl("/weatherlog/bulk"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, entries }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+  // Distinct from weatherLogApiBulk() above (insert-only, existing dates
+  // always win — that one's for the local->shared migration). This one
+  // overwrites by date — used to enrich already-logged dates with NYRA's
+  // condition data, see backfillDailyLogFromNyra().
+  async function weatherLogApiBulkUpsert(track, entries){
+    const res = await fetch(stableApiUrl("/weatherlog/bulk-upsert"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track, entries }),
@@ -5812,6 +5925,7 @@
 
     maybeAutoLogYesterday(data);
     autoImportNyraTrends();
+    backfillDailyLogFromNyra();
   }
 
   function tickClock(){
@@ -5934,6 +6048,7 @@
     // Per-track storage-backed collections.
     weatherLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
     selectedLogMonth = null; // default back to this track's own current month, not whatever was being browsed before
+    dailyLogNyraBackfillDone = false;
     renderLogTable();
     loadWeatherLog().then(entries => {
       if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
