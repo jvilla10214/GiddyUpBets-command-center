@@ -1839,6 +1839,15 @@
       </svg>
       Dashboard
     </button>
+    <button type="button" class="sidebar-btn" data-page="entries">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/>
+        <path d="M7 9h10"/>
+        <path d="M7 13h10"/>
+        <path d="M7 17h6"/>
+      </svg>
+      Entries
+    </button>
     <button type="button" class="sidebar-btn" data-page="news">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M4 4h13a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4"/>
@@ -1848,15 +1857,6 @@
         <path d="M8 16h4"/>
       </svg>
       News Wire
-    </button>
-    <button type="button" class="sidebar-btn" data-page="entries">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="4" width="18" height="16" rx="2"/>
-        <path d="M7 9h10"/>
-        <path d="M7 13h10"/>
-        <path d="M7 17h6"/>
-      </svg>
-      Entries
     </button>
     <button type="button" class="sidebar-btn" data-page="historical">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -6428,7 +6428,7 @@
   // Config-driven like LOG_TABS below — adding another sidebar page later
   // (e.g. the Calendar/archive page floated for future work) is just another
   // button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "news", "entries", "historical", "bias", "stable"];
+  const SIDEBAR_PAGES = ["dashboard", "entries", "news", "historical", "bias", "stable"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
