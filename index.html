@@ -1249,6 +1249,50 @@
   }
 
   /* ---------- Today's Entries ---------- */
+  .entries-race-tabs{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 18px;
+  }
+  .entries-race-tab{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .entries-race-tab:hover{ border-color: var(--parchment-dim); }
+  .entries-race-tab.active{ border-color: var(--tote-amber); background: rgba(240,180,41,0.1); }
+  .entries-race-tab-num{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 12px;
+    color: var(--parchment);
+  }
+  .entries-race-tab.active .entries-race-tab-num{ color: var(--tote-amber); }
+  .entries-race-tab-time{ font-size: 10px; color: var(--parchment-dim); }
+  .entries-weather-strip{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    color: var(--parchment-dim);
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+  }
+  .entries-weather-label{ color: var(--sky); }
+  .entries-weather-unknown{ font-style: italic; }
   .entries-race-card{ margin-bottom: 22px; }
   .entries-race-card:last-child{ margin-bottom: 0; }
   .entries-race-header{
@@ -2966,6 +3010,14 @@
   // track switch so a newly-selected track gets its own run.
   let dailyLogNyraBackfillDone = false;
 
+  // Entries page state — which race's card is showing, and the last fetch's
+  // results cached so clicking a race tab just re-renders instead of
+  // re-fetching. Reset on track switch (loadNyraEntries() re-picks a
+  // default once the new track's/day's races come back).
+  let selectedEntriesRace = null;
+  let lastEntriesDate = null;
+  let lastEntriesRaces = [];
+
   // Pre-shared-storage localStorage copy — read-only now, kept only as a
   // one-time migration source (see loadBiasLog() below). activeTrack must
   // already be set to the track being loaded before this is called.
@@ -3316,43 +3368,139 @@
     renderEntriesPage(date, races);
   }
 
+  // "1:51 PM" from NYRA's raw post-time string ("2026-08-16T13:51:12") — that
+  // string is already track-local wall-clock time (it matches the "1:51p"
+  // shown elsewhere on NYRA's own page), so this is pure text formatting,
+  // no timezone math.
+  function formatPostTimeLabel(iso){
+    const m = iso && iso.match(/T(\d{2}):(\d{2})/);
+    if (!m) return null;
+    let h = parseInt(m[1], 10);
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12; if (h === 0) h = 12;
+    return `${h}:${m[2]} ${ampm}`;
+  }
+
+  // Finds the hourly forecast slot closest to a race's post time and reduces
+  // it to the same headwind/crosswind read Track Play Analysis uses for
+  // "right now" — here applied at whatever hour that specific race actually
+  // goes off, since a track's wind can shift meaningfully across an 8-race
+  // card. lastWeatherData.hourly and race.postTimeIso are both naive
+  // "no offset" timestamp strings but from the SAME track-local wall clock,
+  // so comparing them via new Date() (which parses both the same way
+  // regardless of the browser's own timezone) still finds the right nearest
+  // neighbor even though neither string is truly UTC.
+  function weatherAtPostTime(postTimeIso){
+    const times = lastWeatherData?.hourly?.time;
+    if (!postTimeIso || !times?.length) return null;
+    const targetMs = new Date(postTimeIso).getTime();
+    if (Number.isNaN(targetMs)) return null;
+    let bestIdx = -1, bestDiff = Infinity;
+    times.forEach((t, i) => {
+      const diff = Math.abs(new Date(t).getTime() - targetMs);
+      if (diff < bestDiff){ bestDiff = diff; bestIdx = i; }
+    });
+    if (bestIdx < 0) return null;
+    const h = lastWeatherData.hourly;
+    const windSpeed = h.wind_speed_10m?.[bestIdx];
+    const windDir = h.wind_direction_10m?.[bestIdx];
+    let stretchWind = null;
+    if (windSpeed != null && windDir != null && activeTrack.heading){
+      const { headwind, crosswind } = windComponents(windSpeed, windDir, activeTrack.heading.homestretch);
+      stretchWind = describeStretchWind(headwind, crosswind);
+    }
+    return {
+      temp: h.temperature_2m?.[bestIdx],
+      apparentTemp: h.apparent_temperature?.[bestIdx],
+      precipProb: h.precipitation_probability?.[bestIdx],
+      weatherCode: h.weather_code?.[bestIdx],
+      windSpeed, windDir, stretchWind,
+    };
+  }
+
+  function pickDefaultEntriesRace(races){
+    const upcoming = races.find(r => r.mtpLabel != null); // hasn't gone off yet
+    return (upcoming || races[races.length - 1] || races[0])?.raceNumber ?? null;
+  }
+
   function renderEntriesPage(date, races){
+    lastEntriesDate = date;
+    lastEntriesRaces = races;
     const body = $("entriesBody");
     if (!races.length){
+      selectedEntriesRace = null;
       body.innerHTML = `<div class="log-empty">No races carded for Saratoga today (${escapeHtml(date)}).</div>`;
       return;
     }
-    body.innerHTML = races.map(race => {
-      const metaBits = [
-        [race.purse, race.raceType].filter(Boolean).join(" "),
-        [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
-      ].filter(Boolean);
-      const rows = race.horses.map(h => `
-        <tr class="${h.scratched ? "entries-scratched" : ""}">
-          <td>${escapeHtml(h.postPosition || "—")}</td>
-          <td>${escapeHtml(h.name || "—")}</td>
-          <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
-          <td>${escapeHtml(h.weight || "—")}</td>
-          <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
-          <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.currentOdds || "—")}</td>
-        </tr>
-      `).join("");
+    if (selectedEntriesRace == null || !races.some(r => r.raceNumber === selectedEntriesRace)){
+      selectedEntriesRace = pickDefaultEntriesRace(races);
+    }
+
+    const tabsHtml = races.map(race => {
+      const timeLabel = formatPostTimeLabel(race.postTimeIso);
       return `
-        <div class="entries-race-card">
-          <div class="entries-race-header">
-            <span class="entries-race-num">Race ${race.raceNumber}</span>
-            ${metaBits.map(bit => `<span class="entries-race-meta">${escapeHtml(bit)}</span>`).join("")}
-            ${race.mtpLabel ? `<span class="entries-race-mtp">${escapeHtml(race.mtpLabel)}</span>` : ""}
-          </div>
-          <div class="log-table-wrap">
-            <table class="log-table entries-horse-table">
-              <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-        </div>
+        <button type="button" class="entries-race-tab${race.raceNumber === selectedEntriesRace ? " active" : ""}" data-race="${race.raceNumber}">
+          <span class="entries-race-tab-num">R${race.raceNumber}</span>
+          <span class="entries-race-tab-time">${escapeHtml(timeLabel || race.mtpLabel || "—")}</span>
+        </button>
       `;
     }).join("");
+
+    const race = races.find(r => r.raceNumber === selectedEntriesRace);
+    const metaBits = [
+      [race.purse, race.raceType].filter(Boolean).join(" "),
+      [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
+    ].filter(Boolean);
+
+    const weather = weatherAtPostTime(race.postTimeIso);
+    const timeLabel = formatPostTimeLabel(race.postTimeIso);
+    let weatherHtml;
+    if (weather){
+      const bits = [
+        weather.temp != null ? `${Math.round(weather.temp)}°F${weather.apparentTemp != null ? ` (feels ${Math.round(weather.apparentTemp)}°F)` : ""}` : null,
+        WMO[weather.weatherCode] ?? null,
+        weather.windSpeed != null ? `Wind ${Math.round(weather.windSpeed)} mph ${compassPoint(weather.windDir)}` : null,
+        weather.precipProb != null ? `${Math.round(weather.precipProb)}% rain` : null,
+      ].filter(Boolean);
+      weatherHtml = `
+        <div class="entries-weather-strip">
+          <span class="entries-weather-label">Forecast at ${escapeHtml(timeLabel || "post")}:</span>
+          ${bits.map(b => `<span>${escapeHtml(b)}</span>`).join("")}
+          ${weather.stretchWind ? `<span>Stretch: ${escapeHtml(weather.stretchWind.text)}</span>` : ""}
+        </div>
+      `;
+    } else {
+      weatherHtml = `<div class="entries-weather-strip entries-weather-unknown">No forecast match for this race's post time yet.</div>`;
+    }
+
+    const rows = race.horses.map(h => `
+      <tr class="${h.scratched ? "entries-scratched" : ""}">
+        <td>${escapeHtml(h.postPosition || "—")}</td>
+        <td>${escapeHtml(h.name || "—")}</td>
+        <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
+        <td>${escapeHtml(h.weight || "—")}</td>
+        <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
+        <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.currentOdds || "—")}</td>
+      </tr>
+    `).join("");
+
+    body.innerHTML = `
+      <div class="entries-race-tabs">${tabsHtml}</div>
+      <div class="entries-race-card">
+        <div class="entries-race-header">
+          <span class="entries-race-num">Race ${race.raceNumber}</span>
+          ${metaBits.map(bit => `<span class="entries-race-meta">${escapeHtml(bit)}</span>`).join("")}
+          ${race.mtpLabel ? `<span class="entries-race-mtp">${escapeHtml(race.mtpLabel)}</span>` : ""}
+        </div>
+        ${weatherHtml}
+        <div class="log-table-wrap">
+          <table class="log-table entries-horse-table">
+            <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
   }
 
   // ---------- Bias auto-suggest from pasted results/chart text ----------
@@ -6233,6 +6381,7 @@
     weatherLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
     selectedLogMonth = null; // default back to this track's own current month, not whatever was being browsed before
     dailyLogNyraBackfillDone = false;
+    selectedEntriesRace = null;
     $("entriesBody").innerHTML = `<div class="log-empty">Loading…</div>`;
     renderLogTable();
     loadWeatherLog().then(entries => {
@@ -6282,6 +6431,16 @@
 
   $("refreshBtn").addEventListener("click", fetchWeather);
   $("forecastSlider").addEventListener("input", (e) => applyForecastStep(+e.target.value));
+
+  // Delegated on the container (not the tab buttons themselves) since
+  // renderEntriesPage() rebuilds this innerHTML on every refresh — a
+  // click just switches which cached race renders, no re-fetch.
+  $("entriesBody").addEventListener("click", (e) => {
+    const btn = e.target.closest(".entries-race-tab");
+    if (!btn) return;
+    selectedEntriesRace = Number(btn.dataset.race);
+    renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+  });
 
   // Open-Meteo's "current" rain reading is a short-term model nowcast, not a
   // live radar/gauge observation — it can miss fast-moving, highly localized
