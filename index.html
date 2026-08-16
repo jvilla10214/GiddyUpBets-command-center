@@ -5126,7 +5126,7 @@
   function buildAiRacingSummary(ctx){
     const {
       speed, dir, windTrend, forecastSteps, dirtLabel, turfLabel, trackTrendInfo, rainToday, rainRate,
-      apparentTemp, cloudCover, aqi, tide, rainOutlook,
+      apparentTemp, humidity, cloudCover, aqi, tide, rainOutlook,
     } = ctx;
     if (speed == null || dir == null || !dirtLabel || !turfLabel || !trackTrendInfo){
       return "Waiting on live conditions to generate a summary.";
@@ -5252,6 +5252,26 @@
       }
     }
 
+    // ---- Cold vs. muscle stiffness (why: cold muscles are less pliable —
+    // same "affects every horse, not a running-style claim" framing as heat
+    // above; less pliability reads as reduced power/flexibility and a
+    // higher strain/sprain risk rather than favoring one shape). ----
+    if (apparentTemp != null){
+      if (apparentTemp <= 25){
+        sentences.push(`At a feels-like of ${Math.round(apparentTemp)}°F, cold is a real factor today — stiffer, less pliable muscles than normal mean more strain/sprain risk and a wider range of trips, and it's worth watching how horses handle the extended post parade.`);
+      } else if (apparentTemp <= 40){
+        sentences.push(`With a feels-like temperature around ${Math.round(apparentTemp)}°F, cool conditions can leave muscles less loose than usual — worth a longer look at how each horse warms up.`);
+      }
+    }
+
+    // ---- Humidity vs. stamina (why: humid air makes evaporative cooling
+    // less effective, straining a horse's breathing and stamina even on a
+    // day that isn't especially hot — independent of the heat check above,
+    // though the two compound when they land together). ----
+    if (humidity != null && humidity >= 80){
+      sentences.push(`Humidity is running high today (${Math.round(humidity)}%) — harder for horses to cool themselves through sweat, which can compound whatever heat is already doing to stamina late.`);
+    }
+
     // ---- Air quality (why: poor air adds respiratory effort for horses and
     // riders) — only surfaced when it's actually notable (Moderate/Good, the
     // vast majority of days, isn't worth a sentence). ----
@@ -5285,8 +5305,21 @@
   // outsideClosers is always exactly 10 - insideSpeed (not independently
   // derived) so the badge reads as one coherent lean rather than two numbers
   // that could ambiguously both look high or low at once.
+  //
+  // Heat/cold/humidity note: buildAiRacingSummary()'s own heat sentence is
+  // deliberately framed as "saps every horse's stamina rather than favoring
+  // one shape" — heat was kept OFF this directional axis on purpose. Cold
+  // and humidity (added after reading arioneo.com's piece on weather vs.
+  // racehorse performance — general muscle-stiffness/stamina/breathing
+  // effects, not a running-style claim either) share that same property:
+  // nothing in that source, or in the original wind/dirt reasoning below,
+  // says which running style extreme heat/cold/humidity favors. The push
+  // below is this app's own extrapolation (sustained late effort likely
+  // suffers more than a short burst, same shape as the wet-track logic) —
+  // explicitly the least certain signal in this formula, kept small on
+  // purpose, and worth removing if it turns out not to track reality.
   function computeBiasPredictorScore(ctx){
-    const { speed, dir, dirtLabel, tide } = ctx;
+    const { speed, dir, dirtLabel, tide, apparentTemp, humidity } = ctx;
     if (speed == null || dir == null) return null;
     let score = 5; // neutral
     // Sum of |each adjustment| applied, regardless of direction — lets
@@ -5311,6 +5344,10 @@
 
     if (tide?.label === "Low"){ score += 1.5; totalPush += 1.5; } // Del Mar only — "golden rail" language already in AI summary
     else if (tide?.label === "High"){ score -= 1.5; totalPush += 1.5; }
+
+    const PUSH_STAMINA = 0.5; // deliberately small — see the note above this function
+    if (apparentTemp != null && (apparentTemp >= 90 || apparentTemp <= 40)){ score += PUSH_STAMINA; totalPush += PUSH_STAMINA; }
+    if (humidity != null && humidity >= 80){ score += PUSH_STAMINA; totalPush += PUSH_STAMINA; }
 
     score = Math.max(0, Math.min(10, score));
     return { insideSpeed: score, outsideClosers: 10 - score, totalPush };
@@ -5916,6 +5953,7 @@
       rainToday,
       rainRate,
       apparentTemp: c.apparent_temperature,
+      humidity: c.relative_humidity_2m,
       cloudCover: c.cloud_cover,
       aqi: lastAqi,
       tide: lastTide,
