@@ -1881,14 +1881,6 @@
       </svg>
       Stable Tour
     </button>
-    <button type="button" class="sidebar-btn" data-page="howto">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9"/>
-        <path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 2-2.4 3.7"/>
-        <path d="M12 17h.01"/>
-      </svg>
-      How To Use the Grid
-    </button>
   </nav>
 
   <div class="page active" id="page-dashboard">
@@ -2413,15 +2405,6 @@
         Stable Tour entries are stored centrally on the configured Worker and shared with everyone using this
         site — not private to this browser.
       </div>
-    </div>
-  </div>
-
-  <div class="page" id="page-howto">
-    <div class="panel">
-      <div class="panel-title">
-        How To Use the Grid
-      </div>
-      <div class="log-empty">Content coming soon.</div>
     </div>
   </div>
 
@@ -6445,7 +6428,7 @@
   // Config-driven like LOG_TABS below — adding another sidebar page later
   // (e.g. the Calendar/archive page floated for future work) is just another
   // button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "news", "entries", "historical", "bias", "stable", "howto"];
+  const SIDEBAR_PAGES = ["dashboard", "news", "entries", "historical", "bias", "stable"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
