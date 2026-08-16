@@ -2453,10 +2453,11 @@
         <div class="log-empty">Loading…</div>
       </div>
       <div class="info-disclosure" id="entriesInfo">
-        Pulled live from NYRA's own entries page — post position, jockey, trainer, weight, morning-line odds,
-        and current odds for each horse on today's Saratoga card. Scratches and odds can change right up to
-        post time, so this is a snapshot from whenever the page last refreshed, not a live tote feed.
-        Saratoga only — no verified source is wired up for other tracks yet.
+        Pulled live from the track's own entries page (NYRA for Saratoga, DMTC for Del Mar) — post position,
+        jockey, trainer, weight, morning-line odds, and (where the source publishes it) current odds for each
+        horse on today's card. Scratches and odds can change right up to post time, so this is a snapshot from
+        whenever the page last refreshed, not a live tote feed. Only tracks with a verified source are wired up —
+        others show "not available" until one is added.
       </div>
     </div>
   </div>
@@ -2508,6 +2509,7 @@
       nyraCode: "SAR", scratchesUrl: null,
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
       tideStationId: null, tideRangeFt: null,
+      entriesSource: "nyra",
     },
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
@@ -2549,6 +2551,7 @@
       // from NOAA's published datums) — used to turn a raw water-level
       // reading into a 0-1 "how full is the tidal range" fraction.
       tideStationId: "9410230", tideRangeFt: 5.32,
+      entriesSource: "dmtc",
     },
     belmont: {
       id: "belmont", name: "Belmont Park", shortName: "Belmont",
@@ -3012,7 +3015,7 @@
 
   // Entries page state — which race's card is showing, and the last fetch's
   // results cached so clicking a race tab just re-renders instead of
-  // re-fetching. Reset on track switch (loadNyraEntries() re-picks a
+  // re-fetching. Reset on track switch (loadEntries() re-picks a
   // default once the new track's/day's races come back).
   let selectedEntriesRace = null;
   let lastEntriesDate = null;
@@ -3199,11 +3202,13 @@
     return Array.isArray(data.entries) ? data.entries : [];
   }
 
-  // Live entries + morning-line odds, scraped by the worker from NYRA's own
-  // entries page (see the worker's job #6 comment for the source/parsing
-  // approach). Saratoga only, same scope as NYRA Track Trends above.
-  async function nyraEntriesApiGet(track, date){
-    const res = await fetch(stableApiUrl(`/nyra-entries?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+  // Live entries + morning-line odds, scraped by the worker from each
+  // track's own entries page (see the worker's job #6 comment — one route,
+  // dispatches to a per-track source parser). Only tracks with a known
+  // source (activeTrack.entriesSource) are wired up; others get a "not
+  // available" state client-side (see loadEntries()).
+  async function entriesApiGet(track, date){
+    const res = await fetch(stableApiUrl(`/entries?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     return Array.isArray(data.races) ? data.races : [];
@@ -3343,28 +3348,32 @@
   }
 
   // ---------- Live Entries / morning-line odds ----------
-  // Saratoga only (see the worker's job #6 comment) — re-fetched every render
-  // tick like autoImportNyraTrends() above, no "done" flag, since odds and
-  // scratches change throughout the racing day and the worker's own 120s edge
-  // cache already keeps this from hammering NYRA.
-  async function loadNyraEntries(){
+  // Track-agnostic: whichever source is wired up for activeTrack (see the
+  // worker's job #6 comment). Re-fetched every render tick like
+  // autoImportNyraTrends() above, no "done" flag, since odds and scratches
+  // change throughout the racing day and the worker's own edge cache already
+  // keeps this from hammering the source site.
+  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM" };
+  async function loadEntries(){
     const entriesTag = $("entriesTag");
-    if (activeTrack.id !== "saratoga"){
-      $("entriesBody").innerHTML = `<div class="log-empty">Live entries are only wired up for Saratoga right now.</div>`;
+    const source = activeTrack.entriesSource;
+    const trackId = activeTrack.id;
+    if (!source){
+      $("entriesBody").innerHTML = `<div class="log-empty">Live entries aren't wired up for this track yet.</div>`;
       if (entriesTag) entriesTag.textContent = "NOT AVAILABLE";
       return;
     }
     const { date } = nowInTrackTZ();
     let races;
-    try{ races = await nyraEntriesApiGet("saratoga", date); }
+    try{ races = await entriesApiGet(trackId, date); }
     catch(err){
-      console.error("NYRA entries fetch failed", err);
+      console.error("Entries fetch failed", err);
       $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load today's entries — ${escapeHtml(err.message)}</div>`;
       if (entriesTag) entriesTag.textContent = "ERROR";
       return;
     }
-    if (activeTrack.id !== "saratoga") return; // stale — switched away while this was in flight
-    if (entriesTag) entriesTag.textContent = "LIVE · NYRA.COM";
+    if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+    if (entriesTag) entriesTag.textContent = `LIVE · ${ENTRIES_SOURCE_LABEL[source] ?? source.toUpperCase()}`;
     renderEntriesPage(date, races);
   }
 
@@ -3418,8 +3427,12 @@
     };
   }
 
+  // mtpLabel only exists for NYRA races, so it can't be the "next up" signal
+  // for a track like Del Mar that never provides one — this compares actual
+  // post times instead, which every source has.
   function pickDefaultEntriesRace(races){
-    const upcoming = races.find(r => r.mtpLabel != null); // hasn't gone off yet
+    const nowIso = nowInTrackTZIso();
+    const upcoming = races.find(r => r.postTimeIso && r.postTimeIso >= nowIso);
     return (upcoming || races[races.length - 1] || races[0])?.raceNumber ?? null;
   }
 
@@ -5757,6 +5770,22 @@
     return { date, hourPrefix: `${date}T${hour}` };
   }
 
+  // Full "YYYY-MM-DDTHH:MM:SS" in track-local wall time — same naive,
+  // no-offset shape as postTimeIso from either entries source, so lexical
+  // string comparison against it (pickDefaultEntriesRace() below) sorts
+  // correctly without ever constructing a Date object out of postTimeIso
+  // (which would parse it in the BROWSER's zone, not the track's, and give
+  // a wrong answer whenever those two zones differ).
+  function nowInTrackTZIso(){
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: activeTrack.timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(new Date());
+    const get = (type) => parts.find(p => p.type === type)?.value;
+    const hour = get('hour') === '24' ? '00' : get('hour');
+    return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}:${get('second')}`;
+  }
+
   function setWindVisuals(dirDeg, speed){
     $("windArrow").setAttribute("transform", `rotate(${dirDeg} 50 50)`);
     $("windSpeed").textContent = Math.round(speed ?? 0);
@@ -6257,7 +6286,7 @@
     maybeAutoLogYesterday(data);
     autoImportNyraTrends();
     backfillDailyLogFromNyra();
-    loadNyraEntries();
+    loadEntries();
   }
 
   function tickClock(){

@@ -60,14 +60,19 @@
 //    through this same open endpoint — see autoImportNyraTrends() client-side
 //    for how it protects manual entries from being overwritten by a re-scrape.
 //
-// 6. NYRA Entries / morning-line odds (GET /nyra-entries?track=saratoga&
-//    date=YYYY-MM-DD) — fetches every carded race for the given day from
-//    NYRA's own entries page and returns each horse's post position, jockey,
-//    trainer, weight, scratch status, current odds, and morning-line odds.
-//    Same CORS problem and fix as jobs #2/#4, and same Saratoga-only scope
-//    as job #4 (the only NYRA entries URL this app has verified). Read-only,
-//    no storage — the client fetches this fresh per page load rather than
-//    caching it in KV, since odds and scratches change throughout race day.
+// 6. Entries / morning-line odds (GET /entries?track=<id>&date=YYYY-MM-DD)
+//    — fetches every carded race for the given day from that track's own
+//    entries page and returns each horse's post position, jockey, trainer,
+//    weight, scratch status, current odds (where the source publishes it),
+//    and morning-line odds. Same CORS problem and fix as jobs #2/#4. One
+//    route, dispatched by ENTRIES_SOURCE_BY_TRACK to a per-track parser —
+//    fetchNyraEntriesDay() for NYRA tracks (Saratoga), fetchDmtcEntriesDay()
+//    for Del Mar — since each track's site has genuinely different markup.
+//    Only tracks in that map are supported; add one only after fetching and
+//    verifying its actual markup (same rule as every scrape in this file).
+//    Read-only, no storage — the client fetches this fresh per page load
+//    rather than caching it in KV, since odds and scratches change
+//    throughout race day.
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
@@ -371,16 +376,17 @@ async function handleRequest(request, env) {
       return json({ entries }, 200, { "Cache-Control": "public, max-age=3600" });
     }
 
-    if (url.pathname === "/nyra-entries" && request.method === "GET") {
-      const track = url.searchParams.get("track") || "saratoga";
+    if (url.pathname === "/entries" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "";
       const date = url.searchParams.get("date") || "";
-      if (!NYRA_ENTRIES_BASE[track]) return json({ error: "Not supported for this track" }, 400);
+      const source = ENTRIES_SOURCE_BY_TRACK[track];
+      if (!source) return json({ error: "Not supported for this track" }, 400);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
       let result;
       try {
-        result = await fetchNyraEntriesDay(track, date);
+        result = source === "nyra" ? await fetchNyraEntriesDay(track, date) : await fetchDmtcEntriesDay(date);
       } catch (err) {
-        return json({ error: `NYRA entries fetch failed: ${err.message}` }, 502);
+        return json({ error: `Entries fetch failed: ${err.message}` }, 502);
       }
       return json(result, 200, { "Cache-Control": "public, max-age=120" });
     }
@@ -685,9 +691,16 @@ function parseNyraTrackTrends(html) {
 // scratches. There's no single "whole day" fragment: each response embeds a
 // nav strip listing every race number carded that day (1..N), so the client
 // here fetches race=1 first, reads N off that nav, then fetches the rest in
-// parallel. Only Saratoga is wired up, same scope as NYRA Track Trends above
-// (the only NYRA entries URL this app has verified end-to-end).
+// parallel. Saratoga only — the only NYRA entries URL this app has verified
+// end-to-end (Belmont/Aqueduct likely share this same rdl/race/ shape but
+// that hasn't actually been checked).
 const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
+
+// Maps a track id to which entries scraper handles it — checked before
+// either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
+// here only once its source has actually been fetched and its markup
+// verified (same rule as every other scrape in this file).
+const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc" };
 
 // Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
 // matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
@@ -767,4 +780,126 @@ async function fetchNyraEntriesDay(track, date) {
   }
   races.sort((a, b) => a.raceNumber - b.raceNumber);
   return { date, races };
+}
+
+// ---------- Del Mar (DMTC) Entries parser ----------
+// Source verified directly: unlike NYRA, dmtc.com's whole-card entries page
+// (https://www.dmtc.com/racing/entries) is one plain server-rendered HTML
+// page with every race inline — no fragment endpoint, no per-race requests.
+// It also has no date parameter: it always shows whichever day's card DMTC
+// currently has up (confirmed via its own <meta description>, which states
+// the exact date in plain text), so a request for any other date just comes
+// back empty — there's no way to ask this source for a different day.
+// Each horse row is duplicated (a "hidden-xs"/desktop version and a
+// "visible-xs" mobile version of the same data) — only the desktop version
+// is parsed, and each row's silk-color <div> class increments per horse
+// (silk1, silk2, ...), which anchors the row-start regex below.
+// Scratches are NOT inline in the horse table (DMTC just omits them from
+// it) — instead each race has a separate "SCRATCHED: Name - Reason, ..."
+// line, parsed here and re-added to the horses array with scratched:true so
+// the client's existing NYRA-shaped rendering (struck-through row, SCR tag)
+// works unchanged. DMTC doesn't publish live tote odds anywhere on this
+// page, only morning line, so currentOdds is always null for this source.
+const DMTC_ENTRIES_URL = "https://www.dmtc.com/racing/entries";
+
+function dmtcCardDate(html) {
+  const m = html.match(/race entries for (\w+),\s*(\w+)\s+(\d{1,2})\w{0,2},\s*(\d{4})/i);
+  if (!m) return null;
+  const month = NYRA_MONTHS[m[2].toLowerCase()];
+  if (!month) return null;
+  return `${m[4]}-${String(month).padStart(2, "0")}-${String(parseInt(m[3], 10)).padStart(2, "0")}`;
+}
+
+// "2:00PM" + "2026-08-16" -> "2026-08-16T14:00:00", the same naive
+// "no offset, track-local wall clock" shape parseNyraRaceFragment() produces
+// for postTimeIso, so the client's weatherAtPostTime() works unchanged for
+// either source.
+function dmtcPostTimeToIso(date, label) {
+  const m = label && label.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const ampm = m[3].toUpperCase();
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return `${date}T${String(h).padStart(2, "0")}:${m[2]}:00`;
+}
+
+function parseDmtcRaceChunk(chunk, date) {
+  const headerMatch = chunk.match(/<div title="Race (\d+) Entries">/);
+  if (!headerMatch) return null;
+  const raceNumber = Number(headerMatch[1]);
+
+  const condMatch = chunk.match(/<div class="bold text-muted-dark">([\s\S]*?)<\/div>/);
+  let surface = null, distanceLabel = null, raceType = null, purse = null, postTimeLabel = null;
+  if (condMatch) {
+    const flat = decodeEntities(condMatch[1]).replace(/\s+/g, " ").trim();
+    const parts = flat.split(/\s\/\s/).map((s) => s.trim());
+    if (parts[0]) {
+      const sd = parts[0].split(",").map((s) => s.trim());
+      surface = sd[0] || null;
+      distanceLabel = sd.slice(1).join(", ") || null;
+    }
+    raceType = parts[1] || null;
+    const purseMatch = (parts[2] || "").match(/PURSE:\s*(.+)/i);
+    purse = purseMatch ? purseMatch[1].trim() : null;
+    const postMatch = (parts[3] || "").match(/POST TIME:\s*(.+)/i);
+    postTimeLabel = postMatch ? postMatch[1].trim() : null;
+  }
+
+  const horses = [];
+  const horseRe = /<div class="silk silk-lg silk\d+">\s*\d+\s*<\/div>[\s\S]*?<td class="text-center vertical-center">\s*(\S+)\s*<\/td>[\s\S]*?<div class="bigger"><strong>([^<]+)<\/strong><\/div>[\s\S]*?<td class="hidden-xs vertical-center">\s*([^<]*?)\s*<\/td>\s*<td class="hidden-xs vertical-center">\s*([^<]*?)\s*<\/td>\s*<td class="hidden-xs vertical-center text-center">\s*([^<]*?)\s*<\/td>\s*<td class="hidden-xs text-center vertical-center">\s*([^<]*?)\s*<\/td>\s*<td class="hidden-xs text-center vertical-center">\s*([^<]*?)\s*<\/td>/g;
+  let m;
+  while ((m = horseRe.exec(chunk))) {
+    const [, pp, name, jockey, trainer, med, wgt, ml] = m;
+    horses.push({
+      postPosition: decodeEntities(pp).trim() || null,
+      name: decodeEntities(name).trim(),
+      jockey: decodeEntities(jockey).trim() || null,
+      trainer: decodeEntities(trainer).trim() || null,
+      medication: decodeEntities(med).trim() || null,
+      weight: decodeEntities(wgt).trim() || null,
+      mlOdds: decodeEntities(ml).trim() || null,
+      scratched: false,
+      currentOdds: null,
+    });
+  }
+
+  const scrMatch = chunk.match(/SCRATCHED:\s*<\/strong>&nbsp;\s*([\s\S]*?)\s*<\/div>/);
+  if (scrMatch) {
+    const text = decodeEntities(scrMatch[1]).replace(/\s+/g, " ").trim();
+    text.split(",").forEach((part) => {
+      const nm = part.split(" - ")[0].trim();
+      if (nm) {
+        horses.push({
+          postPosition: null, name: nm, jockey: null, trainer: null,
+          medication: null, weight: null, mlOdds: null,
+          scratched: true, currentOdds: null,
+        });
+      }
+    });
+  }
+
+  return {
+    raceNumber, postTimeIso: dmtcPostTimeToIso(date, postTimeLabel), mtpLabel: null,
+    purse, raceType, distanceLabel, surface, horses,
+  };
+}
+
+function parseDmtcEntries(html, date) {
+  const cardDate = dmtcCardDate(html);
+  if (!cardDate || cardDate !== date) return { date, races: [] }; // not today's card — see file-level note above
+  const chunks = html.split(/(?=<div title="Race \d+ Entries">)/).filter((c) => /^<div title="Race \d+ Entries">/.test(c));
+  const races = chunks.map((c) => parseDmtcRaceChunk(c, date)).filter(Boolean);
+  races.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date, races };
+}
+
+async function fetchDmtcEntriesDay(date) {
+  const res = await fetch(DMTC_ENTRIES_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 120, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
+  const html = await res.text();
+  return parseDmtcEntries(html, date);
 }
