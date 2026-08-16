@@ -1247,6 +1247,49 @@
     font-family:'IBM Plex Mono', monospace;
     cursor: pointer;
   }
+
+  /* ---------- Today's Entries ---------- */
+  .entries-race-card{ margin-bottom: 22px; }
+  .entries-race-card:last-child{ margin-bottom: 0; }
+  .entries-race-header{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .entries-race-num{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 15px;
+    color: var(--parchment);
+  }
+  .entries-race-meta{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--parchment-dim);
+  }
+  .entries-race-mtp{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--tote-amber);
+    margin-left: auto;
+  }
+  .entries-horse-table td, .entries-horse-table th{ white-space: normal; }
+  .entries-scratched td{ color: var(--parchment-dim); text-decoration: line-through; }
+  .entries-scratched td:nth-child(5), .entries-scratched td:nth-child(6){ text-decoration: none; }
+  .ml-badge{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.12);
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+  .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
   .log-remove{ font-size: 14px; padding: 2px 4px; }
   .log-remove:hover{ color: var(--silk-red); }
   #historyAddBtn{
@@ -1761,6 +1804,15 @@
         <path d="M8 16h4"/>
       </svg>
       News Wire
+    </button>
+    <button type="button" class="sidebar-btn" data-page="entries">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/>
+        <path d="M7 9h10"/>
+        <path d="M7 13h10"/>
+        <path d="M7 17h6"/>
+      </svg>
+      Entries
     </button>
     <button type="button" class="sidebar-btn" data-page="historical">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2342,6 +2394,25 @@
       <div class="info-disclosure" id="newsWireDisclaimer">
         Pulled from DRF, TDN, America's Best Racing, BloodHorse, and Horse Racing Nation RSS feeds — general
         racing-industry news, not just Saratoga. Items mentioning Saratoga by name are flagged. Refreshes every 15 minutes.
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="page-entries">
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Today's Entries
+        <span class="tag" id="entriesTag">LOADING</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="entriesInfo" title="Why this works this way">ⓘ</button>
+      </div>
+      <div id="entriesBody">
+        <div class="log-empty">Loading…</div>
+      </div>
+      <div class="info-disclosure" id="entriesInfo">
+        Pulled live from NYRA's own entries page — post position, jockey, trainer, weight, morning-line odds,
+        and current odds for each horse on today's Saratoga card. Scratches and odds can change right up to
+        post time, so this is a snapshot from whenever the page last refreshed, not a live tote feed.
+        Saratoga only — no verified source is wired up for other tracks yet.
       </div>
     </div>
   </div>
@@ -3076,6 +3147,16 @@
     return Array.isArray(data.entries) ? data.entries : [];
   }
 
+  // Live entries + morning-line odds, scraped by the worker from NYRA's own
+  // entries page (see the worker's job #6 comment for the source/parsing
+  // approach). Saratoga only, same scope as NYRA Track Trends above.
+  async function nyraEntriesApiGet(track, date){
+    const res = await fetch(stableApiUrl(`/nyra-entries?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.races) ? data.races : [];
+  }
+
   // Backfills the whole page's history on first run, then just keeps up with
   // new days after that. Never touches a date that already has a real manual
   // entry (only overwrites dates that don't exist yet, or that this same
@@ -3207,6 +3288,71 @@
     } catch(err){
       console.error("Daily Log NYRA backfill failed to save", err);
     }
+  }
+
+  // ---------- Live Entries / morning-line odds ----------
+  // Saratoga only (see the worker's job #6 comment) — re-fetched every render
+  // tick like autoImportNyraTrends() above, no "done" flag, since odds and
+  // scratches change throughout the racing day and the worker's own 120s edge
+  // cache already keeps this from hammering NYRA.
+  async function loadNyraEntries(){
+    const entriesTag = $("entriesTag");
+    if (activeTrack.id !== "saratoga"){
+      $("entriesBody").innerHTML = `<div class="log-empty">Live entries are only wired up for Saratoga right now.</div>`;
+      if (entriesTag) entriesTag.textContent = "NOT AVAILABLE";
+      return;
+    }
+    const { date } = nowInTrackTZ();
+    let races;
+    try{ races = await nyraEntriesApiGet("saratoga", date); }
+    catch(err){
+      console.error("NYRA entries fetch failed", err);
+      $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load today's entries — ${escapeHtml(err.message)}</div>`;
+      if (entriesTag) entriesTag.textContent = "ERROR";
+      return;
+    }
+    if (activeTrack.id !== "saratoga") return; // stale — switched away while this was in flight
+    if (entriesTag) entriesTag.textContent = "LIVE · NYRA.COM";
+    renderEntriesPage(date, races);
+  }
+
+  function renderEntriesPage(date, races){
+    const body = $("entriesBody");
+    if (!races.length){
+      body.innerHTML = `<div class="log-empty">No races carded for Saratoga today (${escapeHtml(date)}).</div>`;
+      return;
+    }
+    body.innerHTML = races.map(race => {
+      const metaBits = [
+        [race.purse, race.raceType].filter(Boolean).join(" "),
+        [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
+      ].filter(Boolean);
+      const rows = race.horses.map(h => `
+        <tr class="${h.scratched ? "entries-scratched" : ""}">
+          <td>${escapeHtml(h.postPosition || "—")}</td>
+          <td>${escapeHtml(h.name || "—")}</td>
+          <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
+          <td>${escapeHtml(h.weight || "—")}</td>
+          <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
+          <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.currentOdds || "—")}</td>
+        </tr>
+      `).join("");
+      return `
+        <div class="entries-race-card">
+          <div class="entries-race-header">
+            <span class="entries-race-num">Race ${race.raceNumber}</span>
+            ${metaBits.map(bit => `<span class="entries-race-meta">${escapeHtml(bit)}</span>`).join("")}
+            ${race.mtpLabel ? `<span class="entries-race-mtp">${escapeHtml(race.mtpLabel)}</span>` : ""}
+          </div>
+          <div class="log-table-wrap">
+            <table class="log-table entries-horse-table">
+              <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }).join("");
   }
 
   // ---------- Bias auto-suggest from pasted results/chart text ----------
@@ -5963,6 +6109,7 @@
     maybeAutoLogYesterday(data);
     autoImportNyraTrends();
     backfillDailyLogFromNyra();
+    loadNyraEntries();
   }
 
   function tickClock(){
@@ -6086,6 +6233,7 @@
     weatherLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
     selectedLogMonth = null; // default back to this track's own current month, not whatever was being browsed before
     dailyLogNyraBackfillDone = false;
+    $("entriesBody").innerHTML = `<div class="log-empty">Loading…</div>`;
     renderLogTable();
     loadWeatherLog().then(entries => {
       if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
@@ -6119,7 +6267,7 @@
   // Config-driven like LOG_TABS below — adding another sidebar page later
   // (e.g. the Calendar/archive page floated for future work) is just another
   // button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "news", "historical", "bias", "stable", "howto"];
+  const SIDEBAR_PAGES = ["dashboard", "news", "entries", "historical", "bias", "stable", "howto"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);

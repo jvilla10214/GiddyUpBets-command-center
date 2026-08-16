@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stable Tour shared data + auto-import feed + weather log
 // -----------------------------------------------------------------------
-// Five jobs in one Worker:
+// Six jobs in one Worker:
 //
 // 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
 //    trainer/notes store so every visitor's browser reads and writes the
@@ -60,10 +60,19 @@
 //    through this same open endpoint — see autoImportNyraTrends() client-side
 //    for how it protects manual entries from being overwritten by a re-scrape.
 //
+// 6. NYRA Entries / morning-line odds (GET /nyra-entries?track=saratoga&
+//    date=YYYY-MM-DD) — fetches every carded race for the given day from
+//    NYRA's own entries page and returns each horse's post position, jockey,
+//    trainer, weight, scratch status, current odds, and morning-line odds.
+//    Same CORS problem and fix as jobs #2/#4, and same Saratoga-only scope
+//    as job #4 (the only NYRA entries URL this app has verified). Read-only,
+//    no storage — the client fetches this fresh per page load rather than
+//    caching it in KV, since odds and scratches change throughout race day.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, and #5 to work — jobs #2 and #4 (fetch-and-parse only, no
-// storage) work without it.
+// for jobs #1, #3, and #5 to work — jobs #2, #4, and #6 (fetch-and-parse
+// only, no storage) work without it.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -362,6 +371,20 @@ async function handleRequest(request, env) {
       return json({ entries }, 200, { "Cache-Control": "public, max-age=3600" });
     }
 
+    if (url.pathname === "/nyra-entries" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "saratoga";
+      const date = url.searchParams.get("date") || "";
+      if (!NYRA_ENTRIES_BASE[track]) return json({ error: "Not supported for this track" }, 400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
+      let result;
+      try {
+        result = await fetchNyraEntriesDay(track, date);
+      } catch (err) {
+        return json({ error: `NYRA entries fetch failed: ${err.message}` }, 502);
+      }
+      return json(result, 200, { "Cache-Control": "public, max-age=120" });
+    }
+
     // Falls through to the original feed-scrape behavior for GET / (and any
     // other unmatched path) — unchanged from before this shared-storage work.
     let feedRes;
@@ -582,7 +605,9 @@ function decodeEntities(str) {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&hellip;/g, "…")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)));
 }
 
 // ---------- NYRA Track Trends parser ----------
@@ -649,4 +674,97 @@ function parseNyraTrackTrends(html) {
     }
   }
   return entries;
+}
+
+// ---------- NYRA Entries / morning-line odds parser ----------
+// Source verified directly (not guessed): nyra.com's entries page is a thin
+// shell around an HTMX fragment endpoint, /<track>/rdl/race/?day=YYYY-MM-DD
+// &race=N&limit=entries, that server-renders ONE race's full field (post,
+// horse, jockey/trainer, weight, current odds, morning line) per request —
+// the same "internal fragment over full page" preference already used for
+// scratches. There's no single "whole day" fragment: each response embeds a
+// nav strip listing every race number carded that day (1..N), so the client
+// here fetches race=1 first, reads N off that nav, then fetches the rest in
+// parallel. Only Saratoga is wired up, same scope as NYRA Track Trends above
+// (the only NYRA entries URL this app has verified end-to-end).
+const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
+
+// Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
+// matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
+function maxRaceNumberFromNav(html) {
+  const nums = Array.from(html.matchAll(/race=(\d+)"/g)).map((m) => Number(m[1]));
+  return nums.length ? Math.max(...nums) : 1;
+}
+
+function parseNyraRaceFragment(html) {
+  const headerMatch = html.match(/font-heading">\s*Race\s*(\d+)\s*<\/header>/);
+  if (!headerMatch) return null;
+  const raceNumber = Number(headerMatch[1]);
+
+  const mtpMatch = html.match(/data-post-time="([^"]+)"[^>]*data-mtp-variant="[^"]*"[^>]*aria-label="[^"]*">([^<]*)<\/span>/);
+  const postTimeIso = mtpMatch ? mtpMatch[1] : null;
+  const mtpLabel = mtpMatch ? decodeEntities(mtpMatch[2]).trim() : null;
+
+  const purseMatch = html.match(/<section class="flex items-baseline gap-5">[\s\S]*?<div>\s*([\s\S]*?)\s*<\/div>\s*<\/section>/);
+  let purse = null, raceType = null;
+  if (purseMatch) {
+    const lines = purseMatch[1].split("\n").map((s) => decodeEntities(s).trim()).filter(Boolean);
+    purse = lines[0] || null;
+    raceType = lines.slice(1).join(" ") || null;
+  }
+
+  const distMatch = html.match(/title="([^"]+)">([^<]+)<\/div>\s*<div class="text-zinc-800 dark:text-white">\s*([\s\S]*?)\s*<\/div>/);
+  const distanceLabel = distMatch ? decodeEntities(distMatch[2]).trim() : null;
+  const surface = distMatch ? decodeEntities(distMatch[3]).trim() : null;
+
+  const horses = [];
+  const horseRe = /<div class="order-3 flex-1 leading-none"><div class="font-semibold text-lg lg:text-2xl -mt-1 mb-1 leading-tight blend-links"><a href="[^"]*"[^>]*>\s*([^<]+?)\s*<\/a><\/div><div class="text-zinc-800 dark:text-white">([^<]*)<\/div><div class="text-zinc-800 dark:text-white mt-1 text-xs lg:text-sm">([^<]*)<\/div><\/div><div class="order-1[^"]*"><div class="[^"]*">\s*([^<]*?)\s*<\/div><\/div><div class="order-5[^"]*"><div class="[^"]*" title="Current Odds">([^<]*)<\/div><div class="[^"]*" title="Morning Line Odds">\s*ML\s*([^<]*)<\/div>/g;
+  let m;
+  while ((m = horseRe.exec(html))) {
+    const [, nameRaw, jockeyTrainerRaw, weightRaw, postRaw, currentOddsRaw, mlOddsRaw] = m;
+    const [jockeyRaw, trainerRaw] = jockeyTrainerRaw.split("&bull;");
+    const [weightRawPart, medicationRaw, ageSexRaw] = weightRaw.split("&bull;");
+    const currentOdds = decodeEntities(currentOddsRaw).trim();
+    const scratched = currentOdds.toUpperCase() === "SCR";
+    horses.push({
+      postPosition: decodeEntities(postRaw).trim() || null,
+      name: decodeEntities(nameRaw).trim(),
+      jockey: jockeyRaw ? decodeEntities(jockeyRaw).trim() : null,
+      trainer: trainerRaw ? decodeEntities(trainerRaw).trim() : null,
+      weight: weightRawPart ? decodeEntities(weightRawPart).trim() : null,
+      medication: medicationRaw ? decodeEntities(medicationRaw).trim() : null,
+      ageSex: ageSexRaw ? decodeEntities(ageSexRaw).trim() : null,
+      scratched,
+      currentOdds: scratched ? null : (currentOdds || null),
+      mlOdds: decodeEntities(mlOddsRaw).trim() || null,
+    });
+  }
+
+  return { raceNumber, postTimeIso, mtpLabel, purse, raceType, distanceLabel, surface, horses };
+}
+
+async function fetchNyraEntriesDay(track, date) {
+  const base = NYRA_ENTRIES_BASE[track];
+  const fetchRace = async (n) => {
+    const res = await fetch(`${base}/rdl/race/?day=${date}&limit=entries&race=${n}`, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 120, cacheEverything: true },
+    });
+    if (!res.ok) return { html: null, race: null };
+    const html = await res.text();
+    return { html, race: parseNyraRaceFragment(html) };
+  };
+
+  const first = await fetchRace(1);
+  const raceCount = first.html ? maxRaceNumberFromNav(first.html) : 1;
+  const races = first.race ? [first.race] : [];
+
+  if (raceCount > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: raceCount - 1 }, (_, i) => i + 2).map((n) => fetchRace(n).catch(() => ({ race: null })))
+    );
+    for (const { race } of rest) if (race) races.push(race);
+  }
+  races.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date, races };
 }
