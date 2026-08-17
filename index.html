@@ -2124,6 +2124,21 @@
       </div>
     </div>
 
+    <div class="tile tile-rain" id="rainTile">
+      <div>
+        <div class="tlabel">Rainfall</div>
+        <div class="rain-tab-toggle">
+          <button type="button" class="rain-tab-btn active" data-window="today">Today</button>
+          <button type="button" class="rain-tab-btn" data-window="6h">6h</button>
+          <button type="button" class="rain-tab-btn" data-window="24h">24h</button>
+          <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
+        </div>
+        <div class="tsub" id="rainRate">Current rate —</div>
+        <div class="tsub" id="rainTodayOutlook" hidden>—</div>
+      </div>
+      <div class="tvalue"><span id="rainTotal">—</span><span class="tunit">in</span></div>
+    </div>
+
     <div class="ticker-panel">
       <div class="panel-title">Next 3 Days</div>
       <div class="forecast3-grid" id="forecast3Grid">
@@ -2152,21 +2167,6 @@
         <div class="tsub" id="tideState">—</div>
       </div>
       <div class="tvalue"><span id="tideHeight">—</span><span class="tunit">ft</span></div>
-    </div>
-
-    <div class="tile tile-rain" id="rainTile">
-      <div>
-        <div class="tlabel">Rainfall</div>
-        <div class="rain-tab-toggle">
-          <button type="button" class="rain-tab-btn active" data-window="today">Today</button>
-          <button type="button" class="rain-tab-btn" data-window="6h">6h</button>
-          <button type="button" class="rain-tab-btn" data-window="24h">24h</button>
-          <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
-        </div>
-        <div class="tsub" id="rainRate">Current rate —</div>
-        <div class="tsub" id="rainTodayOutlook" hidden>—</div>
-      </div>
-      <div class="tvalue"><span id="rainTotal">—</span><span class="tunit">in</span></div>
     </div>
 
     <div class="tile">
