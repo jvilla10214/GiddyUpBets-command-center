@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stable Tour shared data + auto-import feed + weather log
 // -----------------------------------------------------------------------
-// Six jobs in one Worker:
+// Seven jobs in one Worker:
 //
 // 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
 //    trainer/notes store so every visitor's browser reads and writes the
@@ -80,9 +80,18 @@
 //    rather than caching it in KV, since odds and scratches change
 //    throughout race day.
 //
+// 7. TDN Saratoga Notebook (GET /tdn-notebook) — fetches TDN's dedicated
+//    Saratoga Notebook tag feed and, for each article, splits it into
+//    per-trainer sections with the horse names mentioned in each (see
+//    fetchTdnNotebook()'s comment for how — this source covers multiple
+//    trainers per article, unlike job #2's one-trainer-per-article shape).
+//    Read-only, no storage, same reasoning as job #6. The client is the one
+//    that checks a detected trainer against its own tracked list and files
+//    notes — this endpoint never adds a new trainer on its own.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, and #5 to work — jobs #2, #4, and #6 (fetch-and-parse
+// for jobs #1, #3, and #5 to work — jobs #2, #4, #6, and #7 (fetch-and-parse
 // only, no storage) work without it.
 // -----------------------------------------------------------------------
 
@@ -362,6 +371,16 @@ async function handleRequest(request, env) {
       const entries = (await readBiasLog(env, track)).filter(e => e.date !== date);
       await env.STABLE_KV.put(biasLogKvKey(track), JSON.stringify(entries));
       return json({ entries }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/tdn-notebook" && request.method === "GET") {
+      let result;
+      try {
+        result = await fetchTdnNotebook();
+      } catch (err) {
+        return json({ error: `TDN Notebook fetch failed: ${err.message}` }, 502);
+      }
+      return json(result, 200, { "Cache-Control": "public, max-age=900" });
     }
 
     if (url.pathname === "/nyra-trends" && request.method === "GET") {
@@ -1018,4 +1037,99 @@ async function fetchMonmouthEntriesDay(date) {
   if (!res.ok) throw new Error(`Monmouth returned HTTP ${res.status}`);
   const html = await res.text();
   return parseMonmouthEntries(html, date);
+}
+
+// ---------- TDN Saratoga Notebook parser ----------
+// Source verified directly: unlike thisishorseracing.com's Stable Tour
+// pieces (job #2 above — one trainer per article, clean per-horse markers),
+// TDN's "Saratoga Notebook, presented by NYRA Bets" series is real
+// journalism prose that often covers SEVERAL trainers in one article,
+// sequentially — one blurb per trainer, no clean section headings. Two
+// structural signals still make this parseable without real NLP, both
+// checked against a real 3-trainer article before writing this: (1) each
+// blurb reliably opens with a "trainer [Name]" mention, so paragraphs from
+// one such mention up to the next belong to that trainer; (2) horse names
+// are consistently wrapped in <strong> within the article body (the only
+// other <strong> usage found — the byline — sits outside the articleBody
+// span and so never reaches this parser). A Notebook piece that never
+// literally says "trainer [Name]" near a blurb's start won't be picked up;
+// that's a known, accepted gap, not a bug.
+//
+// This returns raw per-section structure only (the trainer name as
+// detected in the prose, horse names, paragraph text) — same "worker
+// extracts, client interprets" split as everything else in this file. The
+// client decides whether a detected name matches a trainer it's already
+// tracking; this endpoint doesn't know or care about that, and (unlike job
+// #2) never asks the client to track a NEW trainer it hasn't already added.
+const TDN_NOTEBOOK_FEED_URL = "https://www.thoroughbreddailynews.com/tag/saratoga-notebook/feed/";
+
+function extractTdnArticleBody(html) {
+  const start = html.indexOf('itemprop="articleBody"');
+  if (start === -1) return "";
+  const openEnd = html.indexOf(">", start) + 1;
+  const close = html.indexOf("</span>", openEnd);
+  return close === -1 ? html.slice(openEnd) : html.slice(openEnd, close);
+}
+
+function extractTdnSections(bodyHtml) {
+  const sections = [];
+  let current = null;
+  for (const m of bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)) {
+    const inner = m[1];
+    const plain = decodeEntities(inner.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    if (!plain) continue;
+
+    // No "." in the name char class on purpose (verified the hard way): it let a
+    // sentence-ending period ("trainer Linda Rice. During...") glue onto the next
+    // sentence's capitalized word as a false second name token ("Rice. During").
+    // Trade-off: a trainer credited with a period-bearing initial ("H. Graham
+    // Motion") won't capture past the initial — accepted, matches this file's
+    // "good enough for a known source" bar rather than full name-parsing.
+    const trainerMatch = inner.match(/\b[Tt]rainer\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/);
+    if (trainerMatch) {
+      current = { trainerName: trainerMatch[1].trim(), horseNames: [], paragraphs: [] };
+      sections.push(current);
+    }
+    if (!current) continue; // prose before any detected trainer mention — nothing to attach it to
+
+    current.paragraphs.push(plain);
+    for (const sm of inner.matchAll(/<strong>([^<]{2,50})<\/strong>/g)) {
+      const name = decodeEntities(sm[1]).trim();
+      if (isShortName(name) && !current.horseNames.includes(name)) current.horseNames.push(name);
+    }
+  }
+  return sections
+    .filter((s) => s.horseNames.length)
+    .map((s) => ({ trainerName: s.trainerName, horseNames: s.horseNames, text: s.paragraphs.join(" ").slice(0, 1500) }));
+}
+
+async function fetchTdnNotebook() {
+  const feedRes = await fetch(TDN_NOTEBOOK_FEED_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 900, cacheEverything: true },
+  });
+  if (!feedRes.ok) throw new Error(`TDN feed returned HTTP ${feedRes.status}`);
+  const feedXml = await feedRes.text();
+  const items = parseFeedItems(feedXml).slice(0, MAX_ARTICLES_PER_RUN);
+
+  const articles = [];
+  for (const item of items) {
+    let articleRes;
+    try {
+      articleRes = await fetch(item.link, {
+        headers: { "User-Agent": BROWSER_UA },
+        cf: { cacheTtl: 3600, cacheEverything: true },
+      });
+    } catch (err) {
+      continue; // skip this one article, don't fail the whole batch
+    }
+    if (!articleRes.ok) continue;
+
+    const html = await articleRes.text();
+    const sections = extractTdnSections(extractTdnArticleBody(html));
+    if (!sections.length) continue;
+    articles.push({ guid: item.guid || item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
+  }
+
+  return { source: TDN_NOTEBOOK_FEED_URL, fetchedAt: new Date().toISOString(), articles };
 }

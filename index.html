@@ -2404,6 +2404,11 @@
         <br><br>
         Stable Tour entries are stored centrally on the configured Worker and shared with everyone using this
         site — not private to this browser.
+        <br><br>
+        Also auto-imports from two sources, both scoped to trainers you've already added (neither one adds a new
+        trainer on its own): thisishorseracing.com's Stable Tour series, and TDN's Saratoga Notebook — the latter
+        only picks up an article when it both names a tracked trainer and bolds the horse's name, so coverage is
+        partial by design rather than guessed at.
       </div>
     </div>
   </div>
@@ -4694,6 +4699,78 @@
     }
   }
 
+  // ---------- TDN Saratoga Notebook auto-import ----------
+  // Same shared-storage/passphrase model as fetchStableTourFeed() above, but
+  // scoped differently: this NEVER adds a new trainer (see the worker's job
+  // #7 comment for why a "trainer NAME" mention in prose isn't reliable
+  // enough to trust for that) — it only files notes under trainers already
+  // in stableTrainers. Also unlike that function, coverage here is
+  // partial by design: TDN doesn't bold horse names in every Notebook
+  // article (verified against several real ones — roughly half do, half
+  // don't), and an article that doesn't gets zero sections back from the
+  // worker, silently skipped rather than guessed at.
+  const STABLE_TDN_SEEN_KEY = "giddyupbets_stable_tdn_seen_v1";
+  function loadStableTdnSeen(){
+    try { return new Set(JSON.parse(localStorage.getItem(STABLE_TDN_SEEN_KEY)) ?? []); }
+    catch { return new Set(); }
+  }
+  function saveStableTdnSeen(){
+    try { localStorage.setItem(STABLE_TDN_SEEN_KEY, JSON.stringify([...stableTdnSeen])); }
+    catch(err){ console.error("Stable TDN-seen failed to save", err); }
+  }
+  let stableTdnSeen = loadStableTdnSeen();
+
+  // A detected section's trainerName ("Chad Brown") is matched against each
+  // tracked trainer by last name only — tracked entries are free-text
+  // ("Chad C. Brown", "W. Bret Calhoun") and normalizeTrainerName() only
+  // strips suffixes/initials, not guaranteed to produce an exact string
+  // match, so last-name comparison is the more forgiving, reliable check.
+  function trainerLastName(name){
+    const parts = name.trim().split(/\s+/);
+    return parts[parts.length - 1].toLowerCase();
+  }
+
+  async function autoImportTdnNotebook(){
+    if (!stableTrainers.length) return; // nothing to match against
+    let data;
+    try{ data = await stableApiGet("/tdn-notebook"); }
+    catch(err){ console.error("TDN Saratoga Notebook fetch failed", err); return; }
+
+    const noteItems = [];
+    for (const article of data.articles || []){
+      for (const section of article.sections || []){
+        const matchedTrainer = stableTrainers.find(t => trainerLastName(t) === trainerLastName(section.trainerName));
+        if (!matchedTrainer) continue;
+        for (const horseName of section.horseNames || []){
+          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
+          if (stableTdnSeen.has(seenKey)) continue;
+          noteItems.push({
+            trainer: matchedTrainer,
+            horse: horseName,
+            note: section.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+          });
+          stableTdnSeen.add(seenKey);
+        }
+      }
+    }
+    if (!noteItems.length) return;
+
+    try{
+      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems }); // one write for the whole batch — see /notes/bulk's own comment on KV write quota
+      saveStableTdnSeen();
+      const fresh = await loadStableData();
+      stableTrainers = fresh.trainers;
+      stableNotes = fresh.notes;
+      renderStableTour();
+    } catch(err){
+      console.error("TDN Saratoga Notebook import failed to save", err);
+    }
+  }
+
   $("stableFeedSaveBtn").addEventListener("click", () => {
     const url = $("stableFeedUrlInput").value.trim();
     const key = $("stableApiKeyInput").value;
@@ -4701,21 +4778,28 @@
     saveStableApiKey(key);
     $("stableFeedStatus").textContent = "Saved — click Check Now to fetch.";
     fetchStableTourFeed();
+    autoImportTdnNotebook();
   });
-  $("stableFeedCheckBtn").addEventListener("click", fetchStableTourFeed);
+  $("stableFeedCheckBtn").addEventListener("click", () => {
+    fetchStableTourFeed();
+    autoImportTdnNotebook();
+  });
   // Auto-import "seen" tracking lives in THIS browser's localStorage (per
   // device, deliberately not moved to the shared backend) so it survives
   // switching Worker URLs — but that means moving Stable Tour to a fresh
   // shared store (or pointing at a different Worker) leaves this device
   // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs both auto-import checks.
+  // This clears that local memory and re-runs all three auto-import checks.
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
     stableSeenArticles = [];
     saveStableSeenArticles();
     stableNewsSeen = new Set();
     saveStableNewsSeen();
+    stableTdnSeen = new Set();
+    saveStableTdnSeen();
     $("stableFeedStatus").textContent = "Import history cleared — checking now…";
     fetchStableTourFeed();
+    autoImportTdnNotebook();
     fetchNewsWire();
   });
 
@@ -5258,6 +5342,11 @@
     if (!stableTrainers.length) return;
     let added = false;
     for (const item of items){
+      // TDN's Saratoga Notebook articles get their own dedicated, structured
+      // import (autoImportTdnNotebook() — per-horse notes, not this
+      // function's "whole headline as the horse name" fallback) — skip them
+      // here so a mention doesn't also file a second, cruder note.
+      if (/^saratoga notebook/i.test(item.title)) continue;
       const bodyText = stripHtml(item.body);
       const haystack = `${item.title} ${bodyText}`;
       for (const trainer of stableTrainers){
@@ -6574,8 +6663,10 @@
     stableNotes = data.notes;
     renderStableTour();
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
+    autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
+  setInterval(autoImportTdnNotebook, 60 * 60 * 1000); // same cadence, separate interval so one source's hiccup can't block the other
 
   // Refresh from the shared source periodically and whenever the tab
   // regains focus, so a friend's changes on another device show up without
