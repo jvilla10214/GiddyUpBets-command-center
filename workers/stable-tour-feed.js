@@ -89,10 +89,20 @@
 //    that checks a detected trainer against its own tracked list and files
 //    notes — this endpoint never adds a new trainer on its own.
 //
+// 8. Rain Nowcast (GET /pirate-minutely?lat=<lat>&lon=<lon>) — proxies
+//    Pirate Weather's minutely block (per-minute precipIntensity,
+//    precipProbability, precipType for the next ~60 minutes; blends
+//    short-range models with radar) using the PIRATE_WEATHER_API_KEY
+//    secret, which never reaches the client. Thin proxy only — no
+//    threshold/classification logic here, same "worker extracts, client
+//    interprets" split as every other job. Read-only, no storage.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, and #5 to work — jobs #2, #4, #6, and #7 (fetch-and-parse
-// only, no storage) work without it.
+// for jobs #1, #3, and #5 to work — jobs #2, #4, #6, #7, and #8
+// (fetch-and-parse only, no storage) work without it. Job #8 additionally
+// requires a PIRATE_WEATHER_API_KEY secret (Worker settings -> Variables and
+// Secrets -> Add, type "Secret") — get a free key at pirateweather.net.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -381,6 +391,30 @@ async function handleRequest(request, env) {
         return json({ error: `TDN Notebook fetch failed: ${err.message}` }, 502);
       }
       return json(result, 200, { "Cache-Control": "public, max-age=900" });
+    }
+
+    if (url.pathname === "/pirate-minutely" && request.method === "GET") {
+      const lat = url.searchParams.get("lat");
+      const lon = url.searchParams.get("lon");
+      if (!lat || !lon) return json({ error: "Missing lat/lon" }, 400);
+      if (!env.PIRATE_WEATHER_API_KEY) return json({ error: "Pirate Weather API key not configured" }, 500);
+      const apiUrl = `https://api.pirateweather.net/forecast/${env.PIRATE_WEATHER_API_KEY}/${lat},${lon}` +
+        `?exclude=currently,hourly,daily,alerts,flags&units=us`;
+      let pwRes;
+      try {
+        pwRes = await fetch(apiUrl, { cf: { cacheTtl: 60, cacheEverything: true } });
+      } catch (err) {
+        return json({ error: `Pirate Weather fetch failed: ${err.message}` }, 502);
+      }
+      if (!pwRes.ok) return json({ error: `Pirate Weather returned HTTP ${pwRes.status}` }, 502);
+      const pwData = await pwRes.json();
+      const minutely = (pwData.minutely?.data || []).map((m) => ({
+        time: m.time,
+        precipIntensity: m.precipIntensity ?? 0,
+        precipProbability: m.precipProbability ?? 0,
+        precipType: m.precipType || "none",
+      }));
+      return json({ generatedAt: new Date().toISOString(), minutely }, 200, { "Cache-Control": "public, max-age=60" });
     }
 
     if (url.pathname === "/nyra-trends" && request.method === "GET") {

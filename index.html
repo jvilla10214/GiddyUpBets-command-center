@@ -613,6 +613,33 @@
     line-height: 1.5;
   }
 
+  /* ---------- Rain Nowcast ---------- */
+  .rain-nowcast-panel{ display: block; }
+  .rain-nowcast-headline{
+    font-family:'Oswald', sans-serif;
+    font-size: 16px;
+    color: var(--parchment);
+    margin-bottom: 6px;
+  }
+  .rain-nowcast-detail{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--parchment-dim);
+  }
+  .rain-nowcast-detail-dim{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+  .rain-intensity-light{ background: rgba(111,168,201,0.15); color: var(--sky); }
+  .rain-intensity-moderate{ background: rgba(240,180,41,0.12); color: var(--tote-amber); }
+  .rain-intensity-heavy{ background: rgba(224,82,82,0.12); color: #e05252; }
+
   /* ---------- Racing News Wire ---------- */
   .news-wire-list{
     display:flex;
@@ -2184,6 +2211,23 @@
       </div>
       <div class="futurecast-readout" id="radarModeReadout">
         Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.
+      </div>
+    </div>
+
+    <div class="tile rain-nowcast-panel" id="rainNowcastPanel">
+      <div class="panel-title" style="margin-bottom:10px;">
+        Rain Nowcast
+        <span class="tag" id="rainNowcastTag">LOADING</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="rainNowcastInfo" title="Why this works this way">ⓘ</button>
+      </div>
+      <div id="rainNowcastBody">
+        <div class="log-empty">Loading…</div>
+      </div>
+      <div class="info-disclosure" id="rainNowcastInfo">
+        Short-range estimate from Pirate Weather's per-minute nowcast (blends short-range models with radar) —
+        not a guarantee, especially for fast-forming summer storms that can spin up faster than any model
+        catches. Beyond the next hour, this falls back to the site's own longer-range forecast data, clearly
+        lower-confidence and without per-minute detail.
       </div>
     </div>
   </div>
@@ -5180,6 +5224,139 @@
     }
   }
 
+  // ---------- Rain Nowcast ----------
+  // Short-range ("next hour") rain start/intensity/duration estimate from
+  // Pirate Weather's minutely block (per-minute precipIntensity/
+  // precipProbability for ~60 minutes, blending short-range models with
+  // radar-based nowcasting) — a different, much finer-grained data source
+  // than the Open-Meteo hourly/minutely_15 data the rest of this app uses.
+  // The Worker only proxies the raw per-minute array (the API key never
+  // reaches the client); all the threshold/classification logic below is
+  // this app's own interpretation of it.
+  const RAIN_START_INTENSITY = 0.02; // in/hr — a "real signal, not trace/noise" floor.
+  // NOT an NWS number — NWS only defines the light/moderate/heavy bands
+  // below, not a start-detection threshold, so this is a judgment call.
+  const RAIN_START_PROBABILITY = 0.3; // 30% confidence floor, same reasoning.
+  const RAIN_LIGHT_MAX = 0.1; // in/hr — NWS light-rain ceiling (also the "has it stopped" floor for duration).
+  const RAIN_MODERATE_MAX = 0.3; // in/hr — NWS moderate-rain ceiling; above this is heavy.
+  const RAIN_SCAN_MINUTES = 55; // stays inside the ~60-min minutely array with a safety margin.
+
+  async function pirateMinutelyApiGet(lat, lon){
+    const res = await fetch(stableApiUrl(`/pirate-minutely?lat=${lat}&lon=${lon}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.minutely) ? data.minutely : [];
+  }
+
+  // Pure function over the minutely array — kept separate from rendering so
+  // the logic itself is easy to reason about in isolation.
+  function analyzeRainNowcast(minutely){
+    if (!minutely || !minutely.length) return { detected: false };
+
+    let startIdx = -1;
+    const scanEnd = Math.min(minutely.length, RAIN_SCAN_MINUTES + 1);
+    for (let i = 0; i < scanEnd; i++){
+      const m = minutely[i];
+      if ((m.precipIntensity ?? 0) >= RAIN_START_INTENSITY && (m.precipProbability ?? 0) >= RAIN_START_PROBABILITY){
+        startIdx = i;
+        break;
+      }
+    }
+    if (startIdx === -1) return { detected: false };
+
+    // Duration: scan forward from the start until 2 consecutive minutes both
+    // drop back under the START floor (not the light/moderate classification
+    // ceiling — light rain, by definition, already sits below that ceiling
+    // the whole time it's falling, which would falsely end every light-rain
+    // event at minute 0; verified this the hard way against synthetic data
+    // before catching it). If the 60-minute window runs out first, this is
+    // left open-ended rather than asserting a duration the data doesn't
+    // actually support.
+    let endIdx = minutely.length;
+    for (let i = startIdx; i < minutely.length - 1; i++){
+      if (minutely[i].precipIntensity < RAIN_START_INTENSITY && minutely[i + 1].precipIntensity < RAIN_START_INTENSITY){
+        endIdx = i;
+        break;
+      }
+    }
+    const openEnded = endIdx >= minutely.length;
+    const windowVals = minutely.slice(startIdx, endIdx).map(m => m.precipIntensity ?? 0);
+    const peak = windowVals.length ? Math.max(...windowVals) : (minutely[startIdx].precipIntensity ?? 0);
+    const intensity = peak > RAIN_MODERATE_MAX ? "heavy" : peak > RAIN_LIGHT_MAX ? "moderate" : "light";
+
+    return {
+      detected: true,
+      startMinutes: Math.round(startIdx / 5) * 5, // "don't imply more precision than the data supports"
+      intensity,
+      durationMinutes: endIdx - startIdx,
+      openEnded,
+    };
+  }
+
+  // Step 7's fallback: beyond the ~60-minute Pirate Weather window, look at
+  // the site's own Open-Meteo minutely_15 data (already fetched every
+  // refresh for the forecast scrubber) for the next 15-min interval with
+  // measurable precipitation. No probability field exists at this
+  // resolution, so this can only say "rain looks possible around <time>",
+  // never classify intensity — deliberately vaguer, to match how much less
+  // this data source actually knows at that range.
+  function analyzeLongerRangeOutlook(){
+    const m = lastWeatherData?.minutely_15;
+    if (!m?.time?.length) return null;
+    const nowMs = Date.now();
+    const startIdx = m.time.findIndex(t => new Date(t).getTime() > nowMs);
+    if (startIdx < 0) return null;
+    const beyondIdx = startIdx + 4; // ~60 minutes further out, at 15-min spacing
+    for (let i = beyondIdx; i < m.time.length; i++){
+      if ((m.precipitation?.[i] ?? 0) >= 0.01){
+        return { atLabel: formatPostTimeLabel(m.time[i]) };
+      }
+    }
+    return null;
+  }
+
+  function renderRainNowcast(result){
+    const body = $("rainNowcastBody");
+    if (!result.detected){
+      const longer = analyzeLongerRangeOutlook();
+      body.innerHTML = `
+        <div class="rain-nowcast-headline">No rain expected in the next hour</div>
+        ${longer
+          ? `<div class="rain-nowcast-detail-dim">Beyond that (lower-confidence, longer-range): rain looks possible around ${escapeHtml(longer.atLabel)}.</div>`
+          : ""}
+      `;
+      return;
+    }
+    const whenLabel = result.startMinutes <= 0 ? "now" : `in ~${result.startMinutes} minutes`;
+    const durationLabel = result.openEnded
+      ? `~${result.durationMinutes}+ min (continuing past the forecast window)`
+      : `~${result.durationMinutes} min`;
+    body.innerHTML = `
+      <div class="rain-nowcast-headline">Rain expected ${whenLabel}</div>
+      <div class="rain-nowcast-detail">
+        <span class="tag rain-intensity-${result.intensity}">${result.intensity.toUpperCase()}</span>
+        <span>${escapeHtml(durationLabel)}</span>
+      </div>
+    `;
+  }
+
+  async function loadRainNowcast(){
+    const tag = $("rainNowcastTag");
+    const trackId = activeTrack.id;
+    let minutely;
+    try{ minutely = await pirateMinutelyApiGet(activeTrack.lat, activeTrack.lon); }
+    catch(err){
+      console.error("Rain nowcast fetch failed", err);
+      if (activeTrack.id !== trackId) return;
+      $("rainNowcastBody").innerHTML = `<div class="log-empty">Couldn't load the short-range nowcast — ${escapeHtml(err.message)}</div>`;
+      if (tag) tag.textContent = "ERROR";
+      return;
+    }
+    if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+    if (tag) tag.textContent = "LIVE · PIRATE WEATHER";
+    renderRainNowcast(analyzeRainNowcast(minutely));
+  }
+
   // ---------- Racing News Wire ----------
   // General racing-industry news, not Saratoga-filtered — narrowing to
   // Saratoga-only would leave the wire empty for long stretches outside major
@@ -6515,6 +6692,7 @@
     fetchWeather();
     fetchAirQuality();
     fetchTideData(); // no-ops internally for tracks without tideStationId
+    loadRainNowcast();
   }
 
   // ---------- Sidebar page navigation ----------
@@ -6786,6 +6964,7 @@
   fetchNewsWire();
   fetchAirQuality();
   fetchTideData(); // no-ops internally for tracks without tideStationId
+  loadRainNowcast();
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
@@ -6793,6 +6972,7 @@
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
   setInterval(fetchTideData, REFRESH_MS); // same cadence; no-ops for non-tide tracks
+  setInterval(loadRainNowcast, REFRESH_MS); // same cadence — per-minute data doesn't need faster than the rest of the dashboard
 })();
 </script>
 </body>
