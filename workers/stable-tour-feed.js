@@ -1087,7 +1087,12 @@ function extractTdnSections(bodyHtml) {
     // "good enough for a known source" bar rather than full name-parsing.
     const trainerMatch = inner.match(/\b[Tt]rainer\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/);
     if (trainerMatch) {
-      current = { trainerName: trainerMatch[1].trim(), horseNames: [], paragraphs: [] };
+      // Strips a trailing possessive ("trainer Cherie DeVaux's assistant...")
+      // — verified against a real article where this happened. The 's isn't
+      // part of the name and would otherwise break the client's last-name
+      // match against its tracked list ("devaux's" != "devaux").
+      const name = trainerMatch[1].trim().replace(/['’]s$/, "");
+      current = { trainerName: name, horseNames: [], paragraphs: [] };
       sections.push(current);
     }
     if (!current) continue; // prose before any detected trainer mention — nothing to attach it to
