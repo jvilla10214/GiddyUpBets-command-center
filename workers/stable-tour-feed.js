@@ -64,10 +64,14 @@
 //    — fetches every carded race for the given day from that track's own
 //    entries page and returns each horse's post position, jockey, trainer,
 //    weight, scratch status, current odds (where the source publishes it),
-//    and morning-line odds. Same CORS problem and fix as jobs #2/#4. One
-//    route, dispatched by ENTRIES_SOURCE_BY_TRACK to a per-track parser —
-//    fetchNyraEntriesDay() for NYRA tracks (Saratoga), fetchDmtcEntriesDay()
-//    for Del Mar — since each track's site has genuinely different markup.
+//    and morning-line odds (same, where published — see fetchMonmouth-
+//    EntriesDay()'s comment for a source that currently doesn't). Same CORS
+//    problem and fix as jobs #2/#4. One route, dispatched by
+//    ENTRIES_SOURCE_BY_TRACK to a per-track parser — fetchNyraEntriesDay()
+//    for NYRA tracks (Saratoga), fetchDmtcEntriesDay() for Del Mar,
+//    fetchMonmouthEntriesDay() for Monmouth — since each track's site has
+//    genuinely different markup (and, for Monmouth, a different notion of
+//    which day's card the `date` param even means — see its own comment).
 //    Only tracks in that map are supported; add one only after fetching and
 //    verifying its actual markup (same rule as every scrape in this file).
 //    Read-only, no storage — the client fetches this fresh per page load
@@ -384,7 +388,9 @@ async function handleRequest(request, env) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
       let result;
       try {
-        result = source === "nyra" ? await fetchNyraEntriesDay(track, date) : await fetchDmtcEntriesDay(date);
+        if (source === "nyra") result = await fetchNyraEntriesDay(track, date);
+        else if (source === "dmtc") result = await fetchDmtcEntriesDay(date);
+        else result = await fetchMonmouthEntriesDay(); // ignores `date` — see fetchMonmouthEntriesDay()'s comment
       } catch (err) {
         return json({ error: `Entries fetch failed: ${err.message}` }, 502);
       }
@@ -700,7 +706,7 @@ const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
 // either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
 // here only once its source has actually been fetched and its markup
 // verified (same rule as every other scrape in this file).
-const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc" };
+const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth" };
 
 // Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
 // matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
@@ -902,4 +908,107 @@ async function fetchDmtcEntriesDay(date) {
   if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
   const html = await res.text();
   return parseDmtcEntries(html, date);
+}
+
+// ---------- Monmouth Park Entries parser ----------
+// Source verified directly: monmouthpark.com's entries page
+// (https://www.monmouthpark.com/horse-racing/entries-3/) is one plain
+// server-rendered page, no fragment endpoint, no date parameter — like DMTC,
+// it always shows whichever card is CURRENTLY open. Unlike DMTC though,
+// "currently open" here is NOT usually today: Monmouth doesn't race every
+// day, and this page gets its next card posted several days ahead of the
+// actual race day (verified: on 2026-08-16, a non-racing Sunday, this page
+// was already showing the 2026-08-21 card). So the requested `date` query
+// param is deliberately ignored for this source entirely — the real card
+// date is read off the page's own accordion heading ("Entries 08/21/2026")
+// and used to build each race's postTimeIso, whatever day that is.
+//
+// The page has an M/L (morning line) field per horse, but as verified it is
+// unpopulated for every horse on the page right now — a real gap in this
+// source, not a parsing bug. mlOdds comes back null until/unless Monmouth
+// starts publishing it (unconfirmed whether that happens closer to race
+// day). There's also no scratch data anywhere on this page (entries this
+// far out predate scratches) — scratched is always false. No surface
+// (dirt/turf) field exists per race either — distance is the only course
+// info this source actually gives, so surface stays null.
+const MONMOUTH_ENTRIES_URL = "https://www.monmouthpark.com/horse-racing/entries-3/";
+
+function monmouthCardDate(html) {
+  const m = html.match(/accordion__title small-text">\s*Entries (\d{2})\/(\d{2})\/(\d{4})/);
+  return m ? `${m[3]}-${m[1]}-${m[2]}` : null;
+}
+
+function monmouthPostTimeToIso(cardDate, label) {
+  const m = label && label.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
+  if (!m || !cardDate) return null;
+  let h = parseInt(m[1], 10);
+  const ampm = m[3].toUpperCase();
+  if (ampm === "PM" && h !== 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return `${cardDate}T${String(h).padStart(2, "0")}:${m[2]}:00`;
+}
+
+function monmouthField(block, label) {
+  const m = block.match(new RegExp(`<span>${label}:</span>([\\s\\S]*?)</div>`));
+  if (!m) return null;
+  const val = decodeEntities(m[1]).replace(/\s+/g, " ").trim();
+  return val || null;
+}
+
+function parseMonmouthRaceChunk(chunk, cardDate) {
+  const numMatch = chunk.match(/RACE\s*\n?\s*#(\d+)/);
+  if (!numMatch) return null;
+  const raceNumber = Number(numMatch[1]);
+
+  const distMatch = chunk.match(/Distance:\s*([^<]+)<\/li>/);
+  const typeMatch = chunk.match(/Race Type:\s*([^<]+)<\/li>/);
+  const purseMatch = chunk.match(/Purse:\s*([^<]+)<\/li>/);
+  const postMatch = chunk.match(/Post:\s*([^<]+?)\s*<\/li>/);
+  const postTimeLabel = postMatch ? decodeEntities(postMatch[1]).replace(/\s+/g, " ").trim() : null;
+
+  const horses = [];
+  const rowChunks = chunk.split('<div class="tr">').slice(1);
+  for (const rc of rowChunks) {
+    const name = monmouthField(rc, "Horse");
+    if (!name) continue;
+    horses.push({
+      postPosition: monmouthField(rc, "PP"),
+      name,
+      jockey: monmouthField(rc, "Jockey"),
+      trainer: monmouthField(rc, "Trainer"),
+      weight: monmouthField(rc, "Weight"),
+      medication: monmouthField(rc, "MED"),
+      ageSex: monmouthField(rc, "A/S"),
+      mlOdds: monmouthField(rc, "M\\/L"),
+      scratched: false,
+      currentOdds: null,
+    });
+  }
+
+  return {
+    raceNumber, postTimeIso: monmouthPostTimeToIso(cardDate, postTimeLabel), mtpLabel: null,
+    purse: purseMatch ? decodeEntities(purseMatch[1]).trim() : null,
+    raceType: typeMatch ? decodeEntities(typeMatch[1]).trim() : null,
+    distanceLabel: distMatch ? decodeEntities(distMatch[1]).trim() : null,
+    surface: null, horses,
+  };
+}
+
+function parseMonmouthEntries(html) {
+  const cardDate = monmouthCardDate(html);
+  if (!cardDate) return { date: null, races: [] };
+  const chunks = html.split('<div class="table-section">').slice(1);
+  const races = chunks.map((c) => parseMonmouthRaceChunk(c, cardDate)).filter(Boolean);
+  races.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date: cardDate, races };
+}
+
+async function fetchMonmouthEntriesDay() {
+  const res = await fetch(MONMOUTH_ENTRIES_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`Monmouth returned HTTP ${res.status}`);
+  const html = await res.text();
+  return parseMonmouthEntries(html);
 }

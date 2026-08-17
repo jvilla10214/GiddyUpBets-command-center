@@ -2436,11 +2436,14 @@
         <div class="log-empty">Loading…</div>
       </div>
       <div class="info-disclosure" id="entriesInfo">
-        Pulled live from the track's own entries page (NYRA for Saratoga, DMTC for Del Mar) — post position,
-        jockey, trainer, weight, morning-line odds, and (where the source publishes it) current odds for each
-        horse on today's card. Scratches and odds can change right up to post time, so this is a snapshot from
-        whenever the page last refreshed, not a live tote feed. Only tracks with a verified source are wired up —
-        others show "not available" until one is added.
+        Pulled live from each track's own entries page (NYRA for Saratoga, DMTC for Del Mar, monmouthpark.com for
+        Monmouth) — post position, jockey, trainer, weight, and (where the source actually publishes them)
+        morning-line and current odds. Not every source has every field: Monmouth, for instance, has a morning-line
+        column but doesn't currently populate it, so it shows blank rather than a guess. Scratches and odds can
+        change right up to post time, so this is a snapshot from whenever the page last refreshed, not a live tote
+        feed. Monmouth also doesn't race every day, so its card here can be showing a race day several days out
+        rather than today. Only tracks with a verified source are wired up — others show "not available" until
+        one is added.
       </div>
     </div>
   </div>
@@ -2511,6 +2514,7 @@
       nyraCode: null, scratchesUrl: "https://www.monmouthpark.com/horse-racing/scratches-and-changes/",
       photo: "assets/track-monmouth.png", photoAlt: "Aerial view of Monmouth Park",
       tideStationId: null, tideRangeFt: null,
+      entriesSource: "monmouth",
     },
     delmar: {
       id: "delmar", name: "Del Mar", shortName: "Del Mar",
@@ -3336,7 +3340,7 @@
   // autoImportNyraTrends() above, no "done" flag, since odds and scratches
   // change throughout the racing day and the worker's own edge cache already
   // keeps this from hammering the source site.
-  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM" };
+  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM", monmouth: "MONMOUTHPARK.COM" };
   async function loadEntries(){
     const entriesTag = $("entriesTag");
     const source = activeTrack.entriesSource;
@@ -3425,7 +3429,7 @@
     const body = $("entriesBody");
     if (!races.length){
       selectedEntriesRace = null;
-      body.innerHTML = `<div class="log-empty">No races carded for Saratoga today (${escapeHtml(date)}).</div>`;
+      body.innerHTML = `<div class="log-empty">No races carded for ${escapeHtml(activeTrack.shortName)} today (${escapeHtml(date)}).</div>`;
       return;
     }
     if (selectedEntriesRace == null || !races.some(r => r.raceNumber === selectedEntriesRace)){
