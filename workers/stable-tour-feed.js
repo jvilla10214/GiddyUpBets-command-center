@@ -70,8 +70,10 @@
 //    ENTRIES_SOURCE_BY_TRACK to a per-track parser — fetchNyraEntriesDay()
 //    for NYRA tracks (Saratoga), fetchDmtcEntriesDay() for Del Mar,
 //    fetchMonmouthEntriesDay() for Monmouth — since each track's site has
-//    genuinely different markup (and, for Monmouth, a different notion of
-//    which day's card the `date` param even means — see its own comment).
+//    genuinely different markup. All three require the requested `date` to
+//    match what the source currently has published, returning no races
+//    otherwise — a non-race day reads as "no races today", never a preview
+//    of some other day's card.
 //    Only tracks in that map are supported; add one only after fetching and
 //    verifying its actual markup (same rule as every scrape in this file).
 //    Read-only, no storage — the client fetches this fresh per page load
@@ -390,7 +392,7 @@ async function handleRequest(request, env) {
       try {
         if (source === "nyra") result = await fetchNyraEntriesDay(track, date);
         else if (source === "dmtc") result = await fetchDmtcEntriesDay(date);
-        else result = await fetchMonmouthEntriesDay(); // ignores `date` — see fetchMonmouthEntriesDay()'s comment
+        else result = await fetchMonmouthEntriesDay(date);
       } catch (err) {
         return json({ error: `Entries fetch failed: ${err.message}` }, 502);
       }
@@ -914,14 +916,15 @@ async function fetchDmtcEntriesDay(date) {
 // Source verified directly: monmouthpark.com's entries page
 // (https://www.monmouthpark.com/horse-racing/entries-3/) is one plain
 // server-rendered page, no fragment endpoint, no date parameter — like DMTC,
-// it always shows whichever card is CURRENTLY open. Unlike DMTC though,
-// "currently open" here is NOT usually today: Monmouth doesn't race every
-// day, and this page gets its next card posted several days ahead of the
-// actual race day (verified: on 2026-08-16, a non-racing Sunday, this page
-// was already showing the 2026-08-21 card). So the requested `date` query
-// param is deliberately ignored for this source entirely — the real card
-// date is read off the page's own accordion heading ("Entries 08/21/2026")
-// and used to build each race's postTimeIso, whatever day that is.
+// it always shows whichever card is CURRENTLY open, which is NOT usually
+// today: Monmouth doesn't race every day, and this page gets its next card
+// posted several days ahead of the actual race day (verified: on
+// 2026-08-16, a non-racing Sunday, this page was already showing the
+// 2026-08-21 card). The real card date is read off the page's own accordion
+// heading ("Entries 08/21/2026"); parseMonmouthEntries() then requires it
+// to equal the requested `date` (same rule as DMTC) and returns no races
+// otherwise — a deliberate product choice: the Entries tab should read as
+// "no races today" on a dark day, not silently preview a future card.
 //
 // The page has an M/L (morning line) field per horse, but as verified it is
 // unpopulated for every horse on the page right now — a real gap in this
@@ -994,21 +997,25 @@ function parseMonmouthRaceChunk(chunk, cardDate) {
   };
 }
 
-function parseMonmouthEntries(html) {
+// Same "date must match the currently-open card, else empty" rule as DMTC
+// (see parseDmtcEntries) — the client only ever asks for today, and the
+// product decision here is that a non-race-day should read as "no races",
+// not silently surface a preview of some future day's card.
+function parseMonmouthEntries(html, date) {
   const cardDate = monmouthCardDate(html);
-  if (!cardDate) return { date: null, races: [] };
+  if (!cardDate || cardDate !== date) return { date, races: [] };
   const chunks = html.split('<div class="table-section">').slice(1);
   const races = chunks.map((c) => parseMonmouthRaceChunk(c, cardDate)).filter(Boolean);
   races.sort((a, b) => a.raceNumber - b.raceNumber);
-  return { date: cardDate, races };
+  return { date, races };
 }
 
-async function fetchMonmouthEntriesDay() {
+async function fetchMonmouthEntriesDay(date) {
   const res = await fetch(MONMOUTH_ENTRIES_URL, {
     headers: { "User-Agent": BROWSER_UA },
     cf: { cacheTtl: 300, cacheEverything: true },
   });
   if (!res.ok) throw new Error(`Monmouth returned HTTP ${res.status}`);
   const html = await res.text();
-  return parseMonmouthEntries(html);
+  return parseMonmouthEntries(html, date);
 }
