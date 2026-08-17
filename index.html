@@ -1082,14 +1082,18 @@
   .bias-clamp-cell.expanded .bias-clamp-text{ max-height: none; }
   .bias-clamp-expand{
     display: block;
-    margin-top: 4px;
+    margin: 2px -8px -6px;
     background: none;
     border: none;
     color: var(--sky);
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 10px;
+    font-size: 11px;
     cursor: pointer;
-    padding: 0;
+    /* Wider than the visible underlined text on purpose — a small text
+       link at the edge of a horizontally-scrollable table is an easy miss
+       on touch (a tap with any drag reads as a scroll, not a click); this
+       enlarges the real hit target without changing how it looks. */
+    padding: 6px 8px;
     text-decoration: underline;
   }
   .bias-clamp-expand:hover{ color: var(--tote-amber); }
@@ -3203,6 +3207,10 @@
     "speed, and particularly the rail, were big advantages",
     "rail continued to be an advantage", "rail continues to be an advantage",
   ];
+  // Its own named constant (not inline literals) so extractRailNote() below
+  // can reuse the exact same phrase set classifyNyraTrend() keys off of —
+  // one list, not two copies that could drift apart.
+  const NYRA_NEUTRAL_FALLBACK_PHRASES = ["played fairly", "play fairly", "relatively fairly"];
   function classifyNyraTrend(text){
     if (!text) return "Mixed / Inconsistent";
     const lower = text.toLowerCase();
@@ -3213,7 +3221,7 @@
     if (speed && closer) return "Mixed / Inconsistent";
     if (speed) return "Speed-favoring";
     if (closer) return "Closer-favoring";
-    if (has("played fairly") || has("play fairly") || has("relatively fairly")) return "Neutral / No Bias";
+    if (NYRA_NEUTRAL_FALLBACK_PHRASES.some(has)) return "Neutral / No Bias";
     return "Mixed / Inconsistent"; // no clear signal either way — conservative default
   }
 
@@ -3251,12 +3259,25 @@
     };
   }
 
-  // Pulls out just the rail-specific sentence(s) for the dedicated Rail Note
-  // column; the full text (with this included) still goes in Notes either way.
+  // Picks ONE rail-relevant sentence for the dedicated Rail Note column,
+  // rather than joining every rail-mentioning sentence verbatim (which on a
+  // multi-sentence write-up produced long, hard-to-scan notes). Prioritizes
+  // whichever sentence contains one of the exact phrases classifyNyraTrend()
+  // itself keys off of, so the note directly explains why the bias got
+  // tagged the way it did — falls back to the first rail-mentioning
+  // sentence when none of those phrases are present. The full text (with
+  // this included) still goes in Notes either way, so nothing is lost.
   function extractRailNote(text){
     if (!text) return "";
     const sentences = text.split(/(?<=[.!?])\s+/);
-    return sentences.filter(s => /\brail\b/i.test(s)).join(" ").trim();
+    const railSentences = sentences.filter(s => /\brail\b/i.test(s));
+    if (!railSentences.length) return "";
+    const keyPhrases = [...NYRA_EXPLICIT_NEUTRAL_PHRASES, ...NYRA_STRONG_SPEED_PHRASES, ...NYRA_STRONG_CLOSER_PHRASES, ...NYRA_NEUTRAL_FALLBACK_PHRASES];
+    const keySentence = railSentences.find(s => {
+      const lower = s.toLowerCase();
+      return keyPhrases.some(p => lower.includes(p));
+    });
+    return (keySentence ?? railSentences[0]).trim();
   }
 
   // NYRA's trackCondition field is "DIRT / TURF" (e.g. "Fast / Firm"), but on
