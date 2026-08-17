@@ -1136,6 +1136,26 @@
     color: var(--parchment-dim);
     margin-bottom: 10px;
   }
+  .bias-trend-synthesis{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--parchment);
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    line-height: 1.5;
+  }
+  .bias-trends-subheading{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 11px;
+    color: var(--parchment-dim);
+    margin: 14px 0 8px;
+  }
+  .bias-trends-subheading:first-of-type{ margin-top: 0; }
   .bias-bar-row{
     display:grid;
     grid-template-columns: 150px 1fr 70px;
@@ -2337,8 +2357,17 @@
           <label>Date
             <input type="date" id="biasDateInput">
           </label>
-          <label>Running-Style Bias
-            <select id="biasStyleInput">
+          <label>Dirt Bias
+            <select id="biasDirtStyleInput">
+              <option value="Speed-favoring">Speed-favoring</option>
+              <option value="Neutral / No Bias">Neutral / No Bias</option>
+              <option value="Closer-favoring">Closer-favoring</option>
+              <option value="Mixed / Inconsistent">Mixed / Inconsistent</option>
+            </select>
+          </label>
+          <label>Turf Bias
+            <select id="biasTurfStyleInput">
+              <option value="">— Not set —</option>
               <option value="Speed-favoring">Speed-favoring</option>
               <option value="Neutral / No Bias">Neutral / No Bias</option>
               <option value="Closer-favoring">Closer-favoring</option>
@@ -2362,11 +2391,11 @@
         <table class="log-table">
           <thead>
             <tr>
-              <th>Date</th><th>Dirt</th><th>Turf</th><th>Bias</th><th>Rail</th><th></th>
+              <th>Date</th><th>Dirt Cond</th><th>Turf Cond</th><th>Dirt Bias</th><th>Turf Bias</th><th>Rail</th><th></th>
             </tr>
           </thead>
           <tbody id="biasTableBody">
-            <tr><td colspan="6" class="log-empty">Loading…</td></tr>
+            <tr><td colspan="7" class="log-empty">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -2378,9 +2407,11 @@
         <br><br>
         Bias Tracker is shared — every visitor sees the same entries for this track, manual or auto-imported.
         Rows tagged <strong>NYRA</strong> are auto-imported from NYRA's own Saratoga Track Trends page (Andy
-        Serling's daily analysis) — the running-style bias is a keyword heuristic over his write-up, not something
-        NYRA itself categorizes, so read the full note before trusting the tag. Untagged rows are someone's own
-        manual read of how a card played.
+        Serling's daily analysis) — Dirt Bias and Turf Bias are each a keyword heuristic run separately over the
+        dirt- and turf-relevant parts of his write-up, not something NYRA itself categorizes, so read the full
+        note before trusting either tag. Turf Bias is left blank on days there's no turf-relevant text to read
+        (usually no turf racing that day) rather than guessed. Untagged rows are someone's own manual read of
+        how a card played.
       </div>
     </div>
   </div>
@@ -3042,6 +3073,15 @@
     "Closer-favoring": "bias-closer",
     "Mixed / Inconsistent": "bias-mixed",
   };
+  // "Bias" used to be one field (runningStyleBias); it's now split into
+  // Dirt Bias and Turf Bias. Read-time mapping, not a data migration — never
+  // rewrites what's actually stored in KV, so there's no bulk-write risk.
+  // Turf is deliberately never backfilled from the old field: it never
+  // captured a turf-specific read, so guessing one would invent data that
+  // was never there. Use these everywhere instead of reading the fields
+  // directly, so old and new rows render identically.
+  function entryDirtBias(entry){ return entry.dirtBias ?? entry.runningStyleBias ?? null; }
+  function entryTurfBias(entry){ return entry.turfBias ?? null; }
   let biasLog = [];
   // Whether backfillDailyLogFromNyra() has already run for the current
   // track load — it fetches a wide Archive API date range in one request,
@@ -3116,7 +3156,8 @@
       biasLog = entries;
       renderBiasTable();
       renderBiasTrends();
-      pushAlert(makeAlert("bias", `${fmtLogDateShort(entry.date)} bias noted: ${entry.runningStyleBias}${entry.railNote ? " — Rail: " + entry.railNote : ""}`));
+      const biasSummary = [entry.dirtBias && `Dirt: ${entry.dirtBias}`, entry.turfBias && `Turf: ${entry.turfBias}`].filter(Boolean).join(", ") || "no bias set";
+      pushAlert(makeAlert("bias", `${fmtLogDateShort(entry.date)} bias noted: ${biasSummary}${entry.railNote ? " — Rail: " + entry.railNote : ""}`));
     } catch(err){
       console.error("Bias entry failed to save", err);
     }
@@ -3176,6 +3217,40 @@
     return "Mixed / Inconsistent"; // no clear signal either way — conservative default
   }
 
+  // Splits Andy's write-up into dirt-relevant and turf-relevant sentence
+  // buckets — a sentence goes into a bucket if it mentions that surface's
+  // keyword ("main track"/"dirt", or "turf"); a sentence mentioning both
+  // goes into both. Verified against 8 real write-ups before writing this:
+  // surface name and bias language consistently share a sentence ("The rail
+  // was likely dead... on the Main Track"), so per-sentence bucketing
+  // reliably catches the signal in practice — a write-up that establishes
+  // surface context in one sentence and describes bias without repeating it
+  // in a later one could miss that signal for that day. Accepted, same
+  // "good enough for a known source" bar as classifyNyraTrend() itself.
+  function splitDirtTurfText(text){
+    if (!text) return { dirtText: "", turfText: "" };
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    const dirtSentences = sentences.filter(s => /\bmain track\b|\bdirt\b/i.test(s));
+    const turfSentences = sentences.filter(s => /\bturf\b/i.test(s));
+    return {
+      // Falls back to the full text if nothing matched — main-track racing
+      // happens every single day, so an empty dirt bucket more likely means
+      // the phrasing didn't match than that there's genuinely no signal.
+      dirtText: dirtSentences.join(" ") || text,
+      // No fallback for turf — an empty bucket is real information (no
+      // turf racing/discussion that day), not a parsing miss.
+      turfText: turfSentences.join(" "),
+    };
+  }
+
+  function classifyNyraTrendSplit(text){
+    const { dirtText, turfText } = splitDirtTurfText(text);
+    return {
+      dirtBias: classifyNyraTrend(dirtText),
+      turfBias: turfText ? classifyNyraTrend(turfText) : null,
+    };
+  }
+
   // Pulls out just the rail-specific sentence(s) for the dedicated Rail Note
   // column; the full text (with this included) still goes in Notes either way.
   function extractRailNote(text){
@@ -3219,9 +3294,11 @@
     const notes = [header, raw.analysis].filter(Boolean).join("\n\n") +
       "\n\n— Source: NYRA Track Trends (Andy Serling), auto-imported";
     const { dirtLabel, turfLabel } = parseNyraTrackCondition(raw.trackCondition);
+    const { dirtBias, turfBias } = classifyNyraTrendSplit(raw.analysis || raw.trackCondition || "");
     return {
       date: raw.date,
-      runningStyleBias: classifyNyraTrend(raw.analysis || raw.trackCondition || ""),
+      dirtBias,
+      turfBias,
       railNote: extractRailNote(raw.analysis),
       notes,
       nyraDirtLabel: dirtLabel,
@@ -3271,7 +3348,15 @@
       const existing = biasLog.find(e => e.date === raw.date);
       if (existing && !existing.autoImported) continue; // never clobber a manual entry
       const entry = buildBiasEntryFromNyra(raw);
-      if (existing && existing.notes === entry.notes && existing.runningStyleBias === entry.runningStyleBias
+      // entryDirtBias()/entryTurfBias() (not a raw field read) so an old row
+      // that still only has runningStyleBias reads as "changed" here and
+      // gets re-upserted with the new dirtBias/turfBias shape — the schema
+      // migration for existing auto-imported rows happens for free, the
+      // next time this runs, through this same comparison. Never touches a
+      // manual row (guarded above), so nothing but auto-imported rows can
+      // be rewritten this way.
+      if (existing && existing.notes === entry.notes && entryDirtBias(existing) === entry.dirtBias
+        && entryTurfBias(existing) === entry.turfBias
         && existing.nyraDirtLabel === entry.nyraDirtLabel && existing.nyraTurfLabel === entry.nyraTurfLabel) continue;
       toUpsert.push(entry);
     }
@@ -3649,7 +3734,7 @@
     const tbody = $("biasTableBody");
     tbody.innerHTML = "";
     if (!biasLog.length){
-      tbody.innerHTML = `<tr><td colspan="6" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
       return;
     }
     biasLog.forEach(entry => {
@@ -3661,13 +3746,17 @@
       const matchingLog = weatherLog.find(e => e.date === entry.date);
       const dirtDisplay = entry.nyraDirtLabel ?? matchingLog?.dirtConditionLabel ?? "—";
       const turfDisplay = entry.nyraTurfLabel ?? matchingLog?.turfConditionLabel ?? "—";
+      const dirtBias = entryDirtBias(entry);
+      const turfBias = entryTurfBias(entry);
+      const dirtStyleClass = BIAS_STYLE_CLASS[dirtBias] ?? "bias-neutral";
+      const turfStyleClass = BIAS_STYLE_CLASS[turfBias] ?? "bias-neutral";
       const tr = document.createElement("tr");
-      const styleClass = BIAS_STYLE_CLASS[entry.runningStyleBias] ?? "bias-neutral";
       tr.innerHTML = `
         <td>${entry.date}${entry.autoImported ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
         <td>${dirtDisplay}</td>
         <td>${turfDisplay}</td>
-        <td><span class="bias-tag ${styleClass}">${entry.runningStyleBias}</span></td>
+        <td>${dirtBias ? `<span class="bias-tag ${dirtStyleClass}">${dirtBias}</span>` : "—"}</td>
+        <td>${turfBias ? `<span class="bias-tag ${turfStyleClass}">${turfBias}</span>` : "—"}</td>
         ${renderClampedCell("biasRail", entry.date, entry.railNote)}
         <td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>
       `;
@@ -3707,48 +3796,71 @@
 
   function computeBiasTrends(windowKey){
     const entries = biasEntriesInWindow(windowKey);
-    const counts = {}, wetCounts = {}, dryCounts = {}, windSum = {}, windCount = {};
-    let wetTotal = 0, dryTotal = 0;
+    // dirtCounts/turfCounts tally independently — a day can have one, both,
+    // or neither set. The wet/dry crosstab and wind average stay keyed on
+    // DIRT bias specifically, same real-world meaning they've always had
+    // ("wet" here has only ever meant dirt-track wetness in this app).
+    const dirtCounts = {}, turfCounts = {}, wetCounts = {}, dryCounts = {}, windSum = {}, windCount = {};
+    let wetTotal = 0, dryTotal = 0, dirtTotal = 0, turfTotal = 0;
 
     entries.forEach(entry => {
-      const style = entry.runningStyleBias;
-      counts[style] = (counts[style] ?? 0) + 1;
+      const dirt = entryDirtBias(entry);
+      const turf = entryTurfBias(entry);
+      if (dirt){ dirtCounts[dirt] = (dirtCounts[dirt] ?? 0) + 1; dirtTotal++; }
+      if (turf){ turfCounts[turf] = (turfCounts[turf] ?? 0) + 1; turfTotal++; }
 
       const match = weatherLog.find(w => w.date === entry.date);
-      if (!match) return;
+      if (!match || !dirt) return;
       const wet = match.dirtConditionLabel === "MUDDY" || match.dirtConditionLabel === "SLOPPY / WET";
-      if (wet){ wetCounts[style] = (wetCounts[style] ?? 0) + 1; wetTotal++; }
-      else { dryCounts[style] = (dryCounts[style] ?? 0) + 1; dryTotal++; }
+      if (wet){ wetCounts[dirt] = (wetCounts[dirt] ?? 0) + 1; wetTotal++; }
+      else { dryCounts[dirt] = (dryCounts[dirt] ?? 0) + 1; dryTotal++; }
       if (match.windAvg != null){
-        windSum[style] = (windSum[style] ?? 0) + match.windAvg;
-        windCount[style] = (windCount[style] ?? 0) + 1;
+        windSum[dirt] = (windSum[dirt] ?? 0) + match.windAvg;
+        windCount[dirt] = (windCount[dirt] ?? 0) + 1;
       }
     });
 
-    return { total: entries.length, counts, wetCounts, dryCounts, wetTotal, dryTotal, windSum, windCount };
+    return { total: entries.length, dirtTotal, turfTotal, dirtCounts, turfCounts, wetCounts, dryCounts, wetTotal, dryTotal, windSum, windCount };
   }
 
-  function renderBiasTrends(){
-    const body = $("biasTrendsBody");
-    const trends = computeBiasTrends(biasTrendsWindow);
-    body.innerHTML = "";
-
-    if (trends.total === 0){
-      const empty = document.createElement("div");
-      empty.className = "log-empty";
-      empty.textContent = "Not enough entries yet — add a few bias notes to see trends.";
-      body.appendChild(empty);
-      return;
+  // Local, template-based trend synthesis (no Claude API — see this
+  // session's cost decision) over the most recent 5-10 *entries*, always
+  // independent of whichever All Time/30/14-day window is selected above —
+  // "the last N days" is a fixed recency read, not the trends filter.
+  function biasTrendPhrase(values, label){
+    if (!values.length) return `no ${label} data`;
+    const counts = {};
+    values.forEach(v => counts[v] = (counts[v] ?? 0) + 1);
+    const [topStyle, topCount] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (topStyle === "Mixed / Inconsistent" || topCount / values.length < 0.5){
+      return `${label} has shown no consistent bias`;
     }
+    const verb = topStyle === "Speed-favoring" ? "favored speed"
+      : topStyle === "Closer-favoring" ? "favored closers"
+      : "played neutral";
+    return `${label} has ${verb} ${topCount} of ${values.length}`;
+  }
 
-    const countLine = document.createElement("div");
-    countLine.className = "bias-trends-count";
-    countLine.textContent = `${trends.total} ${trends.total === 1 ? "entry" : "entries"} in this window`;
-    body.appendChild(countLine);
+  function synthesizeBiasTrendText(){
+    const recent = [...biasLog].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+    if (recent.length < 5) return null; // not enough data for a meaningful read
+    const dirtValues = recent.map(entryDirtBias).filter(Boolean);
+    const turfValues = recent.map(entryTurfBias).filter(Boolean);
+    return `Over the last ${recent.length} racing days: ${biasTrendPhrase(dirtValues, "the main track")}, while ${biasTrendPhrase(turfValues, "turf")}.`;
+  }
 
+  // Builds one surface's percentage bar-chart section (used twice below,
+  // once for Dirt Bias and once for Turf Bias — each against its own total,
+  // not a shared denominator, since a day can have one surface set without
+  // the other).
+  function appendBiasBarSection(body, title, counts, total){
+    const heading = document.createElement("div");
+    heading.className = "bias-trends-subheading";
+    heading.textContent = `${title} — ${total} ${total === 1 ? "entry" : "entries"}`;
+    body.appendChild(heading);
     Object.keys(BIAS_STYLE_CLASS).forEach(style => {
-      const count = trends.counts[style] ?? 0;
-      const pct = Math.round((count / trends.total) * 100);
+      const count = counts[style] ?? 0;
+      const pct = total ? Math.round((count / total) * 100) : 0;
       const row = document.createElement("div");
       row.className = "bias-bar-row";
       const label = document.createElement("span");
@@ -3766,6 +3878,36 @@
       row.append(label, track, countSpan);
       body.appendChild(row);
     });
+  }
+
+  function renderBiasTrends(){
+    const body = $("biasTrendsBody");
+    const trends = computeBiasTrends(biasTrendsWindow);
+    body.innerHTML = "";
+
+    if (trends.total === 0){
+      const empty = document.createElement("div");
+      empty.className = "log-empty";
+      empty.textContent = "Not enough entries yet — add a few bias notes to see trends.";
+      body.appendChild(empty);
+      return;
+    }
+
+    const synthesis = synthesizeBiasTrendText();
+    if (synthesis){
+      const synthEl = document.createElement("div");
+      synthEl.className = "bias-trend-synthesis";
+      synthEl.textContent = synthesis;
+      body.appendChild(synthEl);
+    }
+
+    const countLine = document.createElement("div");
+    countLine.className = "bias-trends-count";
+    countLine.textContent = `${trends.total} ${trends.total === 1 ? "entry" : "entries"} in this window`;
+    body.appendChild(countLine);
+
+    appendBiasBarSection(body, "Dirt Bias", trends.dirtCounts, trends.dirtTotal);
+    appendBiasBarSection(body, "Turf Bias", trends.turfCounts, trends.turfTotal);
 
     // Wet vs. dry crosstab — only worth showing once there's at least one
     // logged day on each side, otherwise it's a table with an empty half.
@@ -6772,7 +6914,8 @@
   $("addBiasBtn").addEventListener("click", () => {
     const { date: todayStr } = nowInTrackTZ();
     $("biasDateInput").value = shiftDateStr(todayStr, -1); // default to yesterday's completed card
-    $("biasStyleInput").value = "Neutral / No Bias";
+    $("biasDirtStyleInput").value = "Neutral / No Bias";
+    $("biasTurfStyleInput").value = ""; // blank by default — a human might only have a read on one surface
     $("biasRailInput").value = "";
     $("biasNotesInput").value = "";
     $("biasPasteInput").value = "";
@@ -6787,7 +6930,12 @@
     if (!text) return;
     const result = scoreBiasText(text);
     renderBiasAnalysis(result);
-    if (result.suggestion) $("biasStyleInput").value = result.suggestion;
+    // Pasted text isn't surface-segmented the way the NYRA auto-import's
+    // write-up analysis is, so the suggestion only ever reflects an overall
+    // read — applied to Dirt Bias as the primary field, same mapping the
+    // old single-field entries get (see entryDirtBias()). Manual entry is
+    // the secondary path here; not worth building surface-splitting twice.
+    if (result.suggestion) $("biasDirtStyleInput").value = result.suggestion;
     const summary = result.speedTotal === 0 && result.closerTotal === 0
       ? "Pasted text analyzed — no clear speed/closer cues found."
       : `Auto-suggested from pasted text: ${result.suggestion}` +
@@ -6802,7 +6950,8 @@
     if (!date){ $("biasDateInput").focus(); return; }
     upsertBiasEntry({
       date,
-      runningStyleBias: $("biasStyleInput").value,
+      dirtBias: $("biasDirtStyleInput").value || null,
+      turfBias: $("biasTurfStyleInput").value || null,
       railNote: $("biasRailInput").value.trim(),
       notes: $("biasNotesInput").value.trim(),
       capturedAt: new Date().toISOString(),

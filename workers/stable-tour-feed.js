@@ -106,7 +106,12 @@
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
-const NYRA_TRENDS_URL = "https://www.nyra.com/saratoga/racing/track-trends/";
+// Per-track config, not a single hardcoded URL — adding another NYRA track
+// later (e.g. Belmont, at nyra.com/belmont/racing/track-trends/) is one map
+// entry, not a rebuild. Only Saratoga's URL is actually verified right now;
+// don't add another track here until its markup has been checked too (same
+// rule as every other scrape in this file).
+const NYRA_TRENDS_URL_BY_TRACK = { saratoga: "https://www.nyra.com/saratoga/racing/track-trends/" };
 // Lock this to the dashboard's real origin once it has one; "*" is fine
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
@@ -419,10 +424,11 @@ async function handleRequest(request, env) {
 
     if (url.pathname === "/nyra-trends" && request.method === "GET") {
       const track = url.searchParams.get("track") || "saratoga";
-      if (track !== "saratoga") return json({ error: "Not supported for this track" }, 400);
+      const trendsUrl = NYRA_TRENDS_URL_BY_TRACK[track];
+      if (!trendsUrl) return json({ error: "Not supported for this track" }, 400);
       let trendsRes;
       try {
-        trendsRes = await fetch(NYRA_TRENDS_URL, {
+        trendsRes = await fetch(trendsUrl, {
           headers: { "User-Agent": BROWSER_UA },
           cf: { cacheTtl: 3600, cacheEverything: true }, // updates once/day at most
         });
