@@ -1047,13 +1047,33 @@ async function fetchMonmouthEntriesDay(date) {
 // sequentially — one blurb per trainer, no clean section headings. Two
 // structural signals still make this parseable without real NLP, both
 // checked against a real 3-trainer article before writing this: (1) each
-// blurb reliably opens with a "trainer [Name]" mention, so paragraphs from
-// one such mention up to the next belong to that trainer; (2) horse names
-// are consistently wrapped in <strong> within the article body (the only
-// other <strong> usage found — the byline — sits outside the articleBody
-// span and so never reaches this parser). A Notebook piece that never
-// literally says "trainer [Name]" near a blurb's start won't be picked up;
-// that's a known, accepted gap, not a bug.
+// blurb reliably opens with a "trainer [Name]" mention; (2) horse names are
+// consistently wrapped in <strong> within the article body (the only other
+// <strong> usage found — the byline — sits outside the articleBody span and
+// so never reaches this parser). A Notebook piece that never literally says
+// "trainer [Name]" near a blurb's start won't be picked up; that's a known,
+// accepted gap, not a bug.
+//
+// A THIRD signal turned out to matter just as much, found only after a real
+// false-positive report (a user caught four horses credited to the wrong
+// trainer): NOT every "Saratoga Notebook"-tagged piece is a sequential
+// multi-trainer blurb. Some are single-race deep-dives (e.g. previewing one
+// Saratoga stakes) that mention several different horses/trainers within a
+// few paragraphs of each other — a real example had four rivals' horses
+// sitting two paragraphs after a "trainer Mark Casse" mention, close enough
+// that "everything until the next trainer mention" swept them all into
+// Casse's section. Fix: instead of one open-ended section per trigger, each
+// horse is attributed to whichever tracked trainer NAME (the "trainer
+// [Name]" trigger OR any bare later mention of that same last name) is
+// closest AND within 1 paragraph — ties or nothing-in-range means no
+// attribution, not a guess. Verified this preserves 100% of the original
+// 3-trainer article's horses (including ones several paragraphs past their
+// trainer's last mention) while dropping every one of the four reported
+// false positives from the deep-dive piece. It isn't perfect — a rival
+// horse mentioned in the SAME breath as a trainer discussion can still slip
+// through (found one such case, "Swiss Skydiver," in the same deep-dive
+// piece) — but that's a much smaller, accepted residual risk next to
+// crediting someone else's whole Whitney field to one barn.
 //
 // This returns raw per-section structure only (the trainer name as
 // detected in the prose, horse names, paragraph text) — same "worker
@@ -1062,6 +1082,7 @@ async function fetchMonmouthEntriesDay(date) {
 // tracking; this endpoint doesn't know or care about that, and (unlike job
 // #2) never asks the client to track a NEW trainer it hasn't already added.
 const TDN_NOTEBOOK_FEED_URL = "https://www.thoroughbreddailynews.com/tag/saratoga-notebook/feed/";
+const TDN_PROXIMITY_WINDOW = 1; // paragraphs — see the tuning story above
 
 function extractTdnArticleBody(html) {
   const start = html.indexOf('itemprop="articleBody"');
@@ -1072,12 +1093,18 @@ function extractTdnArticleBody(html) {
 }
 
 function extractTdnSections(bodyHtml) {
-  const sections = [];
-  let current = null;
+  const paras = [];
+  const trainerNames = new Set();
   for (const m of bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)) {
     const inner = m[1];
     const plain = decodeEntities(inner.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
     if (!plain) continue;
+
+    const horseNames = [];
+    for (const sm of inner.matchAll(/<strong>([^<]{2,50})<\/strong>/g)) {
+      const name = decodeEntities(sm[1]).trim();
+      if (isShortName(name) && !horseNames.includes(name)) horseNames.push(name);
+    }
 
     // No "." in the name char class on purpose (verified the hard way): it let a
     // sentence-ending period ("trainer Linda Rice. During...") glue onto the next
@@ -1091,21 +1118,47 @@ function extractTdnSections(bodyHtml) {
       // — verified against a real article where this happened. The 's isn't
       // part of the name and would otherwise break the client's last-name
       // match against its tracked list ("devaux's" != "devaux").
-      const name = trainerMatch[1].trim().replace(/['’]s$/, "");
-      current = { trainerName: name, horseNames: [], paragraphs: [] };
-      sections.push(current);
+      trainerNames.add(trainerMatch[1].trim().replace(/['’]s$/, ""));
     }
-    if (!current) continue; // prose before any detected trainer mention — nothing to attach it to
-
-    current.paragraphs.push(plain);
-    for (const sm of inner.matchAll(/<strong>([^<]{2,50})<\/strong>/g)) {
-      const name = decodeEntities(sm[1]).trim();
-      if (isShortName(name) && !current.horseNames.includes(name)) current.horseNames.push(name);
-    }
+    paras.push({ plain, horseNames });
   }
-  return sections
-    .filter((s) => s.horseNames.length)
-    .map((s) => ({ trainerName: s.trainerName, horseNames: s.horseNames, text: s.paragraphs.join(" ").slice(0, 1500) }));
+
+  const names = [...trainerNames];
+  // Every paragraph mentioning a trainer's LAST name — not just the original
+  // "trainer [Name]" trigger paragraph — so a later bare re-mention ("Rice
+  // said...", "Casse nervous?") extends how far that trainer's horses can
+  // still be found, the way the original design's open-ended section did.
+  const mentionsByTrainer = {};
+  for (const name of names) {
+    const lastName = name.split(/\s+/).pop();
+    mentionsByTrainer[name] = paras.map((_, i) => i).filter((i) => new RegExp(`\\b${escapeRegExpTdn(lastName)}\\b`).test(paras[i].plain));
+  }
+
+  const byTrainer = {}; // name -> { horseNames: [], paraIdx: Set }
+  for (let i = 0; i < paras.length; i++) {
+    if (!paras[i].horseNames.length) continue;
+    let best = null, bestDist = Infinity, tie = false;
+    for (const name of names) {
+      const dist = Math.min(...mentionsByTrainer[name].map((mi) => Math.abs(mi - i)), Infinity);
+      if (dist > TDN_PROXIMITY_WINDOW) continue;
+      if (dist < bestDist) { bestDist = dist; best = name; tie = false; }
+      else if (dist === bestDist && name !== best) { tie = true; }
+    }
+    if (!best || tie) continue; // out of range, or two trainers equally close — no guess
+    if (!byTrainer[best]) byTrainer[best] = { horseNames: [], paraIdx: new Set() };
+    for (const h of paras[i].horseNames) if (!byTrainer[best].horseNames.includes(h)) byTrainer[best].horseNames.push(h);
+    byTrainer[best].paraIdx.add(i);
+  }
+
+  return Object.entries(byTrainer).map(([trainerName, v]) => ({
+    trainerName,
+    horseNames: v.horseNames,
+    text: [...v.paraIdx].sort((a, b) => a - b).map((i) => paras[i].plain).join(" ").slice(0, 1500),
+  }));
+}
+
+function escapeRegExpTdn(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function fetchTdnNotebook() {
