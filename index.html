@@ -1246,6 +1246,14 @@
     margin: 14px 0 8px;
   }
   .bias-trends-subheading:first-of-type{ margin-top: 0; }
+  .bias-calibration-note{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--parchment-dim);
+    font-style: italic;
+    margin-bottom: 6px;
+  }
   .bias-bar-row{
     display:grid;
     grid-template-columns: 150px 1fr 70px;
@@ -4153,6 +4161,54 @@
     return { total: entries.length, dirtTotal, turfTotal, dirtCounts, turfCounts, wetCounts, dryCounts, wetTotal, dryTotal, windSum, windCount };
   }
 
+  // ---------- Weather Bias Predictor Score calibration ----------
+  // Checks the Predictor Score's own past calls against what Bias Tracker
+  // actually recorded for the same date — purely informational, entirely
+  // local (no API calls), and never feeds back into the score itself. Dirt
+  // Bias only: the score has never predicted turf separately (see
+  // computeBiasPredictorScore()'s single dirtLabel input), so there's
+  // nothing sensible to check turf against.
+  //
+  // Same 1.0-point gap the live badge already uses to call something "near
+  // neutral" (see renderBiasPredictorScore()) — reused here rather than
+  // picking a new number, so the calibration's definition of "predicted
+  // Neutral" matches what the live UI would have actually shown that day.
+  const CALIBRATION_NEUTRAL_THRESHOLD = 1.0;
+  function directionalCallFromScore(insideSpeed, outsideClosers){
+    const diff = insideSpeed - outsideClosers;
+    if (Math.abs(diff) < CALIBRATION_NEUTRAL_THRESHOLD) return "Neutral / No Bias";
+    return diff > 0 ? "Speed-favoring" : "Closer-favoring";
+  }
+
+  function computeScoreCalibration(windowKey){
+    const entries = biasEntriesInWindow(windowKey);
+    let comparable = 0, inconclusive = 0;
+    const byCall = {
+      "Speed-favoring": { correct: 0, total: 0 },
+      "Closer-favoring": { correct: 0, total: 0 },
+      "Neutral / No Bias": { correct: 0, total: 0 },
+    };
+
+    entries.forEach(entry => {
+      const actualDirt = entryDirtBias(entry);
+      if (!actualDirt) return; // no actual Dirt Bias logged for this date — skip
+      const match = weatherLog.find(w => w.date === entry.date);
+      if (!match || match.insideSpeed == null || match.outsideClosers == null) return; // no stored prediction for this date — skip
+
+      comparable++;
+      if (actualDirt === "Mixed / Inconsistent"){
+        inconclusive++; // no clean right answer to check a directional call against
+        return;
+      }
+
+      const predicted = directionalCallFromScore(match.insideSpeed, match.outsideClosers);
+      byCall[predicted].total++;
+      if (predicted === actualDirt) byCall[predicted].correct++;
+    });
+
+    return { comparable, inconclusive, byCall };
+  }
+
   // Local, template-based trend synthesis (no Claude API — see this
   // session's cost decision) over the most recent 5-10 *entries*, always
   // independent of whichever All Time/30/14-day window is selected above —
@@ -4183,6 +4239,41 @@
   // once for Dirt Bias and once for Turf Bias — each against its own total,
   // not a shared denominator, since a day can have one surface set without
   // the other).
+  // Renders computeScoreCalibration()'s tally — how often the Weather Bias
+  // Predictor Score's own directional call (Speed/Closer/Neutral) matched
+  // what Bias Tracker actually recorded, for whichever surface/window is
+  // selected above. Purely informational: nothing here ever feeds back into
+  // computeBiasPredictorScore() itself — this is for gauging how much to
+  // trust today's live number, not a self-adjusting system.
+  function appendScoreCalibrationSection(body, windowKey){
+    const cal = computeScoreCalibration(windowKey);
+    const heading = document.createElement("div");
+    heading.className = "bias-trends-subheading";
+    heading.textContent = "Weather Bias Score Calibration — Dirt Bias only";
+    body.appendChild(heading);
+
+    const note = document.createElement("div");
+    note.className = "bias-calibration-note";
+    note.textContent = "Checks the Predictor Score's own past directional call against what actually got logged in Bias Tracker — informational only, the score never adjusts itself based on this. The score has never predicted Turf Bias, so this can only be checked against Dirt Bias.";
+    body.appendChild(note);
+
+    const line = document.createElement("div");
+    line.className = "bias-trends-count";
+    if (cal.comparable === 0){
+      line.textContent = "No comparable days yet — this needs a day with both a stored Predictor Score reading and a Bias Tracker entry for the same date. Starts building up from today forward.";
+    } else {
+      const parts = [];
+      ["Speed-favoring", "Closer-favoring", "Neutral / No Bias"].forEach(call => {
+        const { correct, total } = cal.byCall[call];
+        if (total > 0) parts.push(`called ${call === "Neutral / No Bias" ? "Neutral" : call} correctly ${correct} of ${total} time${total === 1 ? "" : "s"}`);
+      });
+      const inconclusivePart = cal.inconclusive
+        ? `, ${cal.inconclusive} inconclusive (actual was Mixed / Inconsistent)` : "";
+      line.textContent = `${cal.comparable} comparable day${cal.comparable === 1 ? "" : "s"}: ${parts.join("; ")}${inconclusivePart}.`;
+    }
+    body.appendChild(line);
+  }
+
   function appendBiasBarSection(body, title, counts, total){
     const heading = document.createElement("div");
     heading.className = "bias-trends-subheading";
@@ -4235,6 +4326,8 @@
     countLine.className = "bias-trends-count";
     countLine.textContent = `${trends.total} ${trends.total === 1 ? "entry" : "entries"} in this window`;
     body.appendChild(countLine);
+
+    appendScoreCalibrationSection(body, biasTrendsWindow);
 
     appendBiasBarSection(body, "Dirt Bias", trends.dirtCounts, trends.dirtTotal);
     appendBiasBarSection(body, "Turf Bias", trends.turfCounts, trends.turfTotal);
@@ -4470,7 +4563,31 @@
       }
     }
 
-    const entry = { ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString() };
+    // Stores a RETROSPECTIVE Weather Bias Predictor Score for this now-
+    // completed day, for the calibration check in the Bias Tracker's Trends
+    // section (see computeScoreCalibration()) — the live score is never
+    // itself persisted, so this is what lets that comparison exist at all.
+    // Deliberately only computed here (the day this day first gets logged),
+    // never in backfillDailyLogFromNyra()'s bulk historical backfill — a
+    // "prediction" computed after the day's outcome is already on record
+    // would be hindsight, not a real calibration check. Uses the day's
+    // aggregate wind + this entry's own final dirt condition (official NYRA
+    // if it was available above, the heuristic otherwise) through the exact
+    // same formula the live badge uses; tide/apparent-temp/humidity are left
+    // out since those aren't part of the daily archive stats already
+    // gathered here — wind and dirt condition are the two largest factors
+    // by a wide margin anyway, and tide only ever applied to Del Mar, which
+    // doesn't have automated Dirt Bias tagging today.
+    const retroScore = computeBiasPredictorScore({
+      speed: stats.windAvg, dir: stats.windPrevailingDeg, dirtLabel: stats.dirtConditionLabel,
+      tide: null, apparentTemp: null, humidity: null,
+    });
+
+    const entry = {
+      ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString(),
+      insideSpeed: retroScore?.insideSpeed ?? null,
+      outsideClosers: retroScore?.outsideClosers ?? null,
+    };
     try{
       const entries = await weatherLogApiUpsert(trackId, entry);
       if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
