@@ -97,9 +97,31 @@
 //    threshold/classification logic here, same "worker extracts, client
 //    interprets" split as every other job. Read-only, no storage.
 //
+// 9. Live official track conditions (GET /track-conditions?track=<id>&date=
+//    YYYY-MM-DD) — fetches NYRA's own live scratches/conditions page (a
+//    different page than job #4: this is the live, same-day scratches/rail
+//    page already iframed client-side for the "Track Conditions & Rail"
+//    panel, not the after-the-fact Track Trends analysis page) and parses
+//    its fixed Track:/Turf:/Inner:/Mellon:/Widener: labeled rows into structured
+//    dirt condition, per-course turf condition, and rail-out-distance
+//    fields. No AI/LLM involved — every field is a consistently labeled
+//    table row (verified directly against both a live Saratoga raceday and
+//    a Belmont sample), so a plain parser is reliable here the same way it
+//    is for every other NYRA page this file scrapes. Same CORS problem and
+//    fix as jobs #2/#4/#6.
+//    The scratches page always reflects whichever day NYRA currently has
+//    posted — once that rolls to the next day, the previous day's numbers
+//    are gone from the live page. So every successful live parse is also
+//    persisted to KV under its own parsed date, and a request for a date
+//    that no longer matches the live page falls back to that KV snapshot —
+//    this is what lets the Daily Log look up "yesterday's" official
+//    conditions the morning after, once the live page has moved on.
+//    Only Saratoga is wired up (NYRA_SCRATCHES_CODE_BY_TRACK) — same
+//    verify-before-adding rule as every other track map in this file.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, and #5 to work — jobs #2, #4, #6, #7, and #8
+// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, and #8
 // (fetch-and-parse only, no storage) work without it. Job #8 additionally
 // requires a PIRATE_WEATHER_API_KEY secret (Worker settings -> Variables and
 // Secrets -> Add, type "Secret") — get a free key at pirateweather.net.
@@ -112,6 +134,11 @@ const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tou
 // don't add another track here until its markup has been checked too (same
 // rule as every other scrape in this file).
 const NYRA_TRENDS_URL_BY_TRACK = { saratoga: "https://www.nyra.com/saratoga/racing/track-trends/" };
+// Same one-entry-per-verified-track rule as NYRA_TRENDS_URL_BY_TRACK above.
+// Belmont's file exists at this same path (BELscratch.html) but wasn't
+// live when checked (a frozen 2023 snapshot) — not added until that's
+// confirmed live.
+const NYRA_SCRATCHES_CODE_BY_TRACK = { saratoga: "SAR" };
 // Lock this to the dashboard's real origin once it has one; "*" is fine
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
@@ -441,6 +468,44 @@ async function handleRequest(request, env) {
       return json({ entries }, 200, { "Cache-Control": "public, max-age=3600" });
     }
 
+    if (url.pathname === "/track-conditions" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "";
+      const date = url.searchParams.get("date") || "";
+      const code = NYRA_SCRATCHES_CODE_BY_TRACK[track];
+      if (!code) return json({ error: "Not supported for this track" }, 400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
+
+      let parsed = { available: false };
+      try {
+        const res = await fetch(`https://tr-cdn.nyra.com/direct/scratches/${code}scratch.html`, {
+          headers: { "User-Agent": BROWSER_UA },
+          cf: { cacheTtl: 300, cacheEverything: true }, // this source's own cache-control is only 30s, but sub-5-minute freshness isn't needed
+        });
+        if (res.ok) parsed = parseNyraTrackConditions(await res.text());
+      } catch (err) {
+        // treat as unavailable — falls through to the KV lookup below
+      }
+
+      if (parsed.available && parsed.cardDate) {
+        // Persist so this date's conditions survive past the live page
+        // rolling over to the next day's card — see job #9's comment.
+        try {
+          await env.STABLE_KV.put(trackConditionsKvKey(track, parsed.cardDate), JSON.stringify(parsed));
+        } catch (err) {
+          // best-effort — don't fail the request over a cache write
+        }
+      }
+
+      if (parsed.available && parsed.cardDate === date) {
+        return json({ ...parsed, source: "live" }, 200, { "Cache-Control": "public, max-age=60" });
+      }
+
+      const cached = env.STABLE_KV ? await env.STABLE_KV.get(trackConditionsKvKey(track, date)) : null;
+      if (cached) return json({ ...JSON.parse(cached), source: "cached" }, 200, { "Cache-Control": "public, max-age=300" });
+
+      return json({ available: false }, 200, { "Cache-Control": "public, max-age=60" });
+    }
+
     if (url.pathname === "/entries" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const date = url.searchParams.get("date") || "";
@@ -535,6 +600,12 @@ async function readWeatherLog(env, track) {
 
 function biasLogKvKey(track) {
   return `biaslog:${track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40)}`;
+}
+
+function trackConditionsKvKey(track, date) {
+  const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
+  return `trackconditions:${safeTrack}:${safeDate}`;
 }
 
 async function readBiasLog(env, track) {
@@ -747,6 +818,70 @@ function parseNyraTrackTrends(html) {
     }
   }
   return entries;
+}
+
+// ---------- NYRA live track conditions parser (job #9) ----------
+// Source verified directly: tr-cdn.nyra.com/direct/scratches/<CODE>scratch.html
+// is the same page already iframed by the client for the "Track Conditions &
+// Rail" panel — plain server-rendered HTML, not JS-rendered. Before that
+// day's card has posted (or on a dark day) it just says "SCRATCHES AND
+// PROGRAM CHANGES ARE CURRENTLY NOT AVAILABLE" with no conditions table at
+// all; this returns available:false rather than guessing at anything. Every
+// real field (Track:/Turf:/Inner:/Mellon:/Widener:) is a fixed labeled table
+// row — verified against both a live Saratoga raceday and a Belmont sample —
+// so a plain regex walk is reliable here the same way it is for the other
+// NYRA pages this file parses; deliberately not an LLM call for a page this
+// structurally consistent.
+function cleanCell(html) {
+  return decodeEntities(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function parseNyraTrackConditions(html) {
+  if (/CURRENTLY NOT AVAILABLE/i.test(html)) {
+    return { available: false };
+  }
+
+  const dateMatch = html.match(/SCRATCHES AND PROGRAM CHANGES FOR ([^<]+)</i);
+  const cardDateLabel = dateMatch ? cleanCell(dateMatch[1]) : null;
+  // "TUESDAY, 8/18/2026" -> "2026-08-18"
+  const mdY = cardDateLabel?.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  const cardDate = mdY ? `${mdY[3]}-${mdY[1].padStart(2, "0")}-${mdY[2].padStart(2, "0")}` : null;
+
+  const updatedMatch = html.match(/Last Updated:\s*([^<]+)</i);
+  const lastUpdatedLabel = updatedMatch ? cleanCell(updatedMatch[1]) : null;
+
+  // Every row is "<td><b><font>LABEL:</font></b></td><td><font>VALUE</font></td>"
+  // — the colon is immediately followed by a closing tag only for the actual
+  // labeled row (not for course names mentioned inline inside another row's
+  // value, e.g. "Widener:&nbsp;FIRM" inside the Turf: row's own value cell,
+  // where the colon is followed by "&nbsp;" instead of a tag).
+  const field = (label) => {
+    const labelIdx = html.search(new RegExp(`>${label}:<`, "i"));
+    if (labelIdx === -1) return null;
+    const afterLabel = html.slice(labelIdx);
+    const valueTdMatch = afterLabel.match(/<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>/i);
+    return valueTdMatch ? cleanCell(valueTdMatch[1]) : null;
+  };
+
+  const dirtCondition = field("Track") || null;
+  const turfRaw = field("Turf");
+  const turfConditions = [];
+  if (turfRaw) {
+    const re = /([A-Za-z]+):\s*([A-Za-z]+)/g;
+    let m;
+    while ((m = re.exec(turfRaw))) turfConditions.push({ course: m[1], condition: m[2].toUpperCase() });
+  }
+
+  // Rail-out distance is reported per turf course under that course's own
+  // name as a row label ("Inner: Set at 18 Ft"), not a single "Rail:" field.
+  const railSettings = [];
+  for (const course of ["Inner", "Mellon", "Widener"]) {
+    const raw = field(course);
+    if (raw && /Set at/i.test(raw)) railSettings.push({ course, label: raw });
+  }
+
+  const available = !!(dirtCondition || turfConditions.length || railSettings.length);
+  return { available, cardDate, cardDateLabel, lastUpdatedLabel, dirtCondition, turfConditions, railSettings };
 }
 
 // ---------- NYRA Entries / morning-line odds parser ----------

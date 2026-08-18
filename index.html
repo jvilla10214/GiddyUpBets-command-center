@@ -703,6 +703,35 @@
 
   /* ---------- NYRA scratches / rail / track conditions embed ---------- */
   .nyra-panel{ margin-top: 18px; }
+  .official-conditions{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+  }
+  .oc-row{
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+  .oc-label{ color: var(--parchment-dim); letter-spacing: 1px; width: 34px; flex-shrink: 0; }
+  .oc-value{ color: var(--parchment); flex: 1; }
+  .oc-badge{
+    font-size: 9.5px;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .oc-badge-official{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
+  .oc-badge-estimated{ color: var(--tote-amber); background: rgba(240,180,41,0.1); }
+  .oc-timestamp{ color: var(--parchment-dim); font-size: 10.5px; margin-top: 2px; }
   .nyra-frame-wrap{
     position: relative;
     width: 100%;
@@ -2053,6 +2082,23 @@
         <span class="tag">LIVE · NYRA.COM</span>
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="nyraScratchesInfo" title="Why this works this way">ⓘ</button>
       </div>
+      <div class="official-conditions" id="officialConditionsBlock" hidden>
+        <div class="oc-row">
+          <span class="oc-label">Dirt</span>
+          <span class="oc-value" id="ocDirtValue">—</span>
+          <span class="oc-badge" id="ocDirtBadge">—</span>
+        </div>
+        <div class="oc-row">
+          <span class="oc-label">Turf</span>
+          <span class="oc-value" id="ocTurfValue">—</span>
+          <span class="oc-badge" id="ocTurfBadge">—</span>
+        </div>
+        <div class="oc-row">
+          <span class="oc-label">Rail</span>
+          <span class="oc-value" id="ocRailValue">—</span>
+        </div>
+        <div class="oc-timestamp" id="ocTimestamp"></div>
+      </div>
       <div class="nyra-frame-wrap">
         <iframe
           id="nyraFrame"
@@ -2062,8 +2108,11 @@
         </iframe>
       </div>
       <div class="info-disclosure" id="nyraScratchesInfo">
-        Official scratches, track/turf conditions, and rail settings, straight from NYRA's own live page —
-        this is the real stewards' call, not our heuristic estimate above.
+        Dirt/Turf/Rail above are parsed straight from NYRA's own live conditions page (refreshed every
+        10 minutes during racing hours) and tagged "Official — NYRA" with the time NYRA itself last confirmed
+        them. Before that day's card posts (or on a dark day), this falls back to our own weather-based
+        estimate instead, clearly tagged "Estimated" so it's never mistaken for the official call. The embed
+        below is NYRA's full page, for scratches and program changes.
       </div>
     </div>
 
@@ -2729,6 +2778,7 @@
   }
 
   const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+  const TRACK_CONDITIONS_REFRESH_MS = 10 * 60 * 1000; // NYRA's own page updates far less often than that
   const FORECAST_STEP_COUNT = 12; // + the live "now" entry = 13 points, 6 hours ahead in 30-min steps
 
   function currentApiUrl(){
@@ -2751,6 +2801,12 @@
   let forecastSteps = [];
   let lastApparentTemp = null;
   let lastWeatherData = null;
+  // Cached so refreshOfficialTrackConditions() can fall back to the same
+  // estimate render() already computed, on its own separate refresh timer,
+  // instead of recomputing estimateDirtCondition()/estimateTurfCondition()
+  // from scratch with slightly-stale inputs.
+  let lastDirtEstimate = null;
+  let lastTurfEstimate = null;
   let lastAqi = null; // filled in by fetchAirQuality(), a separate fetch cycle from the main weather call
   let lastTide = null; // filled in by fetchTideData() (Del Mar only), same separate-fetch pattern as AQI
   let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
@@ -3346,6 +3402,17 @@
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     return Array.isArray(data.races) ? data.races : [];
+  }
+
+  // Live official dirt/turf/rail conditions, parsed by the worker from
+  // NYRA's own live scratches page (see the worker's job #9 comment). Only
+  // Saratoga is wired up so far — same allowlist rule as every other
+  // per-track feature in this file.
+  const NYRA_TRACK_CONDITIONS_SUPPORTED = new Set(["saratoga"]);
+  async function trackConditionsApiGet(track, date){
+    const res = await fetch(stableApiUrl(`/track-conditions?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
   }
 
   // Backfills the whole page's history on first run, then just keeps up with
@@ -4140,7 +4207,28 @@
     const stats = computeDayStatsFromDaily(data.daily, data.hourly, yesterdayStr, prevRain);
     if (!stats) return;
 
-    const entry = { ...stats, isPartial: false, capturedAt: new Date().toISOString() };
+    // Prefer NYRA's own official call for yesterday over our heuristic —
+    // same dirtConditionLabel/turfConditionLabel/nyraSourced override
+    // convention backfillDailyLogFromNyra() already uses, just sourced from
+    // the worker's job #9 (live scratches page) instead of job #4 (Track
+    // Trends). The live scratches page has already rolled past yesterday's
+    // card by the time this runs, so this reads back the KV snapshot the
+    // worker captured while that card was still live, not a fresh fetch.
+    let nyraSourced = false;
+    if (NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId)){
+      try{
+        const official = await trackConditionsApiGet(trackId, yesterdayStr);
+        if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+        if (official?.available){
+          if (official.dirtCondition){ stats.dirtConditionLabel = official.dirtCondition; nyraSourced = true; }
+          if (official.turfConditions?.length){ stats.turfConditionLabel = official.turfConditions[0].condition; nyraSourced = true; }
+        }
+      } catch(err){
+        console.error("Official track conditions fetch failed (Daily Log auto-log)", err);
+      }
+    }
+
+    const entry = { ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString() };
     try{
       const entries = await weatherLogApiUpsert(trackId, entry);
       if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
@@ -6417,6 +6505,67 @@
     }
   }
 
+  // ---------- Official (NYRA) track conditions, structured ----------
+  // Renders the worker's parsed NYRA scratches-page fields (job #9) into the
+  // small summary block above the iframe. Falls back to this app's own
+  // weather-based estimate (the same estimateDirtCondition()/
+  // estimateTurfCondition() call already driving the track-photo overlay)
+  // whenever NYRA hasn't posted for today yet — always clearly labeled
+  // "Official — NYRA" vs "Estimated" so the two are never ambiguous.
+  function renderOfficialTrackConditions(payload){
+    const block = $("officialConditionsBlock");
+    if (!block) return;
+    block.hidden = false;
+
+    const setField = (valueId, badgeId, officialText, estimateLabel) => {
+      const badge = $(badgeId);
+      if (officialText){
+        $(valueId).textContent = officialText;
+        badge.textContent = "Official — NYRA";
+        badge.className = "oc-badge oc-badge-official";
+      } else {
+        $(valueId).textContent = estimateLabel ?? "—";
+        badge.textContent = "Estimated";
+        badge.className = "oc-badge oc-badge-estimated";
+      }
+    };
+
+    setField("ocDirtValue", "ocDirtBadge", payload?.available ? payload.dirtCondition : null, lastDirtEstimate?.label);
+
+    const turfText = payload?.available && payload.turfConditions?.length
+      ? payload.turfConditions.map(t => `${t.course}: ${t.condition}`).join(" · ")
+      : null;
+    setField("ocTurfValue", "ocTurfBadge", turfText, lastTurfEstimate?.label);
+
+    $("ocRailValue").textContent = (payload?.available && payload.railSettings?.length)
+      ? payload.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
+      : "—";
+
+    $("ocTimestamp").textContent = (payload?.available && payload.lastUpdatedLabel)
+      ? `NYRA confirmed ${payload.lastUpdatedLabel} · ${payload.cardDateLabel ?? ""}`
+      : "NYRA hasn't posted today's conditions yet — showing our own weather-based estimate";
+  }
+
+  async function refreshOfficialTrackConditions(){
+    const block = $("officialConditionsBlock");
+    if (!block) return;
+    const trackId = activeTrack.id;
+    if (!NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId)){
+      block.hidden = true;
+      return;
+    }
+    const { date: todayStr } = nowInTrackTZ();
+    try{
+      const payload = await trackConditionsApiGet(trackId, todayStr);
+      if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+      renderOfficialTrackConditions(payload);
+    } catch(err){
+      if (activeTrack.id !== trackId) return;
+      console.error("Official track conditions fetch failed", err);
+      renderOfficialTrackConditions({ available: false });
+    }
+  }
+
   // ---------- Rainfall tile (Today / 6h / 24h / 48h tabs) ----------
   function activeRainWindowKey(){
     return document.querySelector(".rain-tab-btn.active")?.dataset.window || "today";
@@ -6636,6 +6785,7 @@
     $("dirtConditionValue").className = "tc-value " + dirtEst.cls;
     $("dirtConditionValue").textContent = dirtEst.label;
     const dirtLabel = dirtEst.label;
+    lastDirtEstimate = dirtEst;
 
     const turfEst = estimateTurfCondition({
       hourlyPrecip: correctedPrecip, nowHourIdx, rainRate,
@@ -6644,6 +6794,7 @@
     $("turfConditionValue").className = "tc-value " + turfEst.cls;
     $("turfConditionValue").textContent = turfEst.label;
     const turfLabel = turfEst.label;
+    lastTurfEstimate = turfEst;
 
     const rainOutlook = upcomingRainOutlook(
       data.hourly?.precipitation, data.hourly?.weather_code, data.hourly?.time, nowHourIdx, 6, rainRate
@@ -6725,6 +6876,10 @@
     const hasNyra = track.nyraCode != null;
     const hasScratchesLink = !hasNyra && track.scratchesUrl != null;
     $("nyraScratchesPanel").hidden = !hasNyra;
+    // Hide immediately on switch rather than showing the previous track's
+    // official-conditions block until refreshOfficialTrackConditions()'s
+    // own fetch resolves — that fetch re-shows it once it has real data.
+    $("officialConditionsBlock").hidden = !NYRA_TRACK_CONDITIONS_SUPPORTED.has(track.id);
     $("nyraXPanel").hidden = !hasNyra; // NYRA's own X account only makes sense for NYRA tracks
     $("scratchesLinkPanel").hidden = !hasScratchesLink;
     $("nyraFallbackPanel").hidden = hasNyra || hasScratchesLink;
@@ -6820,6 +6975,7 @@
     // Pure static UI — no network wait, so this repaints instantly.
     renderStaticTrackChrome(track);
     refreshNyraFrame();
+    refreshOfficialTrackConditions();
     setRadarMode(currentRadarMode());
 
     // Per-track storage-backed collections.
@@ -7129,6 +7285,7 @@
 
   initWindFlow();
   refreshNyraFrame();
+  refreshOfficialTrackConditions();
   setRadarMode("radar");
   fetchWeather();
   fetchNewsWire();
@@ -7139,6 +7296,7 @@
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
+  setInterval(refreshOfficialTrackConditions, TRACK_CONDITIONS_REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
   setInterval(fetchTideData, REFRESH_MS); // same cadence; no-ops for non-tide tracks
