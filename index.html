@@ -731,6 +731,39 @@
   }
   .oc-badge-official{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
   .oc-timestamp{ color: var(--parchment-dim); font-size: 10.5px; margin-top: 2px; }
+  .pp-stats-controls{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .pp-stats-surface-tabs{ display: flex; gap: 6px; }
+  .pp-stats-tab-btn{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .pp-stats-tab-btn:hover{ border-color: var(--tote-amber); }
+  .pp-stats-tab-btn.active{ background: var(--tote-amber); border-color: var(--tote-amber); color: var(--ink); }
+  #ppStatsDistanceSelect{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .pp-stats-timestamp{ color: var(--parchment-dim); font-size: 10.5px; margin-top: 8px; }
   .nyra-frame-wrap{
     position: relative;
     width: 100%;
@@ -2167,6 +2200,32 @@
       </div>
     </div>
 
+    <div class="nyra-panel" id="ppStatsPanel" hidden>
+      <div class="panel-title" style="margin-bottom:10px;">
+        Post Position Stats
+        <span class="tag" id="ppStatsTag">LOADING</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="ppStatsInfo" title="Why this works this way">ⓘ</button>
+      </div>
+      <div class="pp-stats-controls">
+        <div class="pp-stats-surface-tabs">
+          <button type="button" class="pp-stats-tab-btn active" data-surface="DIRT">Dirt</button>
+          <button type="button" class="pp-stats-tab-btn" data-surface="TURF">Turf</button>
+        </div>
+        <select id="ppStatsDistanceSelect"></select>
+      </div>
+      <div class="log-table-wrap" id="ppStatsTableWrap">
+        <div class="log-empty">Loading…</div>
+      </div>
+      <div class="pp-stats-timestamp" id="ppStatsTimestamp"></div>
+      <div class="info-disclosure" id="ppStatsInfo">
+        Win rate by starting post position, pulled straight from Del Mar's own "Winning Post Positions" page —
+        season-to-date for the current meet, not a single day's read the way Saratoga's Bias Tracker is. A skew
+        toward low post numbers suggests a rail/speed advantage at that distance; high posts winning more suggests
+        the opposite. Small sample sizes (especially at less-common distances) can swing a win% a lot on just one
+        or two results, so check the starts column before reading too much into any single percentage.
+      </div>
+    </div>
+
   </div>
 
   <!-- RIGHT: metric tiles -->
@@ -2814,6 +2873,7 @@
 
   const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
   const TRACK_CONDITIONS_REFRESH_MS = 10 * 60 * 1000; // NYRA's own page updates far less often than that
+  const PP_STATS_REFRESH_MS = 60 * 60 * 1000; // season-to-date stats, updates at most once per race day
   const FORECAST_STEP_COUNT = 12; // + the live "now" entry = 13 points, 6 hours ahead in 30-min steps
 
   function currentApiUrl(){
@@ -3546,6 +3606,17 @@
   const NYRA_TRACK_CONDITIONS_SUPPORTED = new Set(["saratoga"]);
   async function trackConditionsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/track-conditions?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  // Del Mar's own post-position win-rate stats (see the worker's job #10
+  // comment) — season-to-date for the current meet, not a daily read, so
+  // it's its own standalone panel rather than feeding Dirt Bias/Turf Bias
+  // the way Saratoga's Track Trends does. Del Mar only.
+  const PP_STATS_SUPPORTED = new Set(["delmar"]);
+  async function ppStatsApiGet(track){
+    const res = await fetch(stableApiUrl(`/pp-stats?track=${encodeURIComponent(track)}`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     return res.json();
   }
@@ -6704,6 +6775,80 @@
     }
   }
 
+  // ---------- Del Mar post-position stats ----------
+  let ppStatsData = null; // last fetched {meetLabel, lastUpdatedLabel, tables}
+  let ppStatsActiveSurface = "DIRT";
+
+  // Redraws just the table + distance dropdown from already-fetched data —
+  // called on tab/select changes too, so those don't need a network round
+  // trip.
+  function renderPpStatsTable(){
+    const wrap = $("ppStatsTableWrap");
+    if (!ppStatsData) return;
+    const tablesForSurface = ppStatsData.tables.filter(t => t.surface === ppStatsActiveSurface);
+    const select = $("ppStatsDistanceSelect");
+    if (!tablesForSurface.length){
+      select.innerHTML = "";
+      wrap.innerHTML = `<div class="log-empty">No ${ppStatsActiveSurface.toLowerCase()} stats available for this meet.</div>`;
+      return;
+    }
+    const prevValue = select.value;
+    select.innerHTML = tablesForSurface.map((t, i) => `<option value="${i}">${t.distanceLabel}</option>`).join("");
+    let selectedIdx = tablesForSurface.findIndex((t, i) => String(i) === prevValue);
+    if (selectedIdx < 0) selectedIdx = 0;
+    select.value = String(selectedIdx);
+
+    const table = tablesForSurface[selectedIdx];
+    const rowsHtml = table.rows.map(r => `
+      <tr>
+        <td>${r.post}</td>
+        <td>${r.starts}</td>
+        <td>${r.wins}</td>
+        <td>${r.winPct.toFixed(0)}%</td>
+      </tr>
+    `).join("");
+    wrap.innerHTML = `
+      <table class="log-table">
+        <thead><tr><th>Post</th><th>Starts</th><th>Wins</th><th>Win %</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
+  }
+
+  function renderPpStats(data){
+    ppStatsData = data;
+    $("ppStatsTag").textContent = "LIVE";
+    $("ppStatsTimestamp").textContent = [data.meetLabel, data.lastUpdatedLabel ? `Updated ${data.lastUpdatedLabel}` : null]
+      .filter(Boolean).join(" · ");
+    renderPpStatsTable();
+  }
+
+  async function refreshPpStats(){
+    const panel = $("ppStatsPanel");
+    if (!panel) return;
+    const trackId = activeTrack.id;
+    if (!PP_STATS_SUPPORTED.has(trackId)){
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    try{
+      const data = await ppStatsApiGet(trackId);
+      if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+      if (!data.tables?.length){
+        $("ppStatsTag").textContent = "NOT AVAILABLE";
+        $("ppStatsTableWrap").innerHTML = `<div class="log-empty">No post position stats available right now.</div>`;
+        return;
+      }
+      renderPpStats(data);
+    } catch(err){
+      if (activeTrack.id !== trackId) return;
+      console.error("Post position stats fetch failed", err);
+      $("ppStatsTag").textContent = "NOT AVAILABLE";
+      $("ppStatsTableWrap").innerHTML = `<div class="log-empty">Post position stats aren't available right now.</div>`;
+    }
+  }
+
   // ---------- Rainfall tile (Today / 6h / 24h / 48h tabs) ----------
   function activeRainWindowKey(){
     return document.querySelector(".rain-tab-btn.active")?.dataset.window || "today";
@@ -7112,6 +7257,7 @@
     renderStaticTrackChrome(track);
     refreshNyraFrame();
     refreshOfficialTrackConditions();
+    refreshPpStats();
     setRadarMode(currentRadarMode());
 
     // Per-track storage-backed collections.
@@ -7370,6 +7516,15 @@
     btn.addEventListener("click", () => setRainWindow(btn.dataset.window));
   });
 
+  document.querySelectorAll(".pp-stats-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      ppStatsActiveSurface = btn.dataset.surface;
+      document.querySelectorAll(".pp-stats-tab-btn").forEach(b => b.classList.toggle("active", b === btn));
+      renderPpStatsTable();
+    });
+  });
+  $("ppStatsDistanceSelect").addEventListener("change", renderPpStatsTable);
+
   // Collapsed-by-default provenance/explanation text — a tap or click toggles
   // the matching .info-disclosure open/closed. Real <button>s, not a hover
   // tooltip, so this works identically on mobile as on desktop.
@@ -7422,6 +7577,7 @@
   initWindFlow();
   refreshNyraFrame();
   refreshOfficialTrackConditions();
+  refreshPpStats();
   setRadarMode("radar");
   fetchWeather();
   fetchNewsWire();
@@ -7433,6 +7589,7 @@
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(refreshOfficialTrackConditions, TRACK_CONDITIONS_REFRESH_MS);
+  setInterval(refreshPpStats, PP_STATS_REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
   setInterval(fetchTideData, REFRESH_MS); // same cadence; no-ops for non-tide tracks

@@ -119,9 +119,19 @@
 //    Only Saratoga is wired up (NYRA_SCRATCHES_CODE_BY_TRACK) — same
 //    verify-before-adding rule as every other track map in this file.
 //
+// 10. Del Mar post-position stats (GET /pp-stats?track=<id>) — fetches
+//    DMTC's own "Winning Post Positions" page and parses its win-rate-by-
+//    post tables (one per distance/surface combo — e.g. "5 Furlongs on
+//    Dirt": post 1, 10 starts, 0 wins, 0%). Season-to-date for the current
+//    meet, not a per-day read like job #4/#5 — DMTC doesn't publish a daily
+//    narrative bias write-up the way NYRA does, so this is a genuinely
+//    different shape of data (aggregate stats, not prose to classify) and
+//    is surfaced as its own standalone panel rather than folded into Dirt
+//    Bias/Turf Bias. Only Del Mar is wired up (DMTC_PP_STATS_URL_BY_TRACK).
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, and #8
+// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, and #10
 // (fetch-and-parse only, no storage) work without it. Job #8 additionally
 // requires a PIRATE_WEATHER_API_KEY secret (Worker settings -> Variables and
 // Secrets -> Add, type "Secret") — get a free key at pirateweather.net.
@@ -139,6 +149,8 @@ const NYRA_TRENDS_URL_BY_TRACK = { saratoga: "https://www.nyra.com/saratoga/raci
 // live when checked (a frozen 2023 snapshot) — not added until that's
 // confirmed live.
 const NYRA_SCRATCHES_CODE_BY_TRACK = { saratoga: "SAR" };
+// Job #10 — same one-entry-per-verified-track rule as every other map here.
+const DMTC_PP_STATS_URL_BY_TRACK = { delmar: "https://www.dmtc.com/handicapping/pp-stats" };
 // Lock this to the dashboard's real origin once it has one; "*" is fine
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
@@ -521,6 +533,25 @@ async function handleRequest(request, env) {
         return json({ error: `Entries fetch failed: ${err.message}` }, 502);
       }
       return json(result, 200, { "Cache-Control": "public, max-age=120" });
+    }
+
+    if (url.pathname === "/pp-stats" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "";
+      const pageUrl = DMTC_PP_STATS_URL_BY_TRACK[track];
+      if (!pageUrl) return json({ error: "Not supported for this track" }, 400);
+      let res;
+      try {
+        res = await fetch(pageUrl, {
+          headers: { "User-Agent": BROWSER_UA },
+          cf: { cacheTtl: 3600, cacheEverything: true }, // this page updates infrequently — season-to-date stats, not a daily read
+        });
+      } catch (err) {
+        return json({ error: `DMTC fetch failed: ${err.message}` }, 502);
+      }
+      if (!res.ok) return json({ error: `DMTC returned HTTP ${res.status}` }, 502);
+      const html = await res.text();
+      const result = parseDmtcPostPositionStats(html);
+      return json(result, 200, { "Cache-Control": "public, max-age=3600" });
     }
 
     // Falls through to the original feed-scrape behavior for GET / (and any
@@ -1104,6 +1135,52 @@ async function fetchDmtcEntriesDay(date) {
   if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
   const html = await res.text();
   return parseDmtcEntries(html, date);
+}
+
+// ---------- DMTC Post Position stats parser (job #10) ----------
+// Source verified directly: dmtc.com/handicapping/pp-stats is a plain
+// server-rendered page (not JS-rendered) with one small HTML table per
+// distance/surface combo — e.g. an <h4>5 Furlongs on Dirt</h4> header row
+// followed by one <tr> per starting post (post/starts/wins/win%). No date
+// param needed: the page with no query string always shows the CURRENT
+// meet's season-to-date numbers, same "always shows what's live right now"
+// behavior as DMTC's entries page (see the file-level note above it).
+function parseDmtcPostPositionStats(html) {
+  const idx = html.indexOf('id="main-content"');
+  const body = idx === -1 ? html : html.slice(idx);
+
+  const updatedMatch = body.match(/Last Updated:\s*([^<]+)</i);
+  const lastUpdatedLabel = updatedMatch ? decodeEntities(updatedMatch[1]).trim() : null;
+  const meetMatch = body.match(/<h1[^>]*>([^<]+)<\/h1>/);
+  const meetLabel = meetMatch ? decodeEntities(meetMatch[1]).trim() : null;
+
+  const tables = [];
+  const tableRe = /<table class="table table-striped table-condensed">([\s\S]*?)<\/table>/g;
+  let tm;
+  while ((tm = tableRe.exec(body))) {
+    const block = tm[1];
+    const titleMatch = block.match(/<h4[^>]*>([^<]+)<\/h4>/);
+    if (!titleMatch) continue;
+    const title = decodeEntities(titleMatch[1]).trim(); // "5 Furlongs on Dirt"
+    const surfaceMatch = title.match(/on (Dirt|Turf)$/i);
+    if (!surfaceMatch) continue;
+    const surface = surfaceMatch[1].toUpperCase();
+    const distanceLabel = title.replace(/\s*on (Dirt|Turf)$/i, "").trim();
+
+    const rows = [];
+    const rowRe = /<td class="bold">(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>(\d+)<\/td>\s*<td>([\d.]+)%<\/td>/g;
+    let rm;
+    while ((rm = rowRe.exec(block))) {
+      rows.push({
+        post: Number(rm[1]),
+        starts: Number(rm[2]),
+        wins: Number(rm[3]),
+        winPct: Number(rm[4]),
+      });
+    }
+    if (rows.length) tables.push({ distanceLabel, surface, rows });
+  }
+  return { meetLabel, lastUpdatedLabel, tables };
 }
 
 // ---------- Monmouth Park Entries parser ----------
