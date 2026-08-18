@@ -2641,13 +2641,24 @@
       // left this latitude error in place.)
       lat: 40.3097, lon: -74.0145,
       timezone: "America/New_York",
-      // Re-measured directly (see Saratoga's comment for method): the
-      // grandstand sits on the track's WEST side, and the oval's long axis
-      // runs NNE-SSW, not the ENE-WSW axis the old 70/250 value implied —
-      // that was off by roughly 130°, not a refinement. Two independent
-      // point-pairs along the grandstand roofline / outer rail agreed
-      // within 7° (207.2 / 199.9).
-      heading: { homestretch: 204, backstretch: 24 },
+      // Corrected again: the previous 204/24 value (itself a fix for an
+      // earlier 70/250 error) was measured using the old, ~600m-off anchor
+      // coordinate above — likely looking at a shifted/misidentified point
+      // on the satellite image. Re-derived from OSM's actual surveyed track
+      // geometry instead of a visual estimate: pulled the racetrack way's
+      // real boundary points, identified its two long straight segments
+      // directly (552.8m and 455.6m runs, bearing 341.6°/161.5° — essentially
+      // exact reciprocals, as expected for parallel straightaways), and
+      // separately confirmed via the OSM-tagged grandstand building
+      // (building=grandstand at 40.3084,-74.0168) that it sits on the
+      // 161.5° straight, not the 341.6° one. The grandstand IS on the
+      // track's west side (that part of the prior comment was right); combined
+      // with the standard US counterclockwise convention, that gives a
+      // homestretch direction of travel of ~162°, not 204° — a ~138° error,
+      // not a refinement. Cross-checked three independent ways (straight-
+      // segment bearing, PCA on the full polygon, max-distance point-pairs)
+      // and all agreed within a few degrees.
+      heading: { homestretch: 162, backstretch: 342 },
       nyraCode: null, scratchesUrl: "https://www.monmouthpark.com/horse-racing/scratches-and-changes/",
       photo: "assets/track-monmouth.png", photoAlt: "Aerial view of Monmouth Park",
       tideStationId: null, tideRangeFt: null,
