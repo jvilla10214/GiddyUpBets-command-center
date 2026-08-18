@@ -764,6 +764,19 @@
     border-radius: 4px;
   }
   .pp-stats-timestamp{ color: var(--parchment-dim); font-size: 10.5px; margin-top: 8px; }
+  .pp-lean-line{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+  }
+  .pp-lean-inside{ color: var(--rail-green); }
+  .pp-lean-outside{ color: var(--sky); }
+  .pp-lean-neutral{ color: var(--parchment-dim); }
+  .pp-lean-insufficient{ color: var(--parchment-dim); font-style: italic; }
   .nyra-frame-wrap{
     position: relative;
     width: 100%;
@@ -2213,16 +2226,21 @@
         </div>
         <select id="ppStatsDistanceSelect"></select>
       </div>
+      <div class="pp-lean-line" id="ppStatsLean"></div>
       <div class="log-table-wrap" id="ppStatsTableWrap">
         <div class="log-empty">Loading…</div>
       </div>
       <div class="pp-stats-timestamp" id="ppStatsTimestamp"></div>
       <div class="info-disclosure" id="ppStatsInfo">
         Win rate by starting post position, pulled straight from Del Mar's own "Winning Post Positions" page —
-        season-to-date for the current meet, not a single day's read the way Saratoga's Bias Tracker is. A skew
-        toward low post numbers suggests a rail/speed advantage at that distance; high posts winning more suggests
-        the opposite. Small sample sizes (especially at less-common distances) can swing a win% a lot on just one
-        or two results, so check the starts column before reading too much into any single percentage.
+        season-to-date for the current meet, not a single day's read the way Saratoga's Bias Tracker is. The
+        "leans inside/outside" line above the table is a locally-computed, purely statistical read — no AI, no
+        prose to interpret — comparing the aggregate win rate of the inside half of posts against the outside
+        half; it only calls a lean at all once the distance has at least 15 total wins on record, since with
+        fewer than that one early-speed winner can swing a post's win% wildly and produce a confident-sounding
+        but meaningless read. It's a genuinely different kind of signal than Bias Tracker's Dirt Bias/Turf Bias
+        (which is Andy Serling's own daily read of a specific card), so it's deliberately not shown as one of
+        those tags — check the starts column before leaning on any single percentage either way.
       </div>
     </div>
 
@@ -6779,17 +6797,58 @@
   let ppStatsData = null; // last fetched {meetLabel, lastUpdatedLabel, tables}
   let ppStatsActiveSurface = "DIRT";
 
+  // Purely statistical read, computed locally from the win-rate table
+  // itself — no AI, nothing to interpret. Compares the aggregate win rate
+  // of the inside half of posts against the outside half for one distance/
+  // surface. Requires a minimum total-wins sample before calling a lean at
+  // all: at some of the less common distances this meet has as few as 2-3
+  // total races on record, where a single early-speed winner can swing a
+  // post's win% wildly and produce a confident-sounding but meaningless
+  // read — see real examples like "1 3/8 Mile Turf" (2 total wins) in the
+  // actual data this was built against.
+  const PP_STATS_MIN_SAMPLE_WINS = 15;
+  const PP_STATS_LEAN_RATIO = 1.5; // one half's rate must be at least this many times the other's to call it
+  function deriveDistanceLean(table){
+    const rows = table.rows;
+    const totalWins = rows.reduce((sum, r) => sum + r.wins, 0);
+    if (totalWins < PP_STATS_MIN_SAMPLE_WINS){
+      return { verdict: "insufficient", label: `Sample too small to read (${totalWins} total wins)` };
+    }
+    const half = Math.floor(rows.length / 2) || 1;
+    const inside = rows.slice(0, half);
+    const outside = rows.slice(rows.length - half);
+    const rate = (group) => {
+      const starts = group.reduce((s, r) => s + r.starts, 0);
+      const wins = group.reduce((s, r) => s + r.wins, 0);
+      return starts ? wins / starts : 0;
+    };
+    const insideRate = rate(inside);
+    const outsideRate = rate(outside);
+    const pct = (r) => (r * 100).toFixed(0);
+    const detail = `inside ${pct(insideRate)}% vs outside ${pct(outsideRate)}% win rate (${totalWins} total wins)`;
+    if (insideRate > outsideRate * PP_STATS_LEAN_RATIO && insideRate > 0){
+      return { verdict: "inside", label: `Leans inside/speed — ${detail}` };
+    }
+    if (outsideRate > insideRate * PP_STATS_LEAN_RATIO && outsideRate > 0){
+      return { verdict: "outside", label: `Leans outside/closer — ${detail}` };
+    }
+    return { verdict: "neutral", label: `No clear lean — ${detail}` };
+  }
+
   // Redraws just the table + distance dropdown from already-fetched data —
   // called on tab/select changes too, so those don't need a network round
   // trip.
   function renderPpStatsTable(){
     const wrap = $("ppStatsTableWrap");
+    const leanEl = $("ppStatsLean");
     if (!ppStatsData) return;
     const tablesForSurface = ppStatsData.tables.filter(t => t.surface === ppStatsActiveSurface);
     const select = $("ppStatsDistanceSelect");
     if (!tablesForSurface.length){
       select.innerHTML = "";
       wrap.innerHTML = `<div class="log-empty">No ${ppStatsActiveSurface.toLowerCase()} stats available for this meet.</div>`;
+      leanEl.textContent = "";
+      leanEl.className = "pp-lean-line";
       return;
     }
     const prevValue = select.value;
@@ -6799,6 +6858,10 @@
     select.value = String(selectedIdx);
 
     const table = tablesForSurface[selectedIdx];
+    const lean = deriveDistanceLean(table);
+    leanEl.textContent = lean.label;
+    leanEl.className = `pp-lean-line pp-lean-${lean.verdict}`;
+
     const rowsHtml = table.rows.map(r => `
       <tr>
         <td>${r.post}</td>
