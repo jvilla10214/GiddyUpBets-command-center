@@ -2213,36 +2213,6 @@
       </div>
     </div>
 
-    <div class="nyra-panel" id="ppStatsPanel" hidden>
-      <div class="panel-title" style="margin-bottom:10px;">
-        Post Position Stats
-        <span class="tag" id="ppStatsTag">LOADING</span>
-        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="ppStatsInfo" title="Why this works this way">ⓘ</button>
-      </div>
-      <div class="pp-stats-controls">
-        <div class="pp-stats-surface-tabs">
-          <button type="button" class="pp-stats-tab-btn active" data-surface="DIRT">Dirt</button>
-          <button type="button" class="pp-stats-tab-btn" data-surface="TURF">Turf</button>
-        </div>
-        <select id="ppStatsDistanceSelect"></select>
-      </div>
-      <div class="pp-lean-line" id="ppStatsLean"></div>
-      <div class="log-table-wrap" id="ppStatsTableWrap">
-        <div class="log-empty">Loading…</div>
-      </div>
-      <div class="pp-stats-timestamp" id="ppStatsTimestamp"></div>
-      <div class="info-disclosure" id="ppStatsInfo">
-        Win rate by starting post position, pulled straight from Del Mar's own "Winning Post Positions" page —
-        season-to-date for the current meet, not a single day's read the way Saratoga's Bias Tracker is. The
-        "leans inside/outside" line above the table is a locally-computed, purely statistical read — no AI, no
-        prose to interpret — comparing the aggregate win rate of the inside half of posts against the outside
-        half; it only calls a lean at all once the distance has at least 15 total wins on record, since with
-        fewer than that one early-speed winner can swing a post's win% wildly and produce a confident-sounding
-        but meaningless read. It's a genuinely different kind of signal than Bias Tracker's Dirt Bias/Turf Bias
-        (which is Andy Serling's own daily read of a specific card), so it's deliberately not shown as one of
-        those tags — check the starts column before leaning on any single percentage either way.
-      </div>
-    </div>
 
   </div>
 
@@ -2541,6 +2511,38 @@
         note before trusting either tag. Turf Bias is left blank on days there's no turf-relevant text to read
         (usually no turf racing that day) rather than guessed. Untagged rows are someone's own manual read of
         how a card played.
+      </div>
+    </div>
+
+    <div class="panel log-panel" id="ppStatsPanel" hidden>
+      <div class="panel-title">
+        Post Position Stats
+        <span class="tag" id="ppStatsTag">LOADING</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="ppStatsInfo" title="Why this works this way">ⓘ</button>
+      </div>
+      <div class="pp-stats-controls">
+        <div class="pp-stats-surface-tabs">
+          <button type="button" class="pp-stats-tab-btn active" data-surface="DIRT">Dirt</button>
+          <button type="button" class="pp-stats-tab-btn" data-surface="TURF">Turf</button>
+        </div>
+        <select id="ppStatsDistanceSelect"></select>
+      </div>
+      <div class="pp-lean-line" id="ppStatsLean"></div>
+      <div class="log-table-wrap" id="ppStatsTableWrap">
+        <div class="log-empty">Loading…</div>
+      </div>
+      <div class="pp-stats-timestamp" id="ppStatsTimestamp"></div>
+      <div class="info-disclosure" id="ppStatsInfo">
+        Win rate by starting post position, pulled straight from Del Mar's own "Winning Post Positions" page —
+        season-to-date for the current meet, not a single day's read the way Saratoga's Bias Tracker is. The
+        "leans inside/outside" line above the table is a locally-computed, purely statistical read — no AI, no
+        prose to interpret — comparing the aggregate win rate of the inside half of posts against the outside
+        half; it only calls a lean at all once the distance has at least 15 total wins on record, since with
+        fewer than that one early-speed winner can swing a post's win% wildly and produce a confident-sounding
+        but meaningless read. It's a genuinely different kind of signal than the Bias Tracker above (which is
+        Andy Serling's own daily read of a specific card, for Saratoga only), so it's deliberately not shown as
+        one of that table's Dirt Bias/Turf Bias tags — check the starts column before leaning on any single
+        percentage either way.
       </div>
     </div>
   </div>
