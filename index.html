@@ -3242,60 +3242,155 @@
   // (which is tuned for chart/trip-note language like "wire to wire") —
   // Serling writes track-wide prose ("rail was likely dead", "played
   // fairly"), so it gets its own curated phrase set, calibrated by hand
-  // against every entry on the real page before shipping. An explicit
+  // against every entry on the real page before shipping (most recently:
+  // all 34 real write-ups on record as of this pass). An explicit
   // self-declared conclusion ("No clear bias", "not a clear bias") always
-  // wins over a keyword match elsewhere in the same paragraph — Serling
+  // wins over a keyword match anywhere else in the write-up — Serling
   // sometimes uses strong-sounding language (e.g. "dramatic gold rail...
   // Forwardly placed horses dominated") and then explicitly concludes there
   // was no real bias; trusting his own summary over a keyword hit avoids
-  // mis-reading those days.
+  // mis-reading those days. Checked against the FULL raw text rather than
+  // the dirt/turf-split buckets below — his own conclusion sentences don't
+  // reliably repeat "Main Track"/"turf", so requiring that silently dropped
+  // the override on real days before this was fixed.
   const NYRA_EXPLICIT_NEUTRAL_PHRASES = [
     "no clear bias", "not a clear bias", "situational than a bias",
     "questionable there was a significant bias",
+    "no discernable bias", "no discernible bias",
+  ];
+  // Ellipsis-style patterns from the same "explicit conclusion" tier above —
+  // small proximity regexes instead of a plain substring since the exact
+  // words in between vary ("hard to determine what if any bias existed",
+  // "hard to determine if there was a real bias", etc).
+  const NYRA_EXPLICIT_NEUTRAL_PROXIMITY_PATTERNS = [
+    /\bhard to determine\b[\s\S]{0,50}\bbias\b/i,
   ];
   const NYRA_STRONG_CLOSER_PHRASES = [
     "rail was likely dead", "rail was dead", "dead rail",
     "did not want to be on the rail", "not want to be on the rail",
     "outside closers ultimately dominated", "outside closers did well", "outside closers dominated",
+    "closers did well",
+  ];
+  const NYRA_CLOSER_PROXIMITY_PATTERNS = [
+    /\bclosers\b[\s\S]{0,60}\beffective\b/i,
+    /\boutside\b[\s\S]{0,60}\beffective\b/i,
   ];
   const NYRA_STRONG_SPEED_PHRASES = [
     "speed was dominant", "gold rail", "inside speed ruled",
     "speed, and particularly the rail, were big advantages",
     "rail continued to be an advantage", "rail continues to be an advantage",
+    "big advantage", "significant advantage", "speed held up", "edge to being forward",
+  ];
+  const NYRA_SPEED_PROXIMITY_PATTERNS = [
+    /\bspeed\b[\s\S]{0,40}\bdominated\b/i,
+    /\bforwardly placed\b[\s\S]{0,40}\bdominated\b/i,
   ];
   // Its own named constant (not inline literals) so extractRailNote() below
   // can reuse the exact same phrase set classifyNyraTrend() keys off of —
   // one list, not two copies that could drift apart.
-  const NYRA_NEUTRAL_FALLBACK_PHRASES = ["played fairly", "play fairly", "relatively fairly"];
+  const NYRA_NEUTRAL_FALLBACK_PHRASES = [
+    "played fairly", "play fairly", "relatively fairly",
+    "lean towards fair", "leans towards fair", "leaning towards fair",
+  ];
+  // Hedge words Andy uses to soften a statement — deliberately NOT folded
+  // into the phrase lists above. A bias-direction phrase that shares a
+  // sentence with one of these gets treated as unconfirmed rather than a
+  // confident tag (see classifyNyraTrend()'s per-sentence loop) — e.g.
+  // "Possible the rail was an advantage" is a materially weaker claim than
+  // "The rail was an advantage", and tagging them the same way would misread
+  // Andy's own uncertainty as a confident read. Scoped to same-sentence only
+  // (not adjacent sentences) — verified against the real write-up history
+  // that "Worth following." almost always trails a CONFIDENT statement
+  // ("Speed was dominant on the Main Track. Worth following.") as its own
+  // separate sentence, so treating it as hedging the previous sentence would
+  // have wrongly downgraded several already-correct, already-shipped tags.
+  const NYRA_HEDGE_PATTERNS = [
+    /\barguabl\w*\b/i, /\bpossib\w*\b/i, /\blikely\b/i, /\bquestionable\b/i,
+    /\bhard to say\b/i, /\bworth following\b/i,
+  ];
+  function escapeRegExp(s){
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
   function classifyNyraTrend(text){
     if (!text) return "Mixed / Inconsistent";
-    const lower = text.toLowerCase();
-    const has = (s) => lower.includes(s);
-    if (NYRA_EXPLICIT_NEUTRAL_PHRASES.some(has)) return "Neutral / No Bias";
-    const speed = NYRA_STRONG_SPEED_PHRASES.some(has);
-    const closer = NYRA_STRONG_CLOSER_PHRASES.some(has);
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    let speed = false, closer = false, fair = false;
+    for (const s of sentences){
+      const lower = s.toLowerCase();
+      const matchedSpeedPhrase = NYRA_STRONG_SPEED_PHRASES.find(p => lower.includes(p));
+      const matchedCloserPhrase = NYRA_STRONG_CLOSER_PHRASES.find(p => lower.includes(p));
+      const speedProx = NYRA_SPEED_PROXIMITY_PATTERNS.some(re => re.test(s));
+      const closerProx = NYRA_CLOSER_PROXIMITY_PATTERNS.some(re => re.test(s));
+      const fairHit = NYRA_NEUTRAL_FALLBACK_PHRASES.some(p => lower.includes(p));
+      // Strip any matched confident phrase out before checking for hedge
+      // words in what's left — "likely" is part of the fixed phrase "rail
+      // was likely dead", not a general qualifier on the rest of the
+      // sentence, so it shouldn't self-hedge its own match (found via real
+      // write-up testing: this exact phrase contains this exact hedge word).
+      let forHedgeCheck = s;
+      if (matchedSpeedPhrase) forHedgeCheck = forHedgeCheck.replace(new RegExp(escapeRegExp(matchedSpeedPhrase), "i"), "");
+      if (matchedCloserPhrase) forHedgeCheck = forHedgeCheck.replace(new RegExp(escapeRegExp(matchedCloserPhrase), "i"), "");
+      const hedged = NYRA_HEDGE_PATTERNS.some(re => re.test(forHedgeCheck));
+
+      if ((matchedSpeedPhrase || speedProx) && !hedged) speed = true;
+      if ((matchedCloserPhrase || closerProx) && !hedged) closer = true;
+      if (fairHit && !hedged) fair = true;
+    }
     if (speed && closer) return "Mixed / Inconsistent";
     if (speed) return "Speed-favoring";
     if (closer) return "Closer-favoring";
-    if (NYRA_NEUTRAL_FALLBACK_PHRASES.some(has)) return "Neutral / No Bias";
+    if (fair) return "Neutral / No Bias";
     return "Mixed / Inconsistent"; // no clear signal either way — conservative default
   }
 
+  // Recognizes NYRA's own turf-course proper nouns (Mellon, Widener) as a
+  // turf signal even when the sentence doesn't repeat the word "turf" — a
+  // real, recurring pattern in the write-ups ("The rail was good on the
+  // Mellon"). "Both courses"/"all surfaces"-style phrasing is its own signal
+  // since it's neither dirt-only nor turf-only.
+  const NYRA_TURF_SIGNAL = /\bturf\b|\bmellon\b|\bwidener\b/i;
+  const NYRA_DIRT_SIGNAL = /\bmain track\b|\bdirt\b/i;
+  const NYRA_BOTH_SURFACES_SIGNAL = /\bboth courses\b|\ball courses\b|\ball surfaces\b|\bboth surfaces\b/i;
+  // When a sentence mentions both surfaces together ("the Main Track played
+  // fairly, as did the Mellon Turf"), the more useful thing to carry forward
+  // into the NEXT surface-less sentence is whichever surface was mentioned
+  // most recently in this one — a follow-up sentence more often continues
+  // the last-named subject than the first one.
+  function lastSurfaceMention(s){
+    const dirtMatches = [...s.matchAll(new RegExp(NYRA_DIRT_SIGNAL.source, "gi"))];
+    const turfMatches = [...s.matchAll(new RegExp(NYRA_TURF_SIGNAL.source, "gi"))];
+    const lastDirt = dirtMatches.length ? dirtMatches[dirtMatches.length - 1].index : -1;
+    const lastTurf = turfMatches.length ? turfMatches[turfMatches.length - 1].index : -1;
+    if (lastDirt === -1 && lastTurf === -1) return null;
+    return lastTurf > lastDirt ? "turf" : "dirt";
+  }
+
   // Splits Andy's write-up into dirt-relevant and turf-relevant sentence
-  // buckets — a sentence goes into a bucket if it mentions that surface's
-  // keyword ("main track"/"dirt", or "turf"); a sentence mentioning both
-  // goes into both. Verified against 8 real write-ups before writing this:
-  // surface name and bias language consistently share a sentence ("The rail
-  // was likely dead... on the Main Track"), so per-sentence bucketing
-  // reliably catches the signal in practice — a write-up that establishes
-  // surface context in one sentence and describes bias without repeating it
-  // in a later one could miss that signal for that day. Accepted, same
-  // "good enough for a known source" bar as classifyNyraTrend() itself.
+  // buckets. A sentence with no surface keyword of its own inherits the
+  // most recently established surface context instead of being dropped —
+  // verified against the real write-up history that trailing sentences
+  // ("The rail may still be a slight advantage on the Inner.", after "the
+  // Mellon Turf" was already established) are common enough that dropping
+  // them silently lost real signal, not just edge cases.
   function splitDirtTurfText(text){
     if (!text) return { dirtText: "", turfText: "" };
     const sentences = text.split(/(?<=[.!?])\s+/);
-    const dirtSentences = sentences.filter(s => /\bmain track\b|\bdirt\b/i.test(s));
-    const turfSentences = sentences.filter(s => /\bturf\b/i.test(s));
+    const dirtSentences = [];
+    const turfSentences = [];
+    let context = null; // "dirt" | "turf" | "both" | null — carries forward
+    for (const s of sentences){
+      const hasDirt = NYRA_DIRT_SIGNAL.test(s);
+      const hasTurf = NYRA_TURF_SIGNAL.test(s);
+      const hasBothPhrase = NYRA_BOTH_SURFACES_SIGNAL.test(s);
+      let bucket;
+      if (hasBothPhrase){ bucket = "both"; context = "both"; }
+      else if (hasDirt && hasTurf){ bucket = "both"; context = lastSurfaceMention(s); }
+      else if (hasDirt){ bucket = "dirt"; context = "dirt"; }
+      else if (hasTurf){ bucket = "turf"; context = "turf"; }
+      else bucket = context; // no surface keyword — inherit
+      if (bucket === "dirt" || bucket === "both") dirtSentences.push(s);
+      if (bucket === "turf" || bucket === "both") turfSentences.push(s);
+    }
     return {
       // Falls back to the full text if nothing matched — main-track racing
       // happens every single day, so an empty dirt bucket more likely means
@@ -3309,29 +3404,40 @@
 
   function classifyNyraTrendSplit(text){
     const { dirtText, turfText } = splitDirtTurfText(text);
+    // Andy's own explicit "no bias" conclusions ("No clear bias.",
+    // "Likely more situational than a bias.") are checked against the FULL
+    // raw text, not the surface-split buckets — his summary sentences don't
+    // reliably repeat "Main Track"/"turf", so requiring that was silently
+    // dropping the override on real days (verified: 2026-06-03 and
+    // 2026-07-11 were mis-tagged Speed-favoring/Closer-favoring as a result
+    // before this fix, when Andy's own words said there was no real bias).
+    const lowerFull = (text || "").toLowerCase();
+    const explicitNeutral = NYRA_EXPLICIT_NEUTRAL_PHRASES.some(p => lowerFull.includes(p))
+      || NYRA_EXPLICIT_NEUTRAL_PROXIMITY_PATTERNS.some(re => re.test(text || ""));
     return {
-      dirtBias: classifyNyraTrend(dirtText),
-      turfBias: turfText ? classifyNyraTrend(turfText) : null,
+      dirtBias: explicitNeutral ? "Neutral / No Bias" : classifyNyraTrend(dirtText),
+      turfBias: turfText ? (explicitNeutral ? "Neutral / No Bias" : classifyNyraTrend(turfText)) : null,
     };
   }
 
   // Picks ONE rail-relevant sentence for the dedicated Rail Note column,
   // rather than joining every rail-mentioning sentence verbatim (which on a
   // multi-sentence write-up produced long, hard-to-scan notes). Prioritizes
-  // whichever sentence contains one of the exact phrases classifyNyraTrend()
-  // itself keys off of, so the note directly explains why the bias got
-  // tagged the way it did — falls back to the first rail-mentioning
-  // sentence when none of those phrases are present. The full text (with
-  // this included) still goes in Notes either way, so nothing is lost.
+  // whichever sentence contains one of the exact phrases or proximity
+  // patterns classifyNyraTrend() itself keys off of, so the note directly
+  // explains why the bias got tagged the way it did — falls back to the
+  // first rail-mentioning sentence when none of those match. The full text
+  // (with this included) still goes in Notes either way, so nothing is lost.
   function extractRailNote(text){
     if (!text) return "";
     const sentences = text.split(/(?<=[.!?])\s+/);
     const railSentences = sentences.filter(s => /\brail\b/i.test(s));
     if (!railSentences.length) return "";
     const keyPhrases = [...NYRA_EXPLICIT_NEUTRAL_PHRASES, ...NYRA_STRONG_SPEED_PHRASES, ...NYRA_STRONG_CLOSER_PHRASES, ...NYRA_NEUTRAL_FALLBACK_PHRASES];
+    const keyPatterns = [...NYRA_EXPLICIT_NEUTRAL_PROXIMITY_PATTERNS, ...NYRA_SPEED_PROXIMITY_PATTERNS, ...NYRA_CLOSER_PROXIMITY_PATTERNS];
     const keySentence = railSentences.find(s => {
       const lower = s.toLowerCase();
-      return keyPhrases.some(p => lower.includes(p));
+      return keyPhrases.some(p => lower.includes(p)) || keyPatterns.some(re => re.test(s));
     });
     return (keySentence ?? railSentences[0]).trim();
   }
