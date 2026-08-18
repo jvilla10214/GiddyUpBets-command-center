@@ -730,7 +730,6 @@
     white-space: nowrap;
   }
   .oc-badge-official{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
-  .oc-badge-estimated{ color: var(--tote-amber); background: rgba(240,180,41,0.1); }
   .oc-timestamp{ color: var(--parchment-dim); font-size: 10.5px; margin-top: 2px; }
   .nyra-frame-wrap{
     position: relative;
@@ -2110,9 +2109,9 @@
       <div class="info-disclosure" id="nyraScratchesInfo">
         Dirt/Turf/Rail above are parsed straight from NYRA's own live conditions page (refreshed every
         10 minutes during racing hours) and tagged "Official — NYRA" with the time NYRA itself last confirmed
-        them. Before that day's card posts (or on a dark day), this falls back to our own weather-based
-        estimate instead, clearly tagged "Estimated" so it's never mistaken for the official call. The embed
-        below is NYRA's full page, for scratches and program changes.
+        them. This only ever shows a value NYRA itself has posted — on a dark day, or before that day's card
+        has been confirmed, it stays blank rather than guessing. The embed below is NYRA's full page, for
+        scratches and program changes.
       </div>
     </div>
 
@@ -2801,12 +2800,6 @@
   let forecastSteps = [];
   let lastApparentTemp = null;
   let lastWeatherData = null;
-  // Cached so refreshOfficialTrackConditions() can fall back to the same
-  // estimate render() already computed, on its own separate refresh timer,
-  // instead of recomputing estimateDirtCondition()/estimateTurfCondition()
-  // from scratch with slightly-stale inputs.
-  let lastDirtEstimate = null;
-  let lastTurfEstimate = null;
   let lastAqi = null; // filled in by fetchAirQuality(), a separate fetch cycle from the main weather call
   let lastTide = null; // filled in by fetchTideData() (Del Mar only), same separate-fetch pattern as AQI
   let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
@@ -6613,35 +6606,38 @@
 
   // ---------- Official (NYRA) track conditions, structured ----------
   // Renders the worker's parsed NYRA scratches-page fields (job #9) into the
-  // small summary block above the iframe. Falls back to this app's own
-  // weather-based estimate (the same estimateDirtCondition()/
-  // estimateTurfCondition() call already driving the track-photo overlay)
-  // whenever NYRA hasn't posted for today yet — always clearly labeled
-  // "Official — NYRA" vs "Estimated" so the two are never ambiguous.
+  // small summary block above the iframe. Deliberately NO fallback to this
+  // app's own weather-based estimate — an earlier version showed that
+  // estimate labeled "Estimated" when NYRA hadn't posted yet, but on a day
+  // with no live card at all (a dark day, or before NYRA has confirmed
+  // conditions) the heuristic can read as flatly wrong (e.g. "MUDDY" purely
+  // from rainfall, with no track super out there to make an actual call) —
+  // worse than just leaving it blank. This panel now only ever shows a
+  // value NYRA itself has confirmed; otherwise it stays "—".
   function renderOfficialTrackConditions(payload){
     const block = $("officialConditionsBlock");
     if (!block) return;
     block.hidden = false;
 
-    const setField = (valueId, badgeId, officialText, estimateLabel) => {
+    const setField = (valueId, badgeId, officialText) => {
       const badge = $(badgeId);
       if (officialText){
         $(valueId).textContent = officialText;
         badge.textContent = "Official — NYRA";
         badge.className = "oc-badge oc-badge-official";
+        badge.hidden = false;
       } else {
-        $(valueId).textContent = estimateLabel ?? "—";
-        badge.textContent = "Estimated";
-        badge.className = "oc-badge oc-badge-estimated";
+        $(valueId).textContent = "—";
+        badge.hidden = true;
       }
     };
 
-    setField("ocDirtValue", "ocDirtBadge", payload?.available ? payload.dirtCondition : null, lastDirtEstimate?.label);
+    setField("ocDirtValue", "ocDirtBadge", payload?.available ? payload.dirtCondition : null);
 
     const turfText = payload?.available && payload.turfConditions?.length
       ? payload.turfConditions.map(t => `${t.course}: ${t.condition}`).join(" · ")
       : null;
-    setField("ocTurfValue", "ocTurfBadge", turfText, lastTurfEstimate?.label);
+    setField("ocTurfValue", "ocTurfBadge", turfText);
 
     $("ocRailValue").textContent = (payload?.available && payload.railSettings?.length)
       ? payload.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
@@ -6649,7 +6645,7 @@
 
     $("ocTimestamp").textContent = (payload?.available && payload.lastUpdatedLabel)
       ? `NYRA confirmed ${payload.lastUpdatedLabel} · ${payload.cardDateLabel ?? ""}`
-      : "NYRA hasn't posted today's conditions yet — showing our own weather-based estimate";
+      : "NYRA hasn't confirmed conditions for today yet";
   }
 
   async function refreshOfficialTrackConditions(){
@@ -6891,7 +6887,6 @@
     $("dirtConditionValue").className = "tc-value " + dirtEst.cls;
     $("dirtConditionValue").textContent = dirtEst.label;
     const dirtLabel = dirtEst.label;
-    lastDirtEstimate = dirtEst;
 
     const turfEst = estimateTurfCondition({
       hourlyPrecip: correctedPrecip, nowHourIdx, rainRate,
@@ -6900,7 +6895,6 @@
     $("turfConditionValue").className = "tc-value " + turfEst.cls;
     $("turfConditionValue").textContent = turfEst.label;
     const turfLabel = turfEst.label;
-    lastTurfEstimate = turfEst;
 
     const rainOutlook = upcomingRainOutlook(
       data.hourly?.precipitation, data.hourly?.weather_code, data.hourly?.time, nowHourIdx, 6, rainRate
