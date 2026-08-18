@@ -2632,9 +2632,14 @@
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
       city: "Oceanport, NJ",
-      // lon corrected: -74.0087 was ~230m outside the track's actual
-      // footprint (verified against OpenStreetMap).
-      lat: 40.3058, lon: -74.0198,
+      // lat/lon corrected: the previous point (40.3058, -74.0198) was ~600m
+      // south of the track's actual footprint — confirmed against OSM's own
+      // horse-racing track polygon (40.3097, -74.0146) and independently
+      // against Wikipedia's infobox coordinate (40.30968, -74.01449), which
+      // agree with each other within a few meters. (The earlier "-74.0087
+      // was ~230m outside the footprint" fix corrected longitude only and
+      // left this latitude error in place.)
+      lat: 40.3097, lon: -74.0145,
       timezone: "America/New_York",
       // Re-measured directly (see Saratoga's comment for method): the
       // grandstand sits on the track's WEST side, and the oval's long axis
