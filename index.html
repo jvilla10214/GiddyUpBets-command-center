@@ -2671,11 +2671,16 @@
       // footprint (verified against OpenStreetMap).
       lat: 32.9765, lon: -117.2575,
       timezone: "America/Los_Angeles",
-      // Re-measured directly: grandstand is on the SOUTH side, oval's long
-      // axis runs roughly east-west, not the NNW-SSE axis the old 320/140
-      // value implied (off by ~124°). Traced the south outer rail directly
-      // at the corrected coordinates above.
-      heading: { homestretch: 84, backstretch: 264 },
+      // Corrected: the previous 84/264 value was ~23° off. Re-derived from
+      // OSM's own surveyed "Del Mar Racetrack" way (surface=sand, the real
+      // dirt oval, not a visual estimate) — found its two straight segments
+      // directly (788m/409m runs, bearing 287.4°/107.5°, essentially exact
+      // reciprocals) and confirmed via the OSM-tagged grandstand building
+      // that it sits just 66m from the 107.5° straight. Grandstand IS on
+      // the south side as before; the direction-of-travel derivation (same
+      // counterclockwise convention as every other track here) gives
+      // homestretch ~107°, not 84°.
+      heading: { homestretch: 107, backstretch: 287 },
       nyraCode: null, scratchesUrl: "https://www.dmtc.com/racing/changes",
       photo: "assets/track-delmar.png", photoAlt: "Aerial view of Del Mar racetrack",
       // Del Mar's main track sits right along the coast, and the sales-page
@@ -2693,16 +2698,17 @@
       city: "Elmont, NY",
       lat: 40.7160, lon: -73.7225,
       timezone: "America/New_York",
-      // Grandstand/homestretch side verified via Hempstead Turnpike's real
-      // position (south of the oval, the venue's own address road) rather
-      // than guessed from the satellite image alone — the classic grandstand
-      // silhouette isn't reliably identifiable mid-rebuild ($455M
-      // reconstruction, reopening Sept. 2026). Home straight runs along the
-      // south side, so heading follows the same counterclockwise-oval
-      // derivation as every other track here. Re-measured with precise
-      // pixel-to-latlon math (same method as Saratoga): 72/252, a minor
-      // 8-degree refinement from the original 80/260 visual estimate.
-      heading: { homestretch: 72, backstretch: 252 },
+      // Corrected again: the previous 72/252 value was ~37° off. Re-derived
+      // from OSM's own surveyed track way — found its two straight segments
+      // directly (590m/577m runs, near-exact reciprocals) and independently
+      // confirmed Hempstead Turnpike (the venue's own address road) runs
+      // along the south side, matching the segment whose midpoint sits
+      // furthest south. Grandstand/homestretch IS on the south side as
+      // before (that part of the prior comment was right); the direction-
+      // of-travel derivation (same counterclockwise convention as every
+      // other track here, cross-checked against the polygon's own point-
+      // ordering direction) gives homestretch ~109°, not 72°.
+      heading: { homestretch: 109, backstretch: 289 },
       nyraCode: "BEL", scratchesUrl: null,
       photo: "assets/track-belmont.png", photoAlt: "Aerial view of Belmont Park",
       tideStationId: null, tideRangeFt: null,
@@ -2730,11 +2736,17 @@
       city: "Louisville, KY",
       lat: 38.2031, lon: -85.7700,
       timezone: "America/New_York", // Louisville is in Eastern time, not Central
-      // Unlike every other track here, this oval's long axis runs roughly
-      // north-south, not east-west — obvious in satellite imagery from the
-      // Twin Spires grandstand landmark sitting squarely on the WEST side.
-      // Same counterclockwise derivation, just rotated: west + ccw = south.
-      heading: { homestretch: 185, backstretch: 5 },
+      // Corrected: the previous 185/5 value (claiming a roughly north-south
+      // axis) was wrong by ~54° — visually confirmed on a map render that
+      // the oval is clearly tilted, not north-south at all. Re-derived from
+      // OSM's own surveyed main-dirt-track way: grouped its many short
+      // digitized edges into the two real straight runs (424m/422m,
+      // bearing 58.7°/238.8° — essentially exact reciprocals), then
+      // confirmed via the Churchill Downs grandstand building and the
+      // adjacent Kentucky Derby Museum that both sit closest to the 238.8°
+      // side. Same counterclockwise direction-of-travel derivation as every
+      // other track here gives homestretch ~239°, not 185°.
+      heading: { homestretch: 239, backstretch: 59 },
       nyraCode: null, scratchesUrl: "https://www.churchilldowns.com/scratches-and-changes/",
       photo: "assets/track-churchilldowns.png", photoAlt: "Aerial view of Churchill Downs",
       tideStationId: null, tideRangeFt: null,
@@ -2744,9 +2756,17 @@
       city: "Arcadia, CA",
       lat: 34.1406, lon: -118.0444,
       timezone: "America/Los_Angeles",
-      // Grandstand (the famous art-deco building, spectators facing the San
-      // Gabriel Mountains to the north) sits on the SOUTH side of the oval.
-      heading: { homestretch: 80, backstretch: 260 },
+      // Corrected: the previous 80/260 value was ~30° off. Re-derived from
+      // OSM's own surveyed "Santa Anita Race Track" way — found its two
+      // straight segments directly (429m/421m runs, near-exact reciprocals)
+      // and confirmed via the OSM-tagged grandstand building (the famous
+      // art-deco building) that it sits just 60m from the 110.3° straight.
+      // Grandstand IS on the south side as before, spectators facing the
+      // San Gabriel Mountains to the north (that part of the prior comment
+      // was right); the direction-of-travel derivation (same
+      // counterclockwise convention as every other track here) gives
+      // homestretch ~110°, not 80°.
+      heading: { homestretch: 110, backstretch: 290 },
       nyraCode: null, scratchesUrl: "https://www.santaanita.com/racing-information/changes/",
       photo: "assets/track-santaanita.png", photoAlt: "Aerial view of Santa Anita Park",
       tideStationId: null, tideRangeFt: null,
