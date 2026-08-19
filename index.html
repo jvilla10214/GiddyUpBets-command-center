@@ -3000,6 +3000,102 @@
       photo: "assets/track-fairgrounds.png", photoAlt: "Aerial view of Fair Grounds Race Course",
       tideStationId: null, tideRangeFt: null,
     },
+
+    // ---- UK / International: names + coordinates only for now (per user
+    // request) — no heading/entries/weather-feature wiring yet, that's
+    // planned for a follow-up pass. heading below is an explicit
+    // placeholder (not measured from real track geometry like the US
+    // tracks above) purely so windComponents() calls elsewhere don't throw
+    // on undefined; wind-alignment analysis will be wrong for these tracks
+    // until it's replaced with a real OSM-derived value.
+    ascot: {
+      id: "ascot", name: "Ascot Racecourse", shortName: "Ascot",
+      city: "Ascot, England",
+      lat: 51.41611, lon: -0.67694, // Wikipedia infobox
+      timezone: "Europe/London",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Ascot Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    epsomdowns: {
+      id: "epsomdowns", name: "Epsom Downs Racecourse", shortName: "Epsom Downs",
+      city: "Epsom, England",
+      lat: 51.30972, lon: -0.25556, // Wikipedia infobox
+      timezone: "Europe/London",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Epsom Downs Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    newmarket: {
+      id: "newmarket", name: "Newmarket Racecourse", shortName: "Newmarket",
+      city: "Newmarket, England",
+      lat: 52.23750, lon: 0.37444, // Wikipedia infobox, Rowley Mile course
+      timezone: "Europe/London",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Newmarket Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    shatin: {
+      id: "shatin", name: "Sha Tin Racecourse", shortName: "Sha Tin",
+      city: "Sha Tin, Hong Kong",
+      lat: 22.39944, lon: 114.20667, // Wikipedia infobox
+      timezone: "Asia/Hong_Kong",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Sha Tin Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    happyvalley: {
+      id: "happyvalley", name: "Happy Valley Racecourse", shortName: "Happy Valley",
+      city: "Happy Valley, Hong Kong",
+      lat: 22.27278, lon: 114.18222, // Wikipedia infobox
+      timezone: "Asia/Hong_Kong",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Happy Valley Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    longchamp: {
+      id: "longchamp", name: "Longchamp Racecourse", shortName: "Longchamp",
+      city: "Paris, France",
+      lat: 48.85878, lon: 2.22963, // Wikipedia infobox
+      timezone: "Europe/Paris",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Longchamp Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    curragh: {
+      id: "curragh", name: "The Curragh", shortName: "Curragh",
+      city: "County Kildare, Ireland",
+      lat: 53.15750, lon: -6.84000, // Wikipedia infobox
+      timezone: "Europe/Dublin",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of The Curragh racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+    meydan: {
+      id: "meydan", name: "Meydan Racecourse", shortName: "Meydan",
+      city: "Dubai, UAE",
+      lat: 25.15610, lon: 55.30655, // Wikipedia infobox
+      timezone: "Asia/Dubai",
+      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Meydan Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
+  };
+
+  // Dropdown grouping only — doesn't touch the TRACKS objects themselves.
+  // Order within each group matches TRACKS' own insertion order above.
+  const TRACK_REGIONS = {
+    US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds"],
+    UK: ["ascot", "epsomdowns", "newmarket"],
+    International: ["shatin", "happyvalley", "longchamp", "curragh", "meydan"],
   };
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
@@ -7629,11 +7725,18 @@
   function populateTrackSelect(){
     const select = $("trackSelect");
     select.innerHTML = "";
-    Object.values(TRACKS).forEach(t => {
-      const opt = document.createElement("option");
-      opt.value = t.id;
-      opt.textContent = t.name;
-      select.appendChild(opt);
+    Object.entries(TRACK_REGIONS).forEach(([region, ids]) => {
+      const group = document.createElement("optgroup");
+      group.label = region;
+      ids.forEach(id => {
+        const t = TRACKS[id];
+        if (!t) return;
+        const opt = document.createElement("option");
+        opt.value = t.id;
+        opt.textContent = t.name;
+        group.appendChild(opt);
+      });
+      select.appendChild(group);
     });
     select.value = activeTrack.id;
     select.addEventListener("change", () => switchTrack(select.value));
