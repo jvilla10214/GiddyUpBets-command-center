@@ -149,6 +149,36 @@
   .pill.err .dot{ background: var(--silk-red); box-shadow:0 0 8px var(--silk-red); animation:none; }
   @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.35} }
 
+  /* ---------- Skeleton loaders ----------
+     Two flavors, same shimmer:
+     (1) .skel on a persistent value/text node — hides its own text (still
+         "—"/"Loading…" underneath, unchanged) behind a pulsing block sized
+         by that node's own font metrics. Removed via classList.remove('skel')
+         at the exact point each independent data source first resolves —
+         see render(), fetchAirQuality(), fetchTideData(), loadRainNowcast(),
+         refreshOfficialTrackConditions().
+     (2) .skel-block — a standalone placeholder element used only in markup
+         that gets wholesale innerHTML-replaced once real data arrives
+         (Next 3 Days, Next 8 Hours, Rain Nowcast body, News Wire, Entries,
+         table bodies) — no JS removal needed, the real render call already
+         discards it. */
+  @keyframes skel-shimmer{ 0%{ background-position: 200% 0; } 100%{ background-position: -200% 0; } }
+  .skel, .skel-block{
+    background: linear-gradient(90deg, var(--panel-2) 20%, rgba(240,180,41,0.16) 50%, var(--panel-2) 80%);
+    background-size: 200% 100%;
+    animation: skel-shimmer 1.4s ease-in-out infinite;
+    border-radius: 4px;
+  }
+  .skel{ color: transparent !important; }
+  span.skel{ display: inline-block; min-width: 2.4em; }
+  .skel-block{ display: block; }
+  .skel-line{ height: 11px; margin: 3px 0; }
+  .skel-line.wide{ width: 80%; }
+  .skel-line.narrow{ width: 45%; }
+  .skel-line.big{ height: 20px; }
+  .skel-line.inline{ display: inline-block; margin: 3px auto; }
+  .skel-row{ height: 16px; margin: 8px 0; }
+
   /* ---------- Incoming-weather storm banner ---------- */
   /* Full-width, sits above the sidebar/page shell so it's visible regardless
      of which page (dashboard/news/historical/bias) is active — incoming
@@ -2025,7 +2055,7 @@
   </div>
   <select id="trackSelect" title="Choose track"></select>
   <div class="status-cluster">
-    <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Connecting</span></span>
+    <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText" class="skel">Connecting</span></span>
     <span id="clock">--:--:--</span>
     <span>Next refresh: <span id="countdown">--</span></span>
     <button id="refreshBtn">↻ Refresh now</button>
@@ -2143,14 +2173,14 @@
       <div class="track-condition-group">
         <div class="track-condition">
           <span class="label">Main Track (Dirt)</span>
-          <span class="tc-value" id="dirtConditionValue">—</span>
-          <span class="tc-trend" id="dirtTrend">—</span>
+          <span class="tc-value skel" id="dirtConditionValue">—</span>
+          <span class="tc-trend skel" id="dirtTrend">—</span>
           <span class="tc-source" id="dirtSourceTag" hidden></span>
         </div>
         <div class="track-condition">
           <span class="label">Turf Course</span>
-          <span class="tc-value" id="turfConditionValue">—</span>
-          <span class="tc-trend" id="turfTrend">—</span>
+          <span class="tc-value skel" id="turfConditionValue">—</span>
+          <span class="tc-trend skel" id="turfTrend">—</span>
           <span class="tc-source" id="turfSourceTag" hidden></span>
         </div>
       </div>
@@ -2170,9 +2200,9 @@
           </g>
         </svg>
         <div class="wind-readout" style="position:absolute;">
-          <div class="spd" id="windSpeed">—</div>
+          <div class="spd skel" id="windSpeed">—</div>
           <div class="unit">MPH</div>
-          <div class="dir" id="windDir">—</div>
+          <div class="dir skel" id="windDir">—</div>
         </div>
       </div>
     </div>
@@ -2196,7 +2226,7 @@
       <div class="bias-score-row">
         <div class="bias-score-side" id="biasScoreSpeedSide">
           <div class="bias-score-label">Inside Speed</div>
-          <div class="bias-score-value" id="biasScoreSpeedValue">—<span class="bias-score-denom">/10</span></div>
+          <div class="bias-score-value skel" id="biasScoreSpeedValue">—<span class="bias-score-denom">/10</span></div>
         </div>
         <div class="bias-score-bar">
           <div class="bias-score-bar-fill-speed" id="biasScoreBarSpeed"></div>
@@ -2204,7 +2234,7 @@
         </div>
         <div class="bias-score-side" id="biasScoreCloserSide">
           <div class="bias-score-label">Outside Closers</div>
-          <div class="bias-score-value" id="biasScoreCloserValue">—<span class="bias-score-denom">/10</span></div>
+          <div class="bias-score-value skel" id="biasScoreCloserValue">—<span class="bias-score-denom">/10</span></div>
         </div>
       </div>
       <div class="bias-score-lean" id="biasScoreLean">Waiting on live conditions…</div>
@@ -2245,7 +2275,7 @@
       <div class="official-conditions" id="officialConditionsBlock" hidden>
         <div class="oc-row">
           <span class="oc-label">Rail</span>
-          <span class="oc-value" id="ocRailValue">—</span>
+          <span class="oc-value skel" id="ocRailValue">—</span>
         </div>
         <div class="oc-timestamp" id="ocTimestamp"></div>
       </div>
@@ -2329,9 +2359,9 @@
     <div class="tile">
       <div>
         <div class="tlabel">Temperature</div>
-        <div class="tsub" id="feelsLike">Feels like —</div>
+        <div class="tsub skel" id="feelsLike">Feels like —</div>
       </div>
-      <div class="tvalue"><span id="temp">—</span><span class="tunit">°F</span></div>
+      <div class="tvalue"><span id="temp" class="skel">—</span><span class="tunit">°F</span></div>
     </div>
 
     <div class="tile rain-nowcast-panel" id="rainNowcastPanel">
@@ -2341,7 +2371,8 @@
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="rainNowcastInfo" title="Why this works this way">ⓘ</button>
       </div>
       <div id="rainNowcastBody">
-        <div class="log-empty">Loading…</div>
+        <div class="skel-block skel-line wide" style="height:14px;"></div>
+        <div class="skel-block skel-line narrow"></div>
       </div>
       <div class="info-disclosure" id="rainNowcastInfo">
         Short-range estimate from Pirate Weather's per-minute nowcast (blends short-range models with radar) —
@@ -2360,56 +2391,61 @@
           <button type="button" class="rain-tab-btn" data-window="24h">24h</button>
           <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
         </div>
-        <div class="tsub" id="rainRate">Current rate —</div>
+        <div class="tsub skel" id="rainRate">Current rate —</div>
         <div class="tsub" id="rainTodayOutlook" hidden>—</div>
       </div>
-      <div class="tvalue"><span id="rainTotal">—</span><span class="tunit">in</span></div>
+      <div class="tvalue"><span id="rainTotal" class="skel">—</span><span class="tunit">in</span></div>
     </div>
 
     <div class="ticker-panel">
       <div class="panel-title">Next 3 Days</div>
       <div class="forecast3-grid" id="forecast3Grid">
-        <div class="forecast3-day"><span class="f3-date">Loading…</span></div>
+        <div class="forecast3-day"><div class="skel-block skel-line inline" style="width:70%;"></div><div class="skel-block skel-line inline big" style="width:50%;"></div></div>
+        <div class="forecast3-day"><div class="skel-block skel-line inline" style="width:70%;"></div><div class="skel-block skel-line inline big" style="width:50%;"></div></div>
+        <div class="forecast3-day"><div class="skel-block skel-line inline" style="width:70%;"></div><div class="skel-block skel-line inline big" style="width:50%;"></div></div>
       </div>
     </div>
 
     <div class="ticker-panel">
       <div class="panel-title">Next 8 Hours</div>
       <div class="ticker" id="ticker">
-        <div class="tick"><span class="t-time">Loading…</span></div>
+        <div class="tick"><div class="skel-block skel-line inline" style="width:60%;"></div><div class="skel-block skel-line inline big" style="width:45%;"></div></div>
+        <div class="tick"><div class="skel-block skel-line inline" style="width:60%;"></div><div class="skel-block skel-line inline big" style="width:45%;"></div></div>
+        <div class="tick"><div class="skel-block skel-line inline" style="width:60%;"></div><div class="skel-block skel-line inline big" style="width:45%;"></div></div>
+        <div class="tick"><div class="skel-block skel-line inline" style="width:60%;"></div><div class="skel-block skel-line inline big" style="width:45%;"></div></div>
       </div>
     </div>
 
     <div class="tile">
       <div>
         <div class="tlabel">Wind Gusts</div>
-        <div class="tsub" id="windAt10">at 10m</div>
+        <div class="tsub skel" id="windAt10">at 10m</div>
       </div>
-      <div class="tvalue"><span id="gust">—</span><span class="tunit">mph</span></div>
+      <div class="tvalue"><span id="gust" class="skel">—</span><span class="tunit">mph</span></div>
     </div>
 
     <div class="tile" id="tideTile" hidden>
       <div>
         <div class="tlabel">Ocean Tide</div>
-        <div class="tsub" id="tideState">—</div>
+        <div class="tsub skel" id="tideState">—</div>
       </div>
-      <div class="tvalue"><span id="tideHeight">—</span><span class="tunit">ft</span></div>
+      <div class="tvalue"><span id="tideHeight" class="skel">—</span><span class="tunit">ft</span></div>
     </div>
 
     <div class="tile">
       <div>
         <div class="tlabel">Soil Moisture</div>
-        <div class="tsub" id="soilMoistureDeep">Root zone (9–27cm) —</div>
+        <div class="tsub skel" id="soilMoistureDeep">Root zone (9–27cm) —</div>
       </div>
-      <div class="tvalue"><span id="soilMoistureSurface">—</span><span class="tunit">% VWC</span></div>
+      <div class="tvalue"><span id="soilMoistureSurface" class="skel">—</span><span class="tunit">% VWC</span></div>
     </div>
 
     <div class="tile">
       <div>
         <div class="tlabel">Humidity</div>
-        <div class="tsub" id="cloudCover">Cloud cover —</div>
+        <div class="tsub skel" id="cloudCover">Cloud cover —</div>
       </div>
-      <div class="tvalue"><span id="humidity">—</span><span class="tunit">%</span></div>
+      <div class="tvalue"><span id="humidity" class="skel">—</span><span class="tunit">%</span></div>
     </div>
 
     <div class="tile">
@@ -2417,23 +2453,23 @@
         <div class="tlabel">Barometric Pressure</div>
         <div class="tsub">at sea level</div>
       </div>
-      <div class="tvalue"><span id="pressure">—</span><span class="tunit">hPa</span></div>
+      <div class="tvalue"><span id="pressure" class="skel">—</span><span class="tunit">hPa</span></div>
     </div>
 
     <div class="tile">
       <div>
         <div class="tlabel">Conditions</div>
-        <div class="tsub" id="sunTimes">Sunrise / Sunset —</div>
+        <div class="tsub skel" id="sunTimes">Sunrise / Sunset —</div>
       </div>
-      <div class="tvalue" style="font-size:18px;"><span id="weatherDesc">—</span></div>
+      <div class="tvalue" style="font-size:18px;"><span id="weatherDesc" class="skel">—</span></div>
     </div>
 
     <div class="tile" id="aqiTile">
       <div>
         <div class="tlabel">Air Quality</div>
-        <div class="tsub" id="aqiCategory">—</div>
+        <div class="tsub skel" id="aqiCategory">—</div>
       </div>
-      <div class="tvalue"><span id="aqiValue">—</span><span class="tunit">AQI</span></div>
+      <div class="tvalue"><span id="aqiValue" class="skel">—</span><span class="tunit">AQI</span></div>
     </div>
 
     <div class="tile radar-panel" id="radarPanel">
@@ -2490,7 +2526,9 @@
               </tr>
             </thead>
             <tbody id="logTableBody">
-              <tr><td colspan="11" class="log-empty">Loading…</td></tr>
+              <tr><td colspan="11"><div class="skel-block skel-row"></div></td></tr>
+              <tr><td colspan="11"><div class="skel-block skel-row"></div></td></tr>
+              <tr><td colspan="11"><div class="skel-block skel-row"></div></td></tr>
             </tbody>
           </table>
         </div>
@@ -2602,7 +2640,9 @@
             </tr>
           </thead>
           <tbody id="biasTableBody">
-            <tr><td colspan="7" class="log-empty">Loading…</td></tr>
+            <tr><td colspan="7"><div class="skel-block skel-row"></div></td></tr>
+            <tr><td colspan="7"><div class="skel-block skel-row"></div></td></tr>
+            <tr><td colspan="7"><div class="skel-block skel-row"></div></td></tr>
           </tbody>
         </table>
       </div>
@@ -2735,7 +2775,10 @@
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="newsWireDisclaimer" title="Why this works this way">ⓘ</button>
       </div>
       <div class="news-wire-list news-wire-list-full" id="newsWireList">
-        <div class="news-wire-empty">Loading racing news…</div>
+        <div class="news-item"><div class="skel-block skel-line narrow"></div><div class="skel-block skel-line wide" style="height:14px;"></div></div>
+        <div class="news-item"><div class="skel-block skel-line narrow"></div><div class="skel-block skel-line wide" style="height:14px;"></div></div>
+        <div class="news-item"><div class="skel-block skel-line narrow"></div><div class="skel-block skel-line wide" style="height:14px;"></div></div>
+        <div class="news-item"><div class="skel-block skel-line narrow"></div><div class="skel-block skel-line wide" style="height:14px;"></div></div>
       </div>
       <div class="info-disclosure" id="newsWireDisclaimer">
         Pulled from DRF, TDN, America's Best Racing, BloodHorse, and Horse Racing Nation RSS feeds — general
@@ -2753,7 +2796,11 @@
       </div>
       <div class="entries-date-picker" id="entriesDatePicker" hidden></div>
       <div id="entriesBody">
-        <div class="log-empty">Loading…</div>
+        <div class="skel-block skel-line" style="width:220px;height:26px;margin-bottom:14px;"></div>
+        <div class="skel-block skel-row"></div>
+        <div class="skel-block skel-row"></div>
+        <div class="skel-block skel-row"></div>
+        <div class="skel-block skel-row"></div>
       </div>
       <div class="info-disclosure" id="entriesInfo">
         Pulled live from each track's own entries page (NYRA for Saratoga, DMTC for Del Mar, monmouthpark.com for
@@ -3322,6 +3369,15 @@
   }
 
   const $ = (id) => document.getElementById(id);
+  // Removes the initial skeleton-loader state from one or more persistent
+  // elements — used once per independent data source, right when that
+  // source's real content is about to be set. Safe to call repeatedly
+  // (classList.remove on an already-clean element is a no-op).
+  const clearSkeleton = (...ids) => ids.forEach(id => $(id)?.classList.remove("skel"));
+  // Companion to clearSkeleton() above — re-applied on track switch, since
+  // every one of these is about to show a genuinely different location's
+  // numbers and the fetch for them hasn't landed yet.
+  const addSkeleton = (...ids) => ids.forEach(id => $(id)?.classList.add("skel"));
   let countdownTimer = null;
   let secondsLeft = REFRESH_MS / 1000;
   let forecastSteps = [];
@@ -3655,6 +3711,15 @@
     return corrected;
   }
   let weatherLog = [];
+  // False while weatherLog === [] because a fetch is genuinely still in
+  // flight (initial load, or just after a track switch clears it); true
+  // once that fetch has actually resolved, even if the real result is
+  // empty. renderLogTable() reads this to tell "still loading" (skeleton)
+  // apart from "confirmed zero entries" (real empty-state text) — without
+  // it, clearing the array on switchTrack() would make a genuinely-loading
+  // table claim "No entries yet" for the second or two before the real
+  // fetch lands.
+  let weatherLogLoaded = false;
 
   // ---------- Bias Tracker ----------
   // There's no free automated source for "how the track actually played" —
@@ -3678,6 +3743,8 @@
   function entryDirtBias(entry){ return entry.dirtBias ?? entry.runningStyleBias ?? null; }
   function entryTurfBias(entry){ return entry.turfBias ?? null; }
   let biasLog = [];
+  // Same reasoning as weatherLogLoaded above, for the Bias Tracker.
+  let biasLogLoaded = false;
   // Whether backfillDailyLogFromNyra() has already run for the current
   // track load — it fetches a wide Archive API date range in one request,
   // not something worth redoing on every 5-minute weather refresh. Reset on
@@ -4647,6 +4714,14 @@
   function renderBiasTable(){
     const tbody = $("biasTableBody");
     tbody.innerHTML = "";
+    if (!biasLogLoaded){
+      tbody.innerHTML = `
+        <tr><td colspan="7"><div class="skel-block skel-row"></div></td></tr>
+        <tr><td colspan="7"><div class="skel-block skel-row"></div></td></tr>
+        <tr><td colspan="7"><div class="skel-block skel-row"></div></td></tr>
+      `;
+      return;
+    }
     if (!biasLog.length){
       tbody.innerHTML = `<tr><td colspan="7" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
       return;
@@ -4879,8 +4954,17 @@
 
   function renderBiasTrends(){
     const body = $("biasTrendsBody");
-    const trends = computeBiasTrends(biasTrendsWindow);
     body.innerHTML = "";
+
+    if (!biasLogLoaded){
+      body.innerHTML = `
+        <div class="skel-block skel-line wide" style="height:14px;"></div>
+        <div class="skel-block skel-line narrow" style="margin-top:8px;"></div>
+      `;
+      return;
+    }
+
+    const trends = computeBiasTrends(biasTrendsWindow);
 
     if (trends.total === 0){
       const empty = document.createElement("div");
@@ -5273,6 +5357,16 @@
       select.appendChild(opt);
     });
     select.value = selectedLogMonth;
+
+    if (!weatherLogLoaded){
+      tag.textContent = "…";
+      tbody.innerHTML = `
+        <tr><td colspan="11"><div class="skel-block skel-row"></div></td></tr>
+        <tr><td colspan="11"><div class="skel-block skel-row"></div></td></tr>
+        <tr><td colspan="11"><div class="skel-block skel-row"></div></td></tr>
+      `;
+      return;
+    }
 
     const monthEntries = weatherLog.filter(e => monthKeyOf(e.date) === selectedLogMonth);
     tag.textContent = `${monthEntries.length} ${monthEntries.length === 1 ? "ENTRY" : "ENTRIES"}`;
@@ -6375,6 +6469,7 @@
       const aqi = data.current?.us_aqi;
       const valueEl = $("aqiValue");
       const categoryEl = $("aqiCategory");
+      clearSkeleton("aqiValue", "aqiCategory");
       if (aqi == null){
         valueEl.textContent = "—";
         categoryEl.textContent = "—";
@@ -6389,6 +6484,7 @@
       if (lastAiSummaryCtx) renderAiRacingSummary({ ...lastAiSummaryCtx, aqi: lastAqi });
     } catch(err){
       console.error("Air quality fetch failed", err);
+      clearSkeleton("aqiValue", "aqiCategory"); // don't leave the tile skeleton-loading forever on a persistent failure
     }
   }
 
@@ -6433,6 +6529,7 @@
       const trend = latest > earlier ? "rising" : latest < earlier ? "falling" : "steady";
       const { label } = classifyTide(latest, activeTrack.tideRangeFt);
 
+      clearSkeleton("tideHeight", "tideState");
       $("tideHeight").textContent = latest.toFixed(1);
       $("tideState").textContent = `${label} · ${trend}`;
 
@@ -6440,6 +6537,7 @@
       if (lastAiSummaryCtx) renderAiRacingSummary({ ...lastAiSummaryCtx, tide: lastTide });
     } catch(err){
       console.error("Tide fetch failed", err);
+      clearSkeleton("tideHeight", "tideState"); // don't leave the tile skeleton-loading forever on a persistent failure
     }
   }
 
@@ -7142,6 +7240,8 @@
     const mixedTag = $("biasScoreMixedTag");
 
     if (!result){
+      $("biasScoreSpeedValue").classList.remove("skel");
+      $("biasScoreCloserValue").classList.remove("skel");
       $("biasScoreSpeedValue").innerHTML = `—<span class="bias-score-denom">/10</span>`;
       $("biasScoreCloserValue").innerHTML = `—<span class="bias-score-denom">/10</span>`;
       barSpeed.style.width = "50%";
@@ -7157,6 +7257,8 @@
     }
 
     const { insideSpeed, outsideClosers, totalPush } = result;
+    $("biasScoreSpeedValue").classList.remove("skel");
+    $("biasScoreCloserValue").classList.remove("skel");
     $("biasScoreSpeedValue").innerHTML = `${insideSpeed.toFixed(1)}<span class="bias-score-denom">/10</span>`;
     $("biasScoreCloserValue").innerHTML = `${outsideClosers.toFixed(1)}<span class="bias-score-denom">/10</span>`;
     barSpeed.style.width = `${insideSpeed * 10}%`;
@@ -7201,7 +7303,9 @@
   function setStatus(ok, msg){
     const pill = $("statusPill");
     pill.classList.toggle("err", !ok);
-    $("statusText").textContent = msg;
+    const text = $("statusText");
+    text.classList.remove("skel");
+    text.textContent = msg;
   }
 
   // Open-Meteo timestamps (sunrise/sunset, hourly/minutely times, forecast
@@ -7260,6 +7364,7 @@
 
   function setWindVisuals(dirDeg, speed){
     $("windArrow").setAttribute("transform", `rotate(${dirDeg} 50 50)`);
+    clearSkeleton("windSpeed", "windDir");
     $("windSpeed").textContent = Math.round(speed ?? 0);
     $("windDir").textContent = `${compassPoint(dirDeg)} (${Math.round(dirDeg)}°)`;
 
@@ -7487,6 +7592,7 @@
     if (!block) return;
     block.hidden = false;
 
+    $("ocRailValue").classList.remove("skel");
     $("ocRailValue").textContent = (payload?.available && payload.railSettings?.length)
       ? payload.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
       : "—";
@@ -7877,6 +7983,13 @@
   function render(data, ascotConditions){
     const c = data.current;
 
+    // First real weather payload for this page load/track — every element
+    // below is about to get its actual value, so drop their skeleton state
+    // together, once, rather than one-by-one at each individual assignment.
+    clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainRate", "rainTotal",
+      "humidity", "cloudCover", "pressure", "weatherDesc", "sunTimes",
+      "soilMoistureSurface", "soilMoistureDeep");
+
     // Overlay TurfTrax's on-site Ascot readings onto Open-Meteo's current
     // conditions, right before anything downstream reads them — every
     // consumer of c.* (AI summary, Weather Bias Predictor Score, Track Play
@@ -8197,6 +8310,16 @@
     $("turfTrend").textContent = "—";
     $("dirtSourceTag").hidden = true;
     $("turfSourceTag").hidden = true;
+    // Back to skeleton-loading, not a static "—" — every one of these is
+    // about to show a genuinely different location's numbers, and this
+    // track's own fetches haven't landed yet. (renderBiasPredictorScore()
+    // just above already cleared the Bias Score badges' skeleton via its
+    // own null-result branch — re-add it here since a track switch is a
+    // real "loading again" moment for that badge too, same as everything
+    // else in this block.)
+    addSkeleton("aqiValue", "aqiCategory", "tideHeight", "tideState", "windSpeed", "windDir",
+      "dirtConditionValue", "turfConditionValue", "dirtTrend", "turfTrend",
+      "biasScoreSpeedValue", "biasScoreCloserValue", "ocRailValue");
     // Cleared here (not just left to be overwritten) so a stale official
     // read from the PREVIOUS track can't flash onto the new one for the
     // moment before its own fetches resolve.
@@ -8223,26 +8346,36 @@
 
     // Per-track storage-backed collections.
     weatherLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
+    weatherLogLoaded = false; // this track's own fetch hasn't resolved yet — renderLogTable() shows a skeleton, not "no entries yet", until it has
     selectedLogMonth = null; // default back to this track's own current month, not whatever was being browsed before
     dailyLogNyraBackfillDone = false;
     selectedEntriesRace = null;
     selectedEntriesDate = null; // back to today's card, not whatever date was picked for the old track
     lastResultsByRace = {};
-    $("entriesBody").innerHTML = `<div class="log-empty">Loading…</div>`;
+    $("entriesBody").innerHTML = `
+      <div class="skel-block skel-line" style="width:220px;height:26px;margin-bottom:14px;"></div>
+      <div class="skel-block skel-row"></div>
+      <div class="skel-block skel-row"></div>
+      <div class="skel-block skel-row"></div>
+      <div class="skel-block skel-row"></div>
+    `;
     renderLogTable();
     loadWeatherLog().then(entries => {
       if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
       weatherLog = entries;
+      weatherLogLoaded = true;
       renderLogTable();
       renderBiasTable();
       renderBiasTrends();
     });
     biasLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
+    biasLogLoaded = false; // same reasoning as weatherLogLoaded above
     renderBiasTable();
     renderBiasTrends();
     loadBiasLog().then(entries => {
       if (activeTrack.id !== trackId) return; // stale — switched again before this resolved
       biasLog = entries;
+      biasLogLoaded = true;
       renderBiasTable();
       renderBiasTrends();
     });
@@ -8401,6 +8534,7 @@
 
   loadWeatherLog().then(entries => {
     weatherLog = entries;
+    weatherLogLoaded = true;
     renderLogTable();
     // Bias Tracker joins against weatherLog by date — re-render once it's
     // actually populated so that join isn't stuck showing blanks.
@@ -8410,6 +8544,7 @@
 
   loadBiasLog().then(entries => {
     biasLog = entries;
+    biasLogLoaded = true;
     renderBiasTable();
     renderBiasTrends();
   });
