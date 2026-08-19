@@ -1428,6 +1428,30 @@
   }
   .entries-race-tab.active .entries-race-tab-num{ color: var(--tote-amber); }
   .entries-race-tab-time{ font-size: 10px; color: var(--parchment-dim); }
+  .entries-date-picker{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .entries-date-tab{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 20px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    color: var(--parchment-dim);
+  }
+  .entries-date-tab:hover{ border-color: var(--parchment-dim); color: var(--parchment); }
+  .entries-date-tab.active{
+    border-color: var(--tote-amber);
+    background: rgba(240,180,41,0.1);
+    color: var(--tote-amber);
+  }
   .entries-weather-strip{
     display: flex;
     flex-wrap: wrap;
@@ -2665,6 +2689,7 @@
         <span class="tag" id="entriesTag">LOADING</span>
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="entriesInfo" title="Why this works this way">ⓘ</button>
       </div>
+      <div class="entries-date-picker" id="entriesDatePicker" hidden></div>
       <div id="entriesBody">
         <div class="log-empty">Loading…</div>
       </div>
@@ -2675,7 +2700,9 @@
         column but doesn't currently populate it, so it shows blank rather than a guess. Scratches and odds can
         change right up to post time, so this is a snapshot from whenever the page last refreshed, not a live tote
         feed. Some of these tracks (Monmouth included) don't race every day — on a day without racing, this just
-        shows no races rather than a preview of a future card. Only tracks with a verified source are wired up — others show "not available" until
+        shows no races rather than a preview of a future card. Saratoga is the exception: NYRA posts entries for
+        upcoming dates in advance, so the date buttons above let you jump ahead and see those cards early — a date
+        with nothing posted yet just shows no races. Only tracks with a verified source are wired up — others show "not available" until
         one is added.
       </div>
     </div>
@@ -3369,6 +3396,12 @@
   let lastEntriesDate = null;
   let lastEntriesRaces = [];
 
+  // Only Saratoga's entries source is verified to accept an arbitrary
+  // future ?date= and return that day's real card (NYRA's own site does
+  // the same via its date dropdown). null = defer to today in track TZ.
+  const ENTRIES_DATE_PICKER_TRACKS = new Set(["saratoga"]);
+  let selectedEntriesDate = null;
+
   // Pre-shared-storage localStorage copy — read-only now, kept only as a
   // one-time migration source (see loadBiasLog() below). activeTrack must
   // already be set to the track being loaded before this is called.
@@ -3896,23 +3929,56 @@
     const entriesTag = $("entriesTag");
     const source = activeTrack.entriesSource;
     const trackId = activeTrack.id;
+    renderEntriesDatePicker();
     if (!source){
       $("entriesBody").innerHTML = `<div class="log-empty">Live entries aren't wired up for this track yet.</div>`;
       if (entriesTag) entriesTag.textContent = "NOT AVAILABLE";
       return;
     }
-    const { date } = nowInTrackTZ();
+    const date = (ENTRIES_DATE_PICKER_TRACKS.has(trackId) && selectedEntriesDate) || nowInTrackTZ().date;
     let races;
     try{ races = await entriesApiGet(trackId, date); }
     catch(err){
       console.error("Entries fetch failed", err);
-      $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load today's entries — ${escapeHtml(err.message)}</div>`;
+      $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load entries for ${escapeHtml(date)} — ${escapeHtml(err.message)}</div>`;
       if (entriesTag) entriesTag.textContent = "ERROR";
       return;
     }
     if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
     if (entriesTag) entriesTag.textContent = `LIVE · ${ENTRIES_SOURCE_LABEL[source] ?? source.toUpperCase()}`;
     renderEntriesPage(date, races);
+  }
+
+  // Small window of upcoming dates a user can jump to, mirroring NYRA's own
+  // entries-page date dropdown. Shown only for tracks in
+  // ENTRIES_DATE_PICKER_TRACKS — other sources (DMTC, Monmouth) only ever
+  // expose whatever card is currently posted, no day parameter to select.
+  function entriesDateOptions(){
+    const { date: today } = nowInTrackTZ();
+    const opts = [];
+    for (let i = 0; i < 7; i++){
+      const date = shiftDateStr(today, i);
+      const label = i === 0 ? "TODAY" : new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+        weekday: 'short', month: 'numeric', day: 'numeric', timeZone: 'UTC',
+      }).toUpperCase();
+      opts.push({ date, label });
+    }
+    return opts;
+  }
+
+  function renderEntriesDatePicker(){
+    const el = $("entriesDatePicker");
+    if (!el) return;
+    if (!ENTRIES_DATE_PICKER_TRACKS.has(activeTrack.id)){
+      el.hidden = true;
+      el.innerHTML = "";
+      return;
+    }
+    el.hidden = false;
+    const activeDate = selectedEntriesDate || nowInTrackTZ().date;
+    el.innerHTML = entriesDateOptions().map(opt => `
+      <button type="button" class="entries-date-tab${opt.date === activeDate ? " active" : ""}" data-date="${opt.date}">${escapeHtml(opt.label)}</button>
+    `).join("");
   }
 
   // "1:51 PM" from NYRA's raw post-time string ("2026-08-16T13:51:12") — that
@@ -3980,7 +4046,7 @@
     const body = $("entriesBody");
     if (!races.length){
       selectedEntriesRace = null;
-      body.innerHTML = `<div class="log-empty">No races carded for ${escapeHtml(activeTrack.shortName)} today (${escapeHtml(date)}).</div>`;
+      body.innerHTML = `<div class="log-empty">No races carded for ${escapeHtml(activeTrack.shortName)} on ${escapeHtml(date)}.</div>`;
       return;
     }
     if (selectedEntriesRace == null || !races.some(r => r.raceNumber === selectedEntriesRace)){
@@ -7639,6 +7705,7 @@
     selectedLogMonth = null; // default back to this track's own current month, not whatever was being browsed before
     dailyLogNyraBackfillDone = false;
     selectedEntriesRace = null;
+    selectedEntriesDate = null; // back to today's card, not whatever date was picked for the old track
     $("entriesBody").innerHTML = `<div class="log-empty">Loading…</div>`;
     renderLogTable();
     loadWeatherLog().then(entries => {
@@ -7698,6 +7765,17 @@
     if (!btn) return;
     selectedEntriesRace = Number(btn.dataset.race);
     renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+  });
+
+  // Switching dates is a real re-fetch (different day, different card),
+  // unlike the race tabs above which just re-render already-fetched data.
+  $("entriesDatePicker").addEventListener("click", (e) => {
+    const btn = e.target.closest(".entries-date-tab");
+    if (!btn) return;
+    selectedEntriesDate = btn.dataset.date;
+    selectedEntriesRace = null; // new day's card — let loadEntries() pick the default race again
+    $("entriesBody").innerHTML = `<div class="log-empty">Loading…</div>`;
+    loadEntries();
   });
 
   // Open-Meteo's "current" rain reading is a short-term model nowcast, not a
