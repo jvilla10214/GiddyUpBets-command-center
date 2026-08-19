@@ -582,6 +582,22 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "public, max-age=120" });
     }
 
+    if (url.pathname === "/results" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "";
+      const date = url.searchParams.get("date") || "";
+      if (!NYRA_ENTRIES_BASE[track]) return json({ error: "Not supported for this track" }, 400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
+      let result;
+      try {
+        result = await fetchNyraResultsDay(track, date);
+      } catch (err) {
+        return json({ error: `Results fetch failed: ${err.message}` }, 502);
+      }
+      // Short cache — a race can go from not-yet-final to final at any
+      // moment during a card, unlike entries/odds which only drift slowly.
+      return json(result, 200, { "Cache-Control": "public, max-age=90" });
+    }
+
     if (url.pathname === "/pp-stats" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const pageUrl = DMTC_PP_STATS_URL_BY_TRACK[track];
@@ -1189,6 +1205,92 @@ async function fetchNyraEntriesDay(track, date) {
       Array.from({ length: raceCount - 1 }, (_, i) => i + 2).map((n) => fetchRace(n).catch(() => ({ race: null })))
     );
     for (const { race } of rest) if (race) races.push(race);
+  }
+  races.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date, races };
+}
+
+// ---------- NYRA Results (same rdl/race/ endpoint as entries above, just
+// limit=results instead of limit=entries) ----------
+// NYRA's own page shows the literal text "Results not available. Results
+// are presented after full order of finish is official." for any race that
+// hasn't gone official yet — no results table renders at all in that case.
+// That's the signal used here for isFinal, not a guess based on scheduled
+// post time, so a stewards' inquiry that delays "official" past post time
+// is handled correctly: the table just won't exist until NYRA posts it,
+// whatever the reason for the delay. Verified directly against a real
+// completed card (2026-08-16) and a not-yet-run one (2026-08-20).
+function parseNyraResultsFragment(html) {
+  const headerMatch = html.match(/font-heading">\s*Race\s*(\d+)\s*<\/header>/);
+  if (!headerMatch) return null;
+  const raceNumber = Number(headerMatch[1]);
+
+  // The finish-order table is class="w-full -mt-3" specifically (the
+  // payouts table below it is class="w-full" with no -mt-3, which is how
+  // the two are told apart here).
+  const finishTableMatch = html.match(/<table class="w-full -mt-3">([\s\S]*?)<\/table>/);
+  const finishOrder = [];
+  if (finishTableMatch) {
+    const tbodyMatch = finishTableMatch[1].match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/);
+    if (tbodyMatch) {
+      const rowRe = /<tr>\s*<td[^>]*>\s*<div[^>]*>\s*(\d+)\s*<\/div>\s*<\/td>\s*<td[^>]*>\s*<a[^>]*>\s*([^<]+?)\s*<\/a>\s*<\/td>\s*<td[^>]*>\s*([^<]*?)\s*<\/td>\s*<td[^>]*>\s*([^<]*?)\s*<\/td>\s*<td[^>]*>\s*([^<]*?)\s*<\/td>\s*<\/tr>/g;
+      let m;
+      let position = 0;
+      while ((m = rowRe.exec(tbodyMatch[1]))) {
+        position += 1;
+        const [, postPosition, nameRaw, winRaw, placeRaw, showRaw] = m;
+        finishOrder.push({
+          finishPosition: position,
+          postPosition,
+          horseName: decodeEntities(nameRaw).trim(),
+          winPayout: decodeEntities(winRaw).trim() || null,
+          placePayout: decodeEntities(placeRaw).trim() || null,
+          showPayout: decodeEntities(showRaw).trim() || null,
+        });
+      }
+    }
+  }
+
+  const payouts = [];
+  const payoutTableMatch = html.match(/<table class="w-full">([\s\S]*?)<\/table>/);
+  if (payoutTableMatch) {
+    const payoutRowRe = /<tr class="border-t[^"]*">\s*<td[^>]*>\s*(\$[\d.]+)\s*([^<]+?)\s*<\/td>\s*<td[^>]*>\s*([^<]+?)\s*<\/td>\s*<td[^>]*>\s*(\$[\d.,]+)\s*<\/td>/g;
+    let pm;
+    while ((pm = payoutRowRe.exec(payoutTableMatch[1]))) {
+      const [, wagerAmount, wagerTypeRaw, comboRaw, payout] = pm;
+      payouts.push({
+        wagerAmount: decodeEntities(wagerAmount).trim(),
+        wagerType: decodeEntities(wagerTypeRaw).trim(),
+        winningCombo: decodeEntities(comboRaw).trim(),
+        payout: decodeEntities(payout).trim(),
+      });
+    }
+  }
+
+  return { raceNumber, isFinal: finishOrder.length > 0, finishOrder, payouts };
+}
+
+async function fetchNyraResultsDay(track, date) {
+  const base = NYRA_ENTRIES_BASE[track];
+  const fetchRace = async (n) => {
+    const res = await fetch(`${base}/rdl/race/?day=${date}&limit=results&race=${n}`, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 90, cacheEverything: true }, // short — a race can go final mid-poll-interval
+    });
+    if (!res.ok) return { html: null, result: null };
+    const html = await res.text();
+    return { html, result: parseNyraResultsFragment(html) };
+  };
+
+  const first = await fetchRace(1);
+  const raceCount = first.html ? maxRaceNumberFromNav(first.html) : 1;
+  const races = first.result ? [first.result] : [];
+
+  if (raceCount > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: raceCount - 1 }, (_, i) => i + 2).map((n) => fetchRace(n).catch(() => ({ result: null })))
+    );
+    for (const { result } of rest) if (result) races.push(result);
   }
   races.sort((a, b) => a.raceNumber - b.raceNumber);
   return { date, races };

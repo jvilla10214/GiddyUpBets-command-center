@@ -1446,6 +1446,16 @@
   }
   .entries-race-tab.active .entries-race-tab-num{ color: var(--tote-amber); }
   .entries-race-tab-time{ font-size: 10px; color: var(--parchment-dim); }
+  .entries-race-tab-final{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 8.5px;
+    letter-spacing: 0.5px;
+    color: var(--rail-green);
+    background: rgba(76,175,125,0.14);
+    padding: 1px 4px;
+    border-radius: 3px;
+    vertical-align: middle;
+  }
   .entries-date-picker{
     display: flex;
     flex-wrap: wrap;
@@ -1487,6 +1497,37 @@
   .entries-weather-unknown{ font-style: italic; }
   .entries-race-card{ margin-bottom: 22px; }
   .entries-race-card:last-child{ margin-bottom: 0; }
+  .entries-results-card{
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    background: rgba(76,175,125,0.06);
+    border: 1px solid rgba(76,175,125,0.3);
+    border-radius: 8px;
+  }
+  .entries-results-header{
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .entries-results-tag{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.5px;
+    color: var(--rail-green);
+    background: rgba(76,175,125,0.16);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .entries-results-title{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 14px;
+    color: var(--parchment);
+  }
+  .entries-results-table th, .entries-payouts-table th{ opacity: 0.6; font-weight: 400; }
+  .entries-payouts-table{ margin-top: 10px; }
   .entries-race-header{
     display: flex;
     flex-wrap: wrap;
@@ -3657,6 +3698,35 @@
   const ENTRIES_DATE_PICKER_TRACKS = new Set(["saratoga"]);
   let selectedEntriesDate = null;
 
+  // Official NYRA Results (same rdl/race/ endpoint as entries, limit=
+  // results) — Saratoga only for the same reason as everywhere else in
+  // this file: the only NYRA results URL actually verified end-to-end.
+  // Belmont should work identically once it's racing and gets added here.
+  const NYRA_RESULTS_SUPPORTED = new Set(["saratoga"]);
+  let lastResultsByRace = {}; // { [raceNumber]: {isFinal, finishOrder, payouts} } for lastEntriesDate — reset on track/date switch
+  async function resultsApiGet(track, date){
+    const res = await fetch(stableApiUrl(`/results?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.races) ? data.races : [];
+  }
+  // Polls for newly-final races on the same cadence as the site's main live
+  // refresh — a race can go official at any point during a card, so this
+  // needs its own timer rather than only checking on track/date switch.
+  async function refreshRaceResults(){
+    if (!NYRA_RESULTS_SUPPORTED.has(activeTrack.id) || !lastEntriesDate) return;
+    const trackId = activeTrack.id;
+    const date = lastEntriesDate;
+    let results;
+    try{ results = await resultsApiGet(trackId, date); }
+    catch(err){ console.error("Race results fetch failed", err); return; }
+    if (activeTrack.id !== trackId || lastEntriesDate !== date) return; // stale — switched away while this was in flight
+    const byRace = {};
+    results.forEach(r => { byRace[r.raceNumber] = r; });
+    lastResultsByRace = byRace;
+    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+  }
+
   // Pre-shared-storage localStorage copy — read-only now, kept only as a
   // one-time migration source (see loadBiasLog() below). activeTrack must
   // already be set to the track being loaded before this is called.
@@ -4221,7 +4291,9 @@
     }
     if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
     if (entriesTag) entriesTag.textContent = `LIVE · ${ENTRIES_SOURCE_LABEL[source] ?? source.toUpperCase()}`;
+    lastResultsByRace = {}; // new date's card — any cached results were for whatever date was showing before
     renderEntriesPage(date, races);
+    refreshRaceResults();
   }
 
   // Small window of upcoming dates a user can jump to, mirroring NYRA's own
@@ -4363,9 +4435,10 @@
 
     const tabsHtml = races.map(race => {
       const timeLabel = formatPostTimeLabel(race.postTimeIso);
+      const isFinal = !!lastResultsByRace[race.raceNumber]?.isFinal;
       return `
         <button type="button" class="entries-race-tab${race.raceNumber === selectedEntriesRace ? " active" : ""}" data-race="${race.raceNumber}">
-          <span class="entries-race-tab-num">R${race.raceNumber}</span>
+          <span class="entries-race-tab-num">R${race.raceNumber}${isFinal ? ` <span class="entries-race-tab-final">FINAL</span>` : ""}</span>
           <span class="entries-race-tab-time">${escapeHtml(timeLabel || race.mtpLabel || "—")}</span>
         </button>
       `;
@@ -4409,8 +4482,58 @@
       </tr>
     `).join("");
 
+    // Official NYRA Results — shown above the entries/odds table, never
+    // replacing it, since morning-line/final odds stay useful for review
+    // after the fact. Only appears once NYRA itself has posted a full order
+    // of finish (see refreshRaceResults()/parseNyraResultsFragment on the
+    // worker) — upcoming races render nothing extra here at all.
+    const result = lastResultsByRace[race.raceNumber];
+    let resultsHtml = "";
+    if (result?.isFinal){
+      const finishRows = result.finishOrder.map(f => `
+        <tr>
+          <td>${escapeHtml(String(f.finishPosition))}</td>
+          <td>${escapeHtml(f.postPosition || "—")}</td>
+          <td>${escapeHtml(f.horseName || "—")}</td>
+          <td>${f.winPayout ? escapeHtml(f.winPayout) : "—"}</td>
+          <td>${f.placePayout ? escapeHtml(f.placePayout) : "—"}</td>
+          <td>${f.showPayout ? escapeHtml(f.showPayout) : "—"}</td>
+        </tr>
+      `).join("");
+      const payoutRows = result.payouts.map(p => `
+        <tr>
+          <td>${escapeHtml(p.wagerAmount)} ${escapeHtml(p.wagerType)}</td>
+          <td>${escapeHtml(p.winningCombo)}</td>
+          <td>${escapeHtml(p.payout)}</td>
+        </tr>
+      `).join("");
+      resultsHtml = `
+        <div class="entries-results-card">
+          <div class="entries-results-header">
+            <span class="tag entries-results-tag">Official — NYRA Results</span>
+            <span class="entries-results-title">Race ${race.raceNumber} — Final</span>
+          </div>
+          <div class="log-table-wrap">
+            <table class="log-table entries-results-table">
+              <thead><tr><th>Fin</th><th>PP</th><th>Horse</th><th>Win</th><th>Place</th><th>Show</th></tr></thead>
+              <tbody>${finishRows}</tbody>
+            </table>
+          </div>
+          ${result.payouts.length ? `
+            <div class="log-table-wrap">
+              <table class="log-table entries-payouts-table">
+                <thead><tr><th>Wager</th><th>Winners</th><th>Payout</th></tr></thead>
+                <tbody>${payoutRows}</tbody>
+              </table>
+            </div>
+          ` : ""}
+        </div>
+      `;
+    }
+
     body.innerHTML = `
       <div class="entries-race-tabs">${tabsHtml}</div>
+      ${resultsHtml}
       <div class="entries-race-card">
         <div class="entries-race-header">
           <span class="entries-race-num">Race ${race.raceNumber}</span>
@@ -8104,6 +8227,7 @@
     dailyLogNyraBackfillDone = false;
     selectedEntriesRace = null;
     selectedEntriesDate = null; // back to today's card, not whatever date was picked for the old track
+    lastResultsByRace = {};
     $("entriesBody").innerHTML = `<div class="log-empty">Loading…</div>`;
     renderLogTable();
     loadWeatherLog().then(entries => {
@@ -8440,6 +8564,7 @@
   setInterval(renderSevereAlertBanners, 30 * 1000); // re-checks each banner's own expires — clears it close to the real moment, not just on the next 5-min poll
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(refreshOfficialTrackConditions, TRACK_CONDITIONS_REFRESH_MS);
+  setInterval(refreshRaceResults, REFRESH_MS); // same cadence as the main live refresh — a race can go final any time during a card
   setInterval(refreshPpStats, PP_STATS_REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
