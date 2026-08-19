@@ -1526,6 +1526,9 @@
     border-radius: 4px;
   }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
+  .odds-arrow{ margin-left: 4px; font-size: 10px; font-weight: 700; }
+  .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
+  .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
   .log-remove{ font-size: 14px; padding: 2px 4px; }
   .log-remove:hover{ color: var(--silk-red); }
   #historyAddBtn{
@@ -4266,6 +4269,39 @@
     return `${h}:${m[2]} ${ampm}`;
   }
 
+  // Fractional odds ("5/2", "6/1", "EVEN"/"EVENS") -> decimal profit ratio
+  // (5/2 -> 2.5, 6/1 -> 6.0, EVEN -> 1.0) so morning-line and current odds
+  // can actually be compared numerically — the raw strings can't be sorted
+  // as text. Returns null for anything that doesn't cleanly parse; callers
+  // treat null as "don't guess", not "assume unchanged".
+  function parseOddsToDecimal(str){
+    if (!str) return null;
+    const s = str.trim().toUpperCase();
+    if (s === "EVEN" || s === "EVENS") return 1.0;
+    const m = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+    if (m){
+      const den = parseFloat(m[2]);
+      if (!den) return null;
+      return parseFloat(m[1]) / den;
+    }
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // Small colored arrow showing how current odds moved relative to morning
+  // line — green down = shortened (more money bet on this horse), red up =
+  // drifted (less money). Only renders when both values exist AND parse
+  // cleanly (works for any source that populates both fields, not just
+  // NYRA — Del Mar/Monmouth's parsers currently always leave currentOdds
+  // null, so this naturally shows nothing there today).
+  function oddsMoveArrow(mlOdds, currentOdds){
+    const ml = parseOddsToDecimal(mlOdds);
+    const cur = parseOddsToDecimal(currentOdds);
+    if (ml == null || cur == null || cur === ml) return "";
+    const shortened = cur < ml;
+    return `<span class="odds-arrow ${shortened ? "odds-arrow-down" : "odds-arrow-up"}" title="${shortened ? "Shortened" : "Drifted"} from ML ${escapeHtml(mlOdds)}">${shortened ? "↓" : "↑"}</span>`;
+  }
+
   // Finds the hourly forecast slot closest to a race's post time and reduces
   // it to the same headwind/crosswind read Track Play Analysis uses for
   // "right now" — here applied at whatever hour that specific race actually
@@ -4369,7 +4405,7 @@
         <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
-        <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.currentOdds || "—")}</td>
+        <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
       </tr>
     `).join("");
 
