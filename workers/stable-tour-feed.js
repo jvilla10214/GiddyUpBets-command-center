@@ -139,12 +139,31 @@
 //    spec-forbidden from setting its own User-Agent header, so this has to
 //    go through a server-side context. See NWS_USER_AGENT above.
 //
+// 12. Ascot live on-site weather (GET /ascot-conditions) — proxies
+//    TurfTrax's WeatherTrax station feed for Ascot (its.turftrax.co.uk),
+//    the same live data source Ascot's own official "The Going" page
+//    (ascot.com/thegoing) embeds via iframe. Genuine on-site sensor
+//    readings — temperature, humidity, wind speed/direction/gust, rain —
+//    from equipment near the 4-furlong marker on the straight mile, not a
+//    regional weather model, so it's the more accurate source for Ascot
+//    specifically. The endpoint that actually serves this data rejects
+//    requests without a matching Referer header ("Unlicensed Direct
+//    Access") — TURFTRAX_REFERER below satisfies that. This job only
+//    returns the parsed readings plus their own age in minutes; the
+//    client decides whether they're fresh enough to use (same "worker
+//    extracts, client interprets" split as every other job here), and
+//    falls back to Open-Meteo for anything TurfTrax doesn't report at all
+//    (forecast, AQI, soil moisture, etc.) Ascot only — the going/weather
+//    report system covers other UK tracks too but only this one has been
+//    fetched and verified.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, #10, and #11
-// (fetch-and-parse only, no storage) work without it. Job #8 additionally
-// requires a PIRATE_WEATHER_API_KEY secret (Worker settings -> Variables and
-// Secrets -> Add, type "Secret") — get a free key at pirateweather.net.
+// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, #10, #11,
+// and #12 (fetch-and-parse only, no storage) work without it. Job #8
+// additionally requires a PIRATE_WEATHER_API_KEY secret (Worker settings ->
+// Variables and Secrets -> Add, type "Secret") — get a free key at
+// pirateweather.net.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -178,6 +197,14 @@ const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 // this Worker at all, not just convention.
 const NWS_USER_AGENT = "GiddyUpBetsCommandCenter/1.0 (https://jvilla10214.github.io/GiddyUpBets-command-center/; contact: jvilla10214@gmail.com)";
 const WRITE_PASSPHRASE = "giddyup";
+
+// Job #12 — the visualiser page itself fetches this same URL client-side on
+// a timer; the Referer is what its "Unlicensed Direct Access" check is
+// actually gating on (confirmed directly: identical request with vs.
+// without this header is the difference between a rejection payload and
+// real data), not IP or User-Agent.
+const TURFTRAX_STREAM_URL = "https://its.turftrax.co.uk/visualiser/stream/ascot.html";
+const TURFTRAX_REFERER = "https://its.turftrax.co.uk/visualiser/ascot/";
 
 export default {
   async fetch(request, env) {
@@ -595,6 +622,29 @@ async function handleRequest(request, env) {
       return json({ alerts }, 200, { "Cache-Control": "public, max-age=60" });
     }
 
+    if (url.pathname === "/ascot-conditions" && request.method === "GET") {
+      let res;
+      try {
+        res = await fetch(TURFTRAX_STREAM_URL, {
+          headers: { "User-Agent": BROWSER_UA, "Referer": TURFTRAX_REFERER, "Accept": "application/json" },
+          cf: { cacheTtl: 120, cacheEverything: true },
+        });
+      } catch (err) {
+        return json({ error: `TurfTrax fetch failed: ${err.message}` }, 502);
+      }
+      if (!res.ok) return json({ error: `TurfTrax returned HTTP ${res.status}` }, 502);
+      let raw;
+      try {
+        raw = await res.json();
+      } catch (err) {
+        return json({ error: `TurfTrax response wasn't valid JSON: ${err.message}` }, 502);
+      }
+      if (raw.status !== 0 || !raw.payload?.content) {
+        return json({ error: `TurfTrax rejected the request: ${raw.payload ?? "unknown"}` }, 502);
+      }
+      return json(parseTurftraxConditions(raw.payload), 200, { "Cache-Control": "public, max-age=120" });
+    }
+
     // Falls through to the original feed-scrape behavior for GET / (and any
     // other unmatched path) — unchanged from before this shared-storage work.
     let feedRes;
@@ -702,6 +752,74 @@ function corsHeaders() {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Stable-Key",
+  };
+}
+
+// TurfTrax's "weather-date"/"weather-last-update" strings ("19/08/26",
+// "6:08pm") are already Europe/London local time — the station sits at
+// Ascot. Comparing them against "now" computed in the same zone lets us
+// get an accurate age in minutes without ever needing to know the actual
+// UTC offset (GMT vs BST) — both timestamps get treated as if they were
+// UTC and subtracted, which is valid as long as they're the same
+// wall-clock zone, true here by construction.
+function parseTurftraxLocalParts(dateStr, timeStr) {
+  const dm = /^(\d{2})\/(\d{2})\/(\d{2})$/.exec(dateStr || "");
+  const tm = /^(\d{1,2}):(\d{2})(am|pm)$/i.exec(timeStr || "");
+  if (!dm || !tm) return null;
+  let hour = parseInt(tm[1], 10);
+  const isPm = tm[3].toLowerCase() === "pm";
+  if (isPm && hour !== 12) hour += 12;
+  if (!isPm && hour === 12) hour = 0;
+  return {
+    year: 2000 + parseInt(dm[3], 10), month: parseInt(dm[2], 10), day: parseInt(dm[1], 10),
+    hour, minute: parseInt(tm[2], 10),
+  };
+}
+
+function londonNowParts() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour") % 24, minute: get("minute") };
+}
+
+function minutesBetweenLocalParts(earlier, later) {
+  const a = Date.UTC(earlier.year, earlier.month - 1, earlier.day, earlier.hour, earlier.minute);
+  const b = Date.UTC(later.year, later.month - 1, later.day, later.hour, later.minute);
+  return Math.round((b - a) / 60000);
+}
+
+const mmToInches = (mm) => (typeof mm === "number" ? mm / 25.4 : null);
+const cToF = (c) => (typeof c === "number" ? (c * 9) / 5 + 32 : null);
+
+// Maps TurfTrax's WDV API Stream payload (see job #12's comment) to the
+// subset of fields the client actually overlays onto Open-Meteo's current
+// conditions. Deliberately excludes anything Open-Meteo already covers at
+// least as well (forecast, AQI, soil moisture) and anything not confirmed
+// stable across visits (the payload also carries a raw debug "trace" field
+// with SQL and internal state — not returned here, only the structured
+// "content" block is).
+function parseTurftraxConditions(payload) {
+  const c = payload.content || {};
+  const readingParts = parseTurftraxLocalParts(c["weather-date"], c["weather-last-update"]);
+  const ageMinutes = readingParts ? minutesBetweenLocalParts(readingParts, londonNowParts()) : null;
+  return {
+    ageMinutes,
+    stationActivityStatus: c.stationActivityStatus ?? null,
+    lastUpdateLabel: c["weather-last-update"] ?? null,
+    temperatureF: cToF(c["temperature-current"]),
+    humidityPct: typeof c["humidity-current"] === "number" ? c["humidity-current"] : null,
+    windSpeedMph: typeof c["windspeed-current"] === "number" ? c["windspeed-current"] : null,
+    windGustMph: typeof c["windgust-current"] === "number" ? c["windgust-current"] : null,
+    windDirectionDeg: typeof c["winddirection-current"] === "number" ? c["winddirection-current"] : null,
+    windDirectionText: c["winddirection-text"] ?? null,
+    rainSinceMidnightIn: mmToInches(c["rain1-since"]),
+    rain24hIn: mmToInches(c["rain1-24hr"]),
+    rain7dIn: mmToInches(c["rain1-7day"]),
+    trackType: c.trackType ?? null,
+    goingRaceDate: c["going-race-date"] ?? null,
   };
 }
 

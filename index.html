@@ -3229,6 +3229,12 @@
   let lastOfficialConditions = null; // payload from trackConditionsApiGet(), or null before the first fetch resolves
   let lastAqi = null; // filled in by fetchAirQuality(), a separate fetch cycle from the main weather call
   let lastTide = null; // filled in by fetchTideData() (Del Mar only), same separate-fetch pattern as AQI
+  // Set by render() whenever it actually used TurfTrax's on-site Ascot
+  // readings (fresh enough, see ASCOT_CONDITIONS_MAX_AGE_MIN) to override
+  // Open-Meteo's current-conditions fields — null otherwise, including for
+  // every non-Ascot track. Only exists so the UI can show where the
+  // numbers on screen actually came from.
+  let lastAscotConditions = null;
   let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
   let lastNewsItems = []; // cached so switchTrack() can re-flag matches without a network refetch
 
@@ -3943,6 +3949,21 @@
   const NYRA_TRACK_CONDITIONS_SUPPORTED = new Set(["saratoga"]);
   async function trackConditionsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/track-conditions?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  // Live on-site weather for Ascot (TurfTrax WeatherTrax station, see the
+  // worker's job #12 comment) — genuine sensor readings from the course
+  // itself, preferred over Open-Meteo's regional model for current
+  // conditions there. ASCOT_CONDITIONS_MAX_AGE_MIN gates staleness: the
+  // worker returns whatever it has plus its own age, this decides whether
+  // that's fresh enough to actually use (same division as every other
+  // per-track feature here — worker fetches, client decides). Ascot only.
+  const ASCOT_CONDITIONS_SUPPORTED = new Set(["ascot"]);
+  const ASCOT_CONDITIONS_MAX_AGE_MIN = 45;
+  async function ascotConditionsApiGet(){
+    const res = await fetch(stableApiUrl(`/ascot-conditions`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     return res.json();
   }
@@ -7530,12 +7551,22 @@
     try{
       // fetchRainHistory() never rejects (own try/catch) — Promise.all just
       // lets the archive lookup happen alongside the main request instead of
-      // adding a second sequential round-trip to every refresh.
-      const [res] = await Promise.all([fetch(currentApiUrl()), fetchRainHistory()]);
+      // adding a second sequential round-trip to every refresh. Same for the
+      // Ascot-only TurfTrax fetch — its own try/catch below means a hiccup
+      // there degrades to "just use Open-Meteo" rather than failing the
+      // whole refresh.
+      const wantsAscotConditions = ASCOT_CONDITIONS_SUPPORTED.has(requestedTrackId);
+      const [res, , ascotConditions] = await Promise.all([
+        fetch(currentApiUrl()),
+        fetchRainHistory(),
+        wantsAscotConditions
+          ? ascotConditionsApiGet().catch((err) => { console.error("Ascot conditions fetch failed", err); return null; })
+          : Promise.resolve(null),
+      ]);
       if(!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       if (activeTrack.id !== requestedTrackId) return; // stale — track changed while this was in flight
-      render(data);
+      render(data, ascotConditions);
       setStatus(true, "Live");
       $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit', timeZone: activeTrack.timezone});
       refreshSevereWeatherAlerts(); // separate free-standing API — a hiccup here shouldn't affect the weather status pill
@@ -7579,8 +7610,35 @@
     }
   }
 
-  function render(data){
+  function render(data, ascotConditions){
     const c = data.current;
+
+    // Overlay TurfTrax's on-site Ascot readings onto Open-Meteo's current
+    // conditions, right before anything downstream reads them — every
+    // consumer of c.* (AI summary, Weather Bias Predictor Score, Track Play
+    // Analysis wind alignment, the tiles below) transparently gets the more
+    // accurate on-course numbers instead of a regional model estimate. Only
+    // overrides fields TurfTrax actually reports (temp/humidity/wind);
+    // apparent_temperature, cloud_cover, pressure_msl, weather_code, soil
+    // moisture, and the whole forecast/hourly/daily blocks stay
+    // Open-Meteo's, per the source instruction to keep using Open-Meteo for
+    // whatever TurfTrax doesn't cover. Gated on freshness (ASCOT_CONDITIONS_
+    // MAX_AGE_MIN) so a dark-period stale reading never silently overrides
+    // live model data with something hours old.
+    lastAscotConditions = null;
+    if (ASCOT_CONDITIONS_SUPPORTED.has(activeTrack.id) && ascotConditions
+        && ascotConditions.ageMinutes != null && ascotConditions.ageMinutes <= ASCOT_CONDITIONS_MAX_AGE_MIN){
+      lastAscotConditions = ascotConditions;
+      if (ascotConditions.temperatureF != null) c.temperature_2m = ascotConditions.temperatureF;
+      if (ascotConditions.humidityPct != null) c.relative_humidity_2m = ascotConditions.humidityPct;
+      if (ascotConditions.windSpeedMph != null) c.wind_speed_10m = ascotConditions.windSpeedMph;
+      if (ascotConditions.windGustMph != null) c.wind_gusts_10m = ascotConditions.windGustMph;
+      if (ascotConditions.windDirectionDeg != null) c.wind_direction_10m = ascotConditions.windDirectionDeg;
+    }
+    $("footerWeatherSource").textContent = lastAscotConditions
+      ? `Weather data: TurfTrax on-site station (temp/humidity/wind, updated ${lastAscotConditions.lastUpdateLabel ?? "recently"}) + Open-Meteo for everything else · ${activeTrack.name}, ${activeTrack.city}`
+      : `Weather data: Open-Meteo (no API key required) · ${activeTrack.name}, ${activeTrack.city} (${activeTrack.lat}, ${activeTrack.lon})`;
+
     lastApparentTemp = c.apparent_temperature;
     lastWeatherData = data;
 
@@ -7837,6 +7895,7 @@
     // bleeds into the new track's panels while the fresh fetch is in flight.
     lastAqi = null;
     lastTide = null;
+    lastAscotConditions = null;
     lastWeatherData = null;
     lastApparentTemp = null;
     forecastSteps = [];
