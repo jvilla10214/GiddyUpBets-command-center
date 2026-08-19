@@ -3001,19 +3001,30 @@
       tideStationId: null, tideRangeFt: null,
     },
 
-    // ---- UK / International: names + coordinates only for now (per user
-    // request) — no heading/entries/weather-feature wiring yet, that's
-    // planned for a follow-up pass. heading below is an explicit
-    // placeholder (not measured from real track geometry like the US
-    // tracks above) purely so windComponents() calls elsewhere don't throw
-    // on undefined; wind-alignment analysis will be wrong for these tracks
-    // until it's replaced with a real OSM-derived value.
+    // ---- UK / International: no entries/tide/NYRA wiring (not applicable
+    // outside NYRA's own tracks). heading below is OSM-geometry-verified —
+    // same methodology as the US tracks above: real track-polygon straight
+    // segments (Overpass), racing direction confirmed independently via
+    // WebSearch (right-/left-handed, i.e. clockwise/counterclockwise), then
+    // cross-checked against the OSM-tagged grandstand position — whichever
+    // straight's nearer endpoint sits closest to the stands is the
+    // direction of travel INTO the home straight, not just its raw axis
+    // bearing (a straight's rail can be walked either direction in OSM,
+    // so axis bearing alone doesn't tell you which way horses run it).
     ascot: {
       id: "ascot", name: "Ascot Racecourse", shortName: "Ascot",
       city: "Ascot, England",
       lat: 51.41611, lon: -0.67694, // Wikipedia infobox
       timezone: "Europe/London",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Right-handed (clockwise) course, confirmed via WebSearch. OSM
+      // relation 1657807's outer way: home straight is the long ~1780m run
+      // (bearing 262.6°) — the "Ascot Pavillion" grandstand (building=
+      // grandstand) sits just 60m from it, vs 500m+ from every other
+      // segment. Ascot's shape is an irregular triangle, not a simple oval
+      // (an OSM fixme note on the relation itself flags this), so
+      // backstretch is the straight's own reciprocal rather than an
+      // independently-measured far-side segment.
+      heading: { homestretch: 263, backstretch: 83 },
       nyraCode: null, scratchesUrl: null,
       // No legally-clean high-res source found yet — the UK's Environment
       // Agency aerial imagery is open-licensed but project-based (patchy
@@ -3030,7 +3041,16 @@
       city: "Epsom, England",
       lat: 51.30972, lon: -0.25556, // Wikipedia infobox
       timezone: "Europe/London",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Left-handed (counterclockwise) course, confirmed via WebSearch —
+      // same convention as the US tracks. OSM way 158859049 (grass track):
+      // the ~1300m run past Tattenham Corner sits 40m from the Queen's
+      // Stand grandstand (building=grandstand); the direction OF TRAVEL
+      // into that stand (not the segment's raw digitized-order bearing,
+      // which pointed the other way) is 286°, independently matched within
+      // 1.4° by a second ~1000m straight elsewhere in the polygon also
+      // running near the stands (Epsom hosts a separate straight-course
+      // finish at the same winning post) — good agreement for backstretch.
+      heading: { homestretch: 286, backstretch: 106 },
       nyraCode: null, scratchesUrl: null,
       photo: null, photoAlt: "Aerial view of Epsom Downs Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
@@ -3040,7 +3060,15 @@
       city: "Newmarket, England",
       lat: 52.23750, lon: 0.37444, // Wikipedia infobox, Rowley Mile course
       timezone: "Europe/London",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Unlike every other track here, Newmarket's Rowley Mile is a
+      // genuinely straight course, not an oval — there is no real
+      // "backstretch". OSM way 991360126 gives a die-straight ~2.2km run;
+      // direction of travel into the Rowley Mile Grandstand (building=
+      // grandstand, 266m from the nearer end) is 108°. backstretch is set
+      // to the reciprocal purely so windComponents() has a value to read —
+      // races never run that direction, they just start further back
+      // along the same 108° line.
+      heading: { homestretch: 108, backstretch: 288 },
       nyraCode: null, scratchesUrl: null,
       photo: null, photoAlt: "Aerial view of Newmarket Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
@@ -3050,7 +3078,13 @@
       city: "Sha Tin, Hong Kong",
       lat: 22.39944, lon: 114.20667, // Wikipedia infobox
       timezone: "Asia/Hong_Kong",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Right-handed (clockwise), confirmed via WebSearch. OSM relation
+      // 3726255's outer way (the grass track ring): direction of travel
+      // toward the three HKJC grandstand nodes (avg 484m from the nearest
+      // straight, vs 700m+ from the far side) is 39°; the far-side ~970m
+      // straight independently measures 221.1° raw, matching the 219°
+      // reciprocal within 2°.
+      heading: { homestretch: 39, backstretch: 219 },
       nyraCode: null, scratchesUrl: null,
       // Hong Kong Lands Department imagery API (mapapi.geodata.gov.hk) —
       // free, no key, public-sector open imagery.
@@ -3062,7 +3096,13 @@
       city: "Happy Valley, Hong Kong",
       lat: 22.27278, lon: 114.18222, // Wikipedia infobox
       timezone: "Asia/Hong_Kong",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Right-handed (clockwise), confirmed via WebSearch — a tight,
+      // roughly egg-shaped urban track (1450m circumference, 338m home
+      // straight, per HKJC). OSM relation 8049450's outer boundary is
+      // split across several ways; the closest segment to the cluster of
+      // OSM-tagged grandstand buildings (as near as 56m) gives a direction
+      // of travel into the stands of 177°.
+      heading: { homestretch: 177, backstretch: 357 },
       nyraCode: null, scratchesUrl: null,
       // Hong Kong Lands Department imagery API — see Sha Tin's comment above.
       photo: "assets/track-happyvalley.png", photoAlt: "Aerial view of Happy Valley Racecourse",
@@ -3073,7 +3113,17 @@
       city: "Paris, France",
       lat: 48.85878, lon: 2.22963, // Wikipedia infobox
       timezone: "Europe/Paris",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Right-handed (clockwise) for the Grande Piste (main course),
+      // confirmed via WebSearch — the Ligne Droite straight course is the
+      // one exception at this venue, not modeled separately here. OSM
+      // relation 1290012's outer way (Grande Piste): the ~780m straight
+      // nearest the grandstand (visually located from the sourced aerial
+      // photo — no building=grandstand tag found in OSM here) runs 24° on
+      // its own natural digitized direction, right where the finish line
+      // sits. backstretch is the reciprocal; Longchamp's real shape is a
+      // complex multi-course layout (Grande/Moyenne/Petite Piste all
+      // nested), so this is a simplification like Ascot's.
+      heading: { homestretch: 24, backstretch: 204 },
       nyraCode: null, scratchesUrl: null,
       // IGN Géoportail BD ORTHO (data.geopf.fr) — free/open under France's
       // Licence Ouverte (Etalab 2.0) since Jan 2021, 20cm resolution.
@@ -3085,7 +3135,14 @@
       city: "County Kildare, Ireland",
       lat: 53.15750, lon: -6.84000, // Wikipedia infobox
       timezone: "Europe/Dublin",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Right-handed (clockwise) horseshoe course, confirmed via
+      // WebSearch. OSM way 449656023 (the main track): the Curragh is
+      // famous for one of the longest run-ins in racing, so the
+      // grandstand/parade-ring complex sits back from the rail itself —
+      // all four long segments found (900m-2200m) independently agree on
+      // a direction of travel toward the stands within a tight 100-106°
+      // band, which is what these numbers use.
+      heading: { homestretch: 100, backstretch: 280 },
       nyraCode: null, scratchesUrl: null,
       // No legally-clean high-res source found yet — Irish GIS hosts
       // (osi.ie/geohive/tailte.ie) were unreachable from here, and the only
@@ -3099,7 +3156,16 @@
       city: "Dubai, UAE",
       lat: 25.15610, lon: 55.30655, // Wikipedia infobox
       timezone: "Asia/Dubai",
-      heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
+      // Left-handed (counterclockwise), confirmed via WebSearch — same
+      // convention as the US tracks. OSM way 170224259 ("Meydan Horse
+      // Track") is one continuous digitized rail; its two genuine
+      // straights are the ~600-660m runs at 223.4°/43.1° (near-exact
+      // reciprocals). The distinctive curved grandstand is clearly visible
+      // in the sourced aerial photo hugging one side of the oval — no
+      // building=grandstand tag exists in OSM here (the nearby "stadium"
+      // tag turned out to be a different building) — and the straight's
+      // end nearest that building gives a direction of travel of 223°.
+      heading: { homestretch: 223, backstretch: 43 },
       nyraCode: null, scratchesUrl: null,
       // ESA Sentinel-2 (Copernicus open data, EOX s2cloudless mosaic),
       // 10m/pixel — coarser than the other sourced photos, but Meydan's
