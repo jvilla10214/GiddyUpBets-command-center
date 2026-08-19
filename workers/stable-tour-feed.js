@@ -983,14 +983,30 @@ function maxRaceNumberFromNav(html) {
   return nums.length ? Math.max(...nums) : 1;
 }
 
-function parseNyraRaceFragment(html) {
+function parseNyraRaceFragment(html, date) {
   const headerMatch = html.match(/font-heading">\s*Race\s*(\d+)\s*<\/header>/);
   if (!headerMatch) return null;
   const raceNumber = Number(headerMatch[1]);
 
   const mtpMatch = html.match(/data-post-time="([^"]+)"[^>]*data-mtp-variant="[^"]*"[^>]*aria-label="[^"]*">([^<]*)<\/span>/);
-  const postTimeIso = mtpMatch ? mtpMatch[1] : null;
+  let postTimeIso = mtpMatch ? mtpMatch[1] : null;
   const mtpLabel = mtpMatch ? decodeEntities(mtpMatch[2]).trim() : null;
+
+  // Future-day entries pages don't render the live "minutes to post"
+  // widget above (that only applies to today's actual race day) — instead
+  // they show a plain "1:10p at Saratoga" string in the same info row as
+  // distance/surface. Same info, different markup, so fall back to it.
+  if (!postTimeIso && date) {
+    const postTimeTextMatch = html.match(/<div class="text-zinc-800 dark:text-white ml-auto">\s*([\s\S]*?)\s*<\/div>/);
+    const timeMatch = postTimeTextMatch && postTimeTextMatch[1].match(/(\d{1,2}):(\d{2})\s*([ap])/i);
+    if (timeMatch) {
+      let hour = Number(timeMatch[1]);
+      const isPm = timeMatch[3].toLowerCase() === "p";
+      if (isPm && hour !== 12) hour += 12;
+      if (!isPm && hour === 12) hour = 0;
+      postTimeIso = `${date}T${String(hour).padStart(2, "0")}:${timeMatch[2]}:00`;
+    }
+  }
 
   const purseMatch = html.match(/<section class="flex items-baseline gap-5">[\s\S]*?<div>\s*([\s\S]*?)\s*<\/div>\s*<\/section>/);
   let purse = null, raceType = null;
@@ -1039,7 +1055,7 @@ async function fetchNyraEntriesDay(track, date) {
     });
     if (!res.ok) return { html: null, race: null };
     const html = await res.text();
-    return { html, race: parseNyraRaceFragment(html) };
+    return { html, race: parseNyraRaceFragment(html, date) };
   };
 
   const first = await fetchRace(1);
