@@ -2894,6 +2894,69 @@
       photo: "assets/track-gulfstream.png", photoAlt: "Aerial view of Gulfstream Park",
       tideStationId: null, tideRangeFt: null,
     },
+    oaklawnpark: {
+      id: "oaklawnpark", name: "Oaklawn Park", shortName: "Oaklawn",
+      city: "Hot Springs, AR",
+      // Coordinate verified against OSM's own surveyed track way (23m from
+      // Wikipedia's infobox point — tight agreement between independent
+      // sources).
+      lat: 34.4850, lon: -93.0571,
+      timezone: "America/Chicago",
+      // Grandstand sits on the WEST side of the oval, which runs almost
+      // exactly north-south (measured directly off OSM's track polygon:
+      // 533m/429m straight segments at 180.7°/1.1°, essentially exact
+      // reciprocals). Grandstand building confirmed via satellite/map
+      // render, not just OSM tags (no leisure=grandstand feature exists for
+      // this track) — the west straight is unmistakably the near side in a
+      // direct map view. Standard US counterclockwise convention.
+      heading: { homestretch: 181, backstretch: 1 },
+      // No dedicated scratches/conditions page found (checked oaklawn.com
+      // directly) — falls back to the generic scratches panel like every
+      // other non-NYRA track here without one.
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Oaklawn Park",
+      tideStationId: null, tideRangeFt: null,
+    },
+    ellispark: {
+      id: "ellispark", name: "Ellis Park", shortName: "Ellis Park",
+      city: "Henderson, KY",
+      // Henderson is in far-western Kentucky — Central time, not Eastern
+      // (unlike Louisville/Lexington, already noted elsewhere in this
+      // file — Kentucky's timezone split is genuinely irregular, verified
+      // directly rather than assumed).
+      lat: 37.9160, lon: -87.5442,
+      timezone: "America/Chicago",
+      // Grandstand sits on the WEST side of the oval (OSM building sits
+      // almost exactly on the west straight's own coordinates — under 1m
+      // off). Oval's long axis runs almost exactly north-south (358.0°/
+      // 178.7°, two independent segment pairs agreeing within 1°).
+      // Standard US counterclockwise convention.
+      heading: { homestretch: 179, backstretch: 359 },
+      // No dedicated scratches/conditions page found (checked
+      // ellisparkracing.com, which redirects to ellisparkowensborogaming.com,
+      // directly) — falls back to the generic scratches panel.
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Ellis Park",
+      tideStationId: null, tideRangeFt: null,
+    },
+    fairgrounds: {
+      id: "fairgrounds", name: "Fair Grounds Race Course", shortName: "Fair Grounds",
+      city: "New Orleans, LA",
+      lat: 29.9839, lon: -90.0812,
+      timezone: "America/Chicago",
+      // Grandstand ("Fair Grounds Grandstand", explicitly tagged in OSM)
+      // sits on the SOUTH side, just 66m from that straight's own
+      // coordinates. Oval's long axis runs almost exactly east-west
+      // (89.0°/269.2°, two independent relation members agreeing within
+      // 0.2°). Standard US counterclockwise convention.
+      heading: { homestretch: 89, backstretch: 269 },
+      // No dedicated scratches/conditions page found (checked
+      // fairgroundsracecourse.com directly) — falls back to the generic
+      // scratches panel.
+      nyraCode: null, scratchesUrl: null,
+      photo: null, photoAlt: "Aerial view of Fair Grounds Race Course",
+      tideStationId: null, tideRangeFt: null,
+    },
   };
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
