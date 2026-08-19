@@ -174,10 +174,14 @@ const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tou
 // rule as every other scrape in this file).
 const NYRA_TRENDS_URL_BY_TRACK = { saratoga: "https://www.nyra.com/saratoga/racing/track-trends/" };
 // Same one-entry-per-verified-track rule as NYRA_TRENDS_URL_BY_TRACK above.
-// Belmont's file exists at this same path (BELscratch.html) but wasn't
-// live when checked (a frozen 2023 snapshot) — not added until that's
-// confirmed live.
-const NYRA_SCRATCHES_CODE_BY_TRACK = { saratoga: "SAR" };
+// Belmont's file exists at this same path (BELscratch.html) — added now
+// even though it was a frozen 2023 snapshot when last checked, since that
+// turns out to be useful rather than a blocker: its cardDate will never
+// match today's date while it's off-season, which is exactly the signal
+// the client uses to show "not racing today" instead of a stale or
+// misleadingly-official read. Once Belmont's meet is actually live, the
+// same endpoint starts returning real same-day data automatically.
+const NYRA_SCRATCHES_CODE_BY_TRACK = { saratoga: "SAR", belmont: "BEL" };
 // Job #10 — same one-entry-per-verified-track rule as every other map here.
 const DMTC_PP_STATS_URL_BY_TRACK = { delmar: "https://www.dmtc.com/handicapping/pp-stats" };
 // Lock this to the dashboard's real origin once it has one; "*" is fine
