@@ -3015,6 +3015,13 @@
       timezone: "Europe/London",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
+      // No legally-clean high-res source found yet — the UK's Environment
+      // Agency aerial imagery is open-licensed but project-based (patchy
+      // coverage, no guarantee it covers this specific site), delivered as
+      // ECW downloads rather than a simple bbox-export WMS; Ordnance
+      // Survey's own aerial imagery is a commercial product. The only
+      // fallback found (ESA Sentinel-2, 10m/pixel) was too blurry to be
+      // worth shipping. Revisit with a proper source later.
       photo: null, photoAlt: "Aerial view of Ascot Racecourse",
       tideStationId: null, tideRangeFt: null,
     },
@@ -3025,7 +3032,7 @@
       timezone: "Europe/London",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
-      photo: null, photoAlt: "Aerial view of Epsom Downs Racecourse",
+      photo: null, photoAlt: "Aerial view of Epsom Downs Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
     },
     newmarket: {
@@ -3035,7 +3042,7 @@
       timezone: "Europe/London",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
-      photo: null, photoAlt: "Aerial view of Newmarket Racecourse",
+      photo: null, photoAlt: "Aerial view of Newmarket Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
     },
     shatin: {
@@ -3045,7 +3052,9 @@
       timezone: "Asia/Hong_Kong",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
-      photo: null, photoAlt: "Aerial view of Sha Tin Racecourse",
+      // Hong Kong Lands Department imagery API (mapapi.geodata.gov.hk) —
+      // free, no key, public-sector open imagery.
+      photo: "assets/track-shatin.png", photoAlt: "Aerial view of Sha Tin Racecourse",
       tideStationId: null, tideRangeFt: null,
     },
     happyvalley: {
@@ -3055,7 +3064,8 @@
       timezone: "Asia/Hong_Kong",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
-      photo: null, photoAlt: "Aerial view of Happy Valley Racecourse",
+      // Hong Kong Lands Department imagery API — see Sha Tin's comment above.
+      photo: "assets/track-happyvalley.png", photoAlt: "Aerial view of Happy Valley Racecourse",
       tideStationId: null, tideRangeFt: null,
     },
     longchamp: {
@@ -3065,7 +3075,9 @@
       timezone: "Europe/Paris",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
-      photo: null, photoAlt: "Aerial view of Longchamp Racecourse",
+      // IGN Géoportail BD ORTHO (data.geopf.fr) — free/open under France's
+      // Licence Ouverte (Etalab 2.0) since Jan 2021, 20cm resolution.
+      photo: "assets/track-longchamp.png", photoAlt: "Aerial view of Longchamp Racecourse",
       tideStationId: null, tideRangeFt: null,
     },
     curragh: {
@@ -3075,6 +3087,10 @@
       timezone: "Europe/Dublin",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
+      // No legally-clean high-res source found yet — Irish GIS hosts
+      // (osi.ie/geohive/tailte.ie) were unreachable from here, and the only
+      // fallback found (ESA Sentinel-2, 10m/pixel) was too blurry to be
+      // worth shipping. Revisit with a proper source later.
       photo: null, photoAlt: "Aerial view of The Curragh racecourse",
       tideStationId: null, tideRangeFt: null,
     },
@@ -3085,7 +3101,10 @@
       timezone: "Asia/Dubai",
       heading: { homestretch: 0, backstretch: 180 }, // PLACEHOLDER — not yet measured
       nyraCode: null, scratchesUrl: null,
-      photo: null, photoAlt: "Aerial view of Meydan Racecourse",
+      // ESA Sentinel-2 (Copernicus open data, EOX s2cloudless mosaic),
+      // 10m/pixel — coarser than the other sourced photos, but Meydan's
+      // huge scale keeps the grandstand and track legible at this res.
+      photo: "assets/track-meydan.png", photoAlt: "Aerial view of Meydan Racecourse",
       tideStationId: null, tideRangeFt: null,
     },
   };
