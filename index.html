@@ -2914,9 +2914,12 @@
       // directly) — falls back to the generic scratches panel like every
       // other non-NYRA track here without one.
       nyraCode: null, scratchesUrl: null,
-      // USGS/NAIP public-domain aerial imagery (basemap.nationalmap.gov),
-      // not a commercial satellite provider — genuinely free to use, no
-      // license needed. Cropped/framed to the track directly, same style
+      // USGS/NAIP public-domain aerial imagery (USGSNAIPPlus ImageServer at
+      // imagery.nationalmap.gov — the current/high-resolution NAIP service;
+      // an initial pass used the lower-resolution USGSImageryOnly basemap
+      // and looked visibly blockier for this specific region, hence the
+      // switch), not a commercial satellite provider — genuinely free to
+      // use, no license needed. Cropped/framed to the track directly, same style
       // as every other track photo here.
       photo: "assets/track-oaklawnpark.png", photoAlt: "Aerial view of Oaklawn Park",
       tideStationId: null, tideRangeFt: null,
