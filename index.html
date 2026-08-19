@@ -3031,7 +3031,7 @@
     // so axis bearing alone doesn't tell you which way horses run it).
     ascot: {
       id: "ascot", name: "Ascot Racecourse", shortName: "Ascot",
-      city: "Ascot, England",
+      city: "Ascot, England", flag: "🇬🇧",
       lat: 51.41611, lon: -0.67694, // Wikipedia infobox
       timezone: "Europe/London",
       // Right-handed (clockwise) course, confirmed via WebSearch. OSM
@@ -3056,7 +3056,7 @@
     },
     epsomdowns: {
       id: "epsomdowns", name: "Epsom Downs Racecourse", shortName: "Epsom Downs",
-      city: "Epsom, England",
+      city: "Epsom, England", flag: "🇬🇧",
       lat: 51.30972, lon: -0.25556, // Wikipedia infobox
       timezone: "Europe/London",
       // Left-handed (counterclockwise) course, confirmed via WebSearch —
@@ -3075,7 +3075,7 @@
     },
     newmarket: {
       id: "newmarket", name: "Newmarket Racecourse", shortName: "Newmarket",
-      city: "Newmarket, England",
+      city: "Newmarket, England", flag: "🇬🇧",
       lat: 52.23750, lon: 0.37444, // Wikipedia infobox, Rowley Mile course
       timezone: "Europe/London",
       // Unlike every other track here, Newmarket's Rowley Mile is a
@@ -3093,7 +3093,7 @@
     },
     shatin: {
       id: "shatin", name: "Sha Tin Racecourse", shortName: "Sha Tin",
-      city: "Sha Tin, Hong Kong",
+      city: "Sha Tin, Hong Kong", flag: "🇭🇰",
       lat: 22.39944, lon: 114.20667, // Wikipedia infobox
       timezone: "Asia/Hong_Kong",
       // Right-handed (clockwise), confirmed via WebSearch. OSM relation
@@ -3111,7 +3111,7 @@
     },
     happyvalley: {
       id: "happyvalley", name: "Happy Valley Racecourse", shortName: "Happy Valley",
-      city: "Happy Valley, Hong Kong",
+      city: "Happy Valley, Hong Kong", flag: "🇭🇰",
       lat: 22.27278, lon: 114.18222, // Wikipedia infobox
       timezone: "Asia/Hong_Kong",
       // Right-handed (clockwise), confirmed via WebSearch — a tight,
@@ -3128,7 +3128,7 @@
     },
     longchamp: {
       id: "longchamp", name: "Longchamp Racecourse", shortName: "Longchamp",
-      city: "Paris, France",
+      city: "Paris, France", flag: "🇫🇷",
       lat: 48.85878, lon: 2.22963, // Wikipedia infobox
       timezone: "Europe/Paris",
       // Right-handed (clockwise) for the Grande Piste (main course),
@@ -3150,7 +3150,7 @@
     },
     curragh: {
       id: "curragh", name: "The Curragh", shortName: "Curragh",
-      city: "County Kildare, Ireland",
+      city: "County Kildare, Ireland", flag: "🇮🇪",
       lat: 53.15750, lon: -6.84000, // Wikipedia infobox
       timezone: "Europe/Dublin",
       // Right-handed (clockwise) horseshoe course, confirmed via
@@ -3171,7 +3171,7 @@
     },
     meydan: {
       id: "meydan", name: "Meydan Racecourse", shortName: "Meydan",
-      city: "Dubai, UAE",
+      city: "Dubai, UAE", flag: "🇦🇪",
       lat: 25.15610, lon: 55.30655, // Wikipedia infobox
       timezone: "Asia/Dubai",
       // Left-handed (counterclockwise), confirmed via WebSearch — same
@@ -7978,7 +7978,9 @@
       if (!t) return;
       const opt = document.createElement("option");
       opt.value = t.id;
-      opt.textContent = t.name;
+      // Flag only set on UK/International tracks — US tracks are left
+      // unmarked since the country's assumed for them.
+      opt.textContent = t.flag ? `${t.flag} ${t.name}` : t.name;
       group.appendChild(opt);
     });
     return group;
