@@ -175,6 +175,11 @@
     border-color: var(--silk-red);
     background: rgba(179,71,59,0.14);
   }
+  .severe-alert-banner{
+    align-items: flex-start; /* multi-line content (headline + times), unlike stormBanner's single line */
+    line-height: 1.5;
+  }
+  .severe-alert-banner .storm-banner-icon{ margin-top: 1px; }
   .storm-banner-icon{
     font-size: 18px;
     line-height: 1;
@@ -1972,6 +1977,8 @@
   <span id="stormBannerText">Rain expected</span>
   <button type="button" class="storm-banner-radar-link" id="stormBannerRadarLink">Forecast model, not live radar — check radar →</button>
 </div>
+
+<div id="severeAlertList"></div>
 
 <div class="app-shell">
   <nav class="sidebar" id="sidebar">
@@ -5741,14 +5748,16 @@
   }
 
   // ---------- NWS severe weather alerts ----------
-  // api.weather.gov is the official U.S. government severe-weather source — free,
-  // keyless, CORS-open (verified: `access-control-allow-origin: *`), and the
-  // actual real-world trigger for race delays (lightning/severe storms, excessive
-  // heat) — unlike the wind/rain alerts above, which are just our own threshold
-  // reads of raw Open-Meteo numbers, this is the government's own official call.
-  function currentNwsAlertsUrl(){
-    return `https://api.weather.gov/alerts/active?point=${activeTrack.lat},${activeTrack.lon}`;
-  }
+  // api.weather.gov is the official U.S. government severe-weather source —
+  // free, keyless, CORS-open — but routed through the worker (job #11)
+  // rather than fetched directly, because NWS documents a descriptive
+  // User-Agent as required and browser fetch() is spec-forbidden from
+  // setting its own User-Agent header; there's no way to comply with that
+  // from client-side JS at all, not just a style preference. Narrowly
+  // scoped to exactly Severe Thunderstorm Warning and Tornado Warning (not
+  // Watches, not any other NWS alert type) — filtered server-side, see the
+  // worker's job #11 comment. Current-track-only, same scope the rest of
+  // this app's live weather already uses (see activeTrack.lat/lon below).
   const NWS_SEEN_KEY = "giddyupbets_nws_seen_alerts_v1";
 
   function loadSeenNwsAlerts(){
@@ -5766,46 +5775,77 @@
     catch(err){ console.error("NWS alert state failed to save", err); }
   }
   let seenNwsAlerts = loadSeenNwsAlerts();
+  // Currently-active severe alerts for activeTrack, as last fetched — drives
+  // the prominent top-of-page banner (renderSevereAlertBanners() below).
+  // Separate from seenNwsAlerts, which only tracks IDs for the "in effect"/
+  // "ended" history entries in the alert-feed dropdown.
+  let activeSevereAlerts = [];
 
-  // Pure parser (no fetch, no DOM) so it can be checked directly against sample
-  // API responses. NWS rates every alert Extreme/Severe/Moderate/Minor/Unknown —
-  // Minor/Unknown are routine advisories (e.g. Air Quality Alert), so only
-  // Moderate-and-up make the feed to keep this high-signal.
-  function classifyNwsAlerts(features){
-    return (features ?? [])
-      .map(f => f.properties)
-      .filter(p => p?.severity && p.severity !== "Minor" && p.severity !== "Unknown")
-      .map(p => ({ id: p.id, event: p.event, severity: p.severity, expires: p.expires }));
+  async function severeWeatherApiGet(lat, lon){
+    const res = await fetch(stableApiUrl(`/nws-alerts?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.alerts) ? data.alerts : [];
+  }
+
+  // Renders the prominent, always-visible banner (not tucked behind the
+  // alert bell) — one stacked block per active alert, using NWS's own
+  // headline verbatim rather than our own paraphrase, since they're the
+  // authority here. Also re-filters against each alert's own `expires` on
+  // every call (see the setInterval below) so a banner disappears close to
+  // its real expiration moment rather than waiting on the next 5-min poll.
+  function renderSevereAlertBanners(){
+    const container = $("severeAlertList");
+    if (!container) return;
+    const now = Date.now();
+    activeSevereAlerts = activeSevereAlerts.filter(a => !a.expires || new Date(a.expires).getTime() > now);
+    container.innerHTML = activeSevereAlerts.map(a => `
+      <div class="storm-banner severe severe-alert-banner">
+        <span class="storm-banner-icon">${a.event === "Tornado Warning" ? "🌪️" : "⛈️"}</span>
+        <span>
+          <strong>${escapeHtml(a.event)}</strong> — ${escapeHtml(a.trackShortName)}<br>
+          ${escapeHtml(a.headline || "")}<br>
+          Effective ${fmtTime(a.effective)} · Expires ${fmtTime(a.expires)}
+        </span>
+      </div>
+    `).join("");
   }
 
   // Diffs this poll's active alerts against the last-seen set (persisted, same
   // edge-triggered pattern as detectWeatherAlerts above): newly-appeared alerts
   // push an "in effect" message, alerts that dropped out of the active list
-  // push an "ended" message using the name we already had stored for them.
-  async function fetchNwsAlerts(){
+  // push an "ended" message using the name we already had stored for them —
+  // this feeds the alert-feed dropdown's historical record. The banner
+  // itself is driven directly by activeSevereAlerts, not this diff.
+  async function refreshSevereWeatherAlerts(){
+    const trackId = activeTrack.id;
+    let fetched;
     try{
-      const res = await fetch(currentNwsAlertsUrl(), { headers: { Accept: "application/geo+json" } });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-      const active = classifyNwsAlerts(data.features);
-      const activeIds = active.map(a => a.id);
-
-      active.forEach(a => {
-        if (!seenNwsAlerts.some(s => s.id === a.id)){
-          pushAlert(makeAlert("severe", `${a.event} in effect (${a.severity}) — until ${fmtTime(a.expires)}`));
-        }
-      });
-      seenNwsAlerts.forEach(s => {
-        if (!activeIds.includes(s.id)){
-          pushAlert(makeAlert("severe", `${s.event} has ended`));
-        }
-      });
-
-      seenNwsAlerts = active;
-      saveSeenNwsAlerts(seenNwsAlerts);
+      fetched = await severeWeatherApiGet(activeTrack.lat, activeTrack.lon);
     } catch(err){
-      console.error("NWS alerts fetch failed", err);
+      console.error("Severe weather alerts fetch failed", err);
+      return;
     }
+    if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+
+    const withTrack = fetched.map(a => ({ ...a, trackShortName: activeTrack.shortName }));
+    const activeIds = withTrack.map(a => a.id);
+
+    withTrack.forEach(a => {
+      if (!seenNwsAlerts.some(s => s.id === a.id)){
+        pushAlert(makeAlert("severe", `${a.event} in effect — until ${fmtTime(a.expires)}`));
+      }
+    });
+    seenNwsAlerts.forEach(s => {
+      if (!activeIds.includes(s.id)){
+        pushAlert(makeAlert("severe", `${s.event} has ended`));
+      }
+    });
+    seenNwsAlerts = withTrack.map(a => ({ id: a.id, event: a.event }));
+    saveSeenNwsAlerts(seenNwsAlerts);
+
+    activeSevereAlerts = withTrack;
+    renderSevereAlertBanners();
   }
 
   // ---------- Air Quality (Open-Meteo Air Quality API) ----------
@@ -7251,7 +7291,7 @@
       render(data);
       setStatus(true, "Live");
       $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit', timeZone: activeTrack.timezone});
-      fetchNwsAlerts(); // separate free-standing API — a hiccup here shouldn't affect the weather status pill
+      refreshSevereWeatherAlerts(); // separate free-standing API — a hiccup here shouldn't affect the weather status pill
     } catch(err){
       console.error(err);
       setStatus(false, "Connection issue — retrying");
@@ -7576,6 +7616,12 @@
     lastDirtEstimate = null;
     lastTurfEstimate = null;
     lastOfficialConditions = null;
+    // Same reasoning — severe weather alerts are current-track-only, so a
+    // Saratoga tornado warning shouldn't stay on screen after switching to
+    // Del Mar just because the next 5-min poll hasn't landed yet.
+    activeSevereAlerts = [];
+    renderSevereAlertBanners();
+    refreshSevereWeatherAlerts();
     $("soilMoistureSurface").textContent = "—";
     $("soilMoistureDeep").textContent = "Root zone (9–27cm) —";
     $("forecastSlider").value = 0;
@@ -7915,6 +7961,7 @@
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
+  setInterval(renderSevereAlertBanners, 30 * 1000); // re-checks each banner's own expires — clears it close to the real moment, not just on the next 5-min poll
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(refreshOfficialTrackConditions, TRACK_CONDITIONS_REFRESH_MS);
   setInterval(refreshPpStats, PP_STATS_REFRESH_MS);

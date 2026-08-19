@@ -129,9 +129,19 @@
 //    is surfaced as its own standalone panel rather than folded into Dirt
 //    Bias/Turf Bias. Only Del Mar is wired up (DMTC_PP_STATS_URL_BY_TRACK).
 //
+// 11. Severe weather alerts (GET /nws-alerts?lat=<lat>&lon=<lon>) — proxies
+//    api.weather.gov's active-alerts-by-point endpoint, filtered server-
+//    side to exactly "Severe Thunderstorm Warning" and "Tornado Warning"
+//    (not Watches, not any other alert type). Free, keyless, official
+//    government source. This is the one job in this file that a browser
+//    could never do directly even though the API itself is CORS-open —
+//    NWS documents a descriptive User-Agent as required, and fetch() is
+//    spec-forbidden from setting its own User-Agent header, so this has to
+//    go through a server-side context. See NWS_USER_AGENT above.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, and #10
+// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, #10, and #11
 // (fetch-and-parse only, no storage) work without it. Job #8 additionally
 // requires a PIRATE_WEATHER_API_KEY secret (Worker settings -> Variables and
 // Secrets -> Add, type "Secret") — get a free key at pirateweather.net.
@@ -161,6 +171,12 @@ const MAX_ARTICLES_PER_RUN = 8; // caps subrequests/runtime per poll
 // itself didn't seem to care, but using a real UA everywhere here anyway
 // rather than relying on that being a permanent distinction.
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+// api.weather.gov documents a descriptive User-Agent (app name + contact) as
+// required, not optional — and this is the one call in this file a browser
+// could never make directly, since fetch() is spec-forbidden from setting
+// its own User-Agent header. That's the actual reason job #11 goes through
+// this Worker at all, not just convention.
+const NWS_USER_AGENT = "GiddyUpBetsCommandCenter/1.0 (https://jvilla10214.github.io/GiddyUpBets-command-center/; contact: jvilla10214@gmail.com)";
 const WRITE_PASSPHRASE = "giddyup";
 
 export default {
@@ -552,6 +568,31 @@ async function handleRequest(request, env) {
       const html = await res.text();
       const result = parseDmtcPostPositionStats(html);
       return json(result, 200, { "Cache-Control": "public, max-age=3600" });
+    }
+
+    if (url.pathname === "/nws-alerts" && request.method === "GET") {
+      const lat = url.searchParams.get("lat");
+      const lon = url.searchParams.get("lon");
+      if (!lat || !lon) return json({ error: "Missing lat/lon" }, 400);
+      let res;
+      try {
+        res = await fetch(`https://api.weather.gov/alerts/active?point=${lat},${lon}`, {
+          headers: { "User-Agent": NWS_USER_AGENT, "Accept": "application/geo+json" },
+          cf: { cacheTtl: 60, cacheEverything: true },
+        });
+      } catch (err) {
+        return json({ error: `NWS fetch failed: ${err.message}` }, 502);
+      }
+      if (!res.ok) return json({ error: `NWS returned HTTP ${res.status}` }, 502);
+      const data = await res.json();
+      const alerts = (data.features || [])
+        .map((f) => f.properties)
+        .filter((p) => p?.event === "Severe Thunderstorm Warning" || p?.event === "Tornado Warning")
+        .map((p) => ({
+          id: p.id, event: p.event, headline: p.headline, severity: p.severity,
+          effective: p.effective, expires: p.expires, areaDesc: p.areaDesc,
+        }));
+      return json({ alerts }, 200, { "Cache-Control": "public, max-age=60" });
     }
 
     // Falls through to the original feed-scrape behavior for GET / (and any
