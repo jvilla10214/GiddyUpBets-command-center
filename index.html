@@ -3182,6 +3182,27 @@
       photo: null, photoAlt: "Aerial view of Newmarket Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
     },
+    york: {
+      id: "york", name: "York Racecourse", shortName: "York",
+      city: "York, England", flag: "🇬🇧",
+      lat: 53.93861, lon: -1.09750, // Wikipedia infobox — Knavesmire
+      timezone: "Europe/London",
+      // Left-handed (counterclockwise), confirmed via WebSearch — same
+      // convention as the US tracks. OSM relation 14699388's outer way:
+      // the ~1250m straight (York's famous long home straight on the
+      // Knavesmire) sits just 30m from the grandstand cluster (Ebor,
+      // Bustardthorpe, Melrose, and Gimcrack Stands, averaged) — direction
+      // of travel into the stands is 358°. Like Ascot/Longchamp, York's
+      // real shape is a complex multi-course layout (several distinct
+      // courses share the Knavesmire), so backstretch is the reciprocal
+      // rather than an independently-measured far-side segment.
+      heading: { homestretch: 358, backstretch: 178 },
+      nyraCode: null, scratchesUrl: null,
+      // No legally-clean high-res source found yet — same UK aerial-imagery
+      // dead end as Ascot/Epsom Downs/Newmarket (see Ascot's comment).
+      photo: null, photoAlt: "Aerial view of York Racecourse",
+      tideStationId: null, tideRangeFt: null,
+    },
     shatin: {
       id: "shatin", name: "Sha Tin Racecourse", shortName: "Sha Tin",
       city: "Sha Tin, Hong Kong", flag: "🇭🇰",
@@ -3289,7 +3310,7 @@
   // below, not this array's own order.
   const TRACK_REGIONS = {
     US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds"],
-    UK: ["ascot", "epsomdowns", "newmarket"],
+    UK: ["ascot", "epsomdowns", "newmarket", "york"],
     International: ["shatin", "happyvalley", "longchamp", "curragh", "meydan"],
   };
 
