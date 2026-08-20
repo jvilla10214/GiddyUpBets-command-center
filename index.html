@@ -7344,10 +7344,24 @@
     return null;
   }
 
+  // Bottom-line, not a briefing: exactly one headline sentence (wind vs.
+  // stretch geometry, folded together with the running-style read that used
+  // to be its own separate closing sentence — "here's the wind" and "here's
+  // what it means" belong in the same breath, not two) plus, at most, one
+  // second sentence for whichever OTHER factor matters most right now. Every
+  // sub-computation below is unchanged from the original multi-sentence
+  // version (same thresholds, same reasoning in each comment) — only the
+  // output shape changed, from "every applicable factor gets a sentence" to
+  // "rank every applicable factor and show just the top one." secondaryTier
+  // is a priority so lower always wins: 1 = safety-relevant or a big-edge
+  // handicapping rule, 2 = the surface is actively changing, 3 = a real but
+  // smaller shape/stamina note, 4 = context that's barely worth mentioning
+  // at all. Only the single lowest-tier candidate that actually applies
+  // gets shown; everything else is dropped, not queued for later.
   function buildAiRacingSummary(ctx){
     const {
       speed, dir, windTrend, forecastSteps, dirtLabel, turfLabel, trackTrendInfo, rainToday, rainRate,
-      apparentTemp, humidity, cloudCover, aqi, tide, rainOutlook,
+      apparentTemp, humidity, aqi, tide, rainOutlook,
     } = ctx;
     if (speed == null || dir == null || !dirtLabel || !turfLabel || !trackTrendInfo){
       return "Waiting on live conditions to generate a summary.";
@@ -7363,154 +7377,106 @@
       ? findFutureHeadwindOnset(forecastSteps)
       : null;
 
-    const sentences = [];
-
-    // ---- Wind vs. stretch geometry ----
+    // ---- Headline: wind vs. stretch geometry, plus what shape it favors —
+    // always exactly one sentence, always present (every other candidate
+    // below is optional). ----
+    let headline;
     if (onset){
-      sentences.push(`${compass} winds continue to increase and should become a noticeable headwind in the stretch by around ${fmtTime(onset.step.time)}.`);
-    } else if (windTrend.label === "increasing" && homeDesc.kind === "headwind"){
-      sentences.push(`${compass} winds are picking up (currently ${Math.round(speed)} mph) and already produce a ${homeDesc.strength} headwind through the stretch.`);
-    } else if (windTrend.label === "decreasing" && homeDesc.kind === "headwind"){
-      sentences.push(`${compass} winds are easing (currently ${Math.round(speed)} mph) but still produce a ${homeDesc.strength} headwind through the stretch.`);
-    } else if (homeDesc.kind === "calm"){
-      sentences.push(`Wind (${Math.round(speed)} mph out of the ${compass}) is essentially a non-factor through the stretch right now.`);
+      headline = `${compass} winds are building and should turn into a stretch headwind by around ${fmtTime(onset.step.time)}, likely costing front-end speed late.`;
+    } else if (homeDesc.kind === "headwind" && homeDesc.strength !== "light"){
+      headline = `${compass} winds (${Math.round(speed)} mph) are producing a ${homeDesc.strength} stretch headwind — favors horses rating off the pace over lone-speed types.`;
+    } else if (homeDesc.kind === "tailwind" && homeDesc.strength !== "light"){
+      headline = `${compass} winds (${Math.round(speed)} mph) are producing a ${homeDesc.strength} stretch tailwind — speed that gets loose on the lead will be tough to run down.`;
     } else {
-      sentences.push(`Wind is holding out of the ${compass} at ${Math.round(speed)} mph, producing a ${homeDesc.strength} ${homeDesc.kind} through the stretch.`);
+      headline = `Wind (${compass}, ${Math.round(speed)} mph) is a minimal factor through the stretch right now; conditions are holding ${dirtLabel.toLowerCase()} (dirt) / ${turfLabel.toLowerCase()} (turf).`;
     }
 
-    // ---- Track surface condition + trend (why: sun/wind dry it, rain wets it) ----
-    const hasRain = rainToday > 0 || rainRate > 0;
-    const sunny = cloudCover != null && cloudCover <= 40;
-    if (trackTrendInfo.label === "Wetting"){
-      sentences.push(`The track is trending wetter — watch for the ${dirtLabel.toLowerCase()} dirt rating to slip further if rain continues.`);
-    } else if (trackTrendInfo.label === "Drying"){
-      sentences.push(`The track continues to dry out${sunny ? " under mostly sunny skies" : ""}, with conditions likely to firm up further if the trend holds.`);
-    } else if (hasRain && (dirtLabel === "FAST" || dirtLabel === "GOOD")){
-      sentences.push(`Track conditions should remain ${dirtLabel.toLowerCase()} despite some rain in the area.`);
-    } else {
-      sentences.push(`Track conditions are holding steady at ${dirtLabel.toLowerCase()} (dirt) / ${turfLabel.toLowerCase()} (turf).`);
-    }
+    // ---- Candidate secondary factors — same underlying checks/thresholds
+    // as the original per-topic sentences, just ranked instead of all shown. ----
+    const secondary = [];
 
-    // ---- Forward rain outlook (why: purely a heads-up about what's coming —
-    // does NOT feed back into the current label above, since using rain that
-    // hasn't fallen yet to describe current conditions is exactly the bug
-    // fixed elsewhere in this app). Only worth a sentence when the track is
-    // currently dry-ish and about to get tested — a wet track getting more
-    // rain isn't a new development worth calling out separately. ----
-    if (rainOutlook && (dirtLabel === "FAST" || dirtLabel === "GOOD")){
-      sentences.push(`Conditions are currently ${dirtLabel.toLowerCase()}, but rain expected by around ${fmtTime(rainOutlook.time)} could start working the track wetter.`);
-    }
-
-    // ---- Turf-specific rain effect (why: turf drains slower than dirt and
-    // doesn't firm back up the same way — rain softens it independently of
-    // whatever the dirt is doing, and typically slows turf times rather than
-    // just shifting a bias like it does on dirt). ----
-    if (turfLabel === "SOFT"){
-      sentences.push(`The turf is playing soft off recent rain — turf times typically run slower in this, and a persistent soaking could prompt turf races to move to the main track.`);
-    } else if (turfLabel === "YIELDING"){
-      sentences.push(`The turf has some give from recent rain (yielding), which tends to slow turf times somewhat versus a firm course.`);
-    }
-
-    // ---- Ocean tide vs. dirt-surface moisture (Del Mar only — activeTrack.tideStationId
-    // gates whether `tide` is ever populated at all). Low tide dries the
-    // surface toward a "golden rail" that favors speed; high tide adds
-    // moisture that can help closers. Mid-range tide isn't distinctive
-    // enough to call out, same reasoning as skipping Good/Moderate AQI. ----
-    if (tide){
-      if (tide.label === "Low"){
-        sentences.push(`The tide is low and ${tide.trend} — that tends to dry out the dirt surface here, the kind of "golden rail" setup that can heavily favor early speed.`);
-      } else if (tide.label === "High"){
-        sentences.push(`The tide is high and ${tide.trend} — added surface moisture from this can play into the hands of closers.`);
-      }
-    }
-
-    // ---- Backstretch vs. stretch wind reversal (why: a headwind down the
-    // backstretch shields closers sitting behind pace-setters, and if the
-    // stretch wind then flips to a tailwind it helps them finish — the
-    // opposite combo brings hot fractions back to the field late instead). ----
-    const back = windComponents(speed, dir, activeTrack.heading.backstretch);
-    const backDesc = describeStretchWind(back.headwind, back.crosswind);
-    if (backDesc.kind !== "calm" && backDesc.kind !== homeDesc.kind){
-      if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){
-        sentences.push(`Wind flips from a backstretch headwind to a stretch tailwind — that shields closers early and helps them finish, a combination that tends to favor rallying types over lone-speed.`);
-      } else if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){
-        sentences.push(`Wind flips from a backstretch tailwind to a stretch headwind — an aided pace early runs into more resistance late than the stretch wind alone would suggest.`);
-      }
-    }
-
-    // ---- Del Mar-specific wind/turn rules (handicapper-supplied — not
-    // derived from the general wind-vs-stretch geometry the rest of this
-    // function uses, so gated to this track specifically rather than
-    // assumed to generalize elsewhere). ----
-    if (activeTrack.id === "delmar"){
-      // At Del Mar, a backstretch crosswind is the one that actually holds
-      // up — a stretch crosswind here tends not to sway the result the way
-      // it might elsewhere.
-      if (backDesc.kind === "crosswind" && backDesc.strength !== "light"){
-        sentences.push(`At Del Mar, this backstretch crosswind (~${Math.round(backDesc.mag)} mph) is the one to watch — horses can drift off their line and lose ground down the backside, whereas a stretch crosswind here rarely swings the result.`);
-      }
-
-      // Far-turn headwind: shields horses rating covered up, while runners
-      // caught 2-4 wide (no cover) catch it in the open. 10mph+ threshold
-      // is the handicapping rule of thumb as given, not a general-purpose
-      // wind-strength tier like the rest of this function uses.
-      const farTurn = windComponents(speed, dir, turnMidpointHeading(activeTrack.heading.backstretch));
-      if (farTurn.headwind >= 10){
-        sentences.push(`With a strong headwind (~${Math.round(farTurn.headwind)} mph) on the far turn, one-turn races tend to favor horses that can rate covered up — they're shielded from the wind, while runners caught 2-4 wide catch it in the open. Inside-drawn horses able to tuck in and rate off the pace look best positioned.`);
-        sentences.push(`In two-turn races, that same far-turn headwind is partly offset by a tailwind boost into and out of the clubhouse turn earlier — a loose leader gets a lift early but pays it back late, roughly neutralizing the net effect, though horses rating covered up still come out ahead by avoiding the wind altogether.`);
-      }
-    }
-
-    // ---- Heat/humidity vs. stamina (why: evaporative cooling gets harder as
-    // feels-like climbs, independent of wind or surface — this is a fatigue/
-    // vet-scratch risk note, not a running-style bias claim like wind gets,
-    // since heat saps every horse's stamina rather than favoring one shape). ----
+    // Heat/cold vs. stamina and safety — same "affects every horse, not a
+    // running-style claim" framing the original comments used. Tier 1: the
+    // extreme bands are a real vet-scratch/injury-risk signal, not just
+    // color commentary, so they outrank ordinary handicapping notes.
     if (apparentTemp != null){
       if (apparentTemp >= 100){
-        sentences.push(`At a feels-like of ${Math.round(apparentTemp)}°F, heat is a real factor today — fatigue late in longer races is more likely than the form alone would suggest, and it's worth watching for vet scratches or extended cool-out times.`);
+        secondary.push({ tier: 1, text: `At a feels-like of ${Math.round(apparentTemp)}°F, heat is a real factor — watch for vet scratches or fatigue late in longer races.` });
+      } else if (apparentTemp <= 25){
+        secondary.push({ tier: 1, text: `At a feels-like of ${Math.round(apparentTemp)}°F, cold is a real factor — stiffer muscles mean more strain/sprain risk today.` });
       } else if (apparentTemp >= 90){
-        sentences.push(`With a feels-like temperature around ${Math.round(apparentTemp)}°F, warm conditions could sap stamina late in route races, on top of whatever the wind and surface are doing.`);
-      }
-    }
-
-    // ---- Cold vs. muscle stiffness (why: cold muscles are less pliable —
-    // same "affects every horse, not a running-style claim" framing as heat
-    // above; less pliability reads as reduced power/flexibility and a
-    // higher strain/sprain risk rather than favoring one shape). ----
-    if (apparentTemp != null){
-      if (apparentTemp <= 25){
-        sentences.push(`At a feels-like of ${Math.round(apparentTemp)}°F, cold is a real factor today — stiffer, less pliable muscles than normal mean more strain/sprain risk and a wider range of trips, and it's worth watching how horses handle the extended post parade.`);
+        secondary.push({ tier: 3, text: `A feels-like around ${Math.round(apparentTemp)}°F could sap stamina late in route races.` });
       } else if (apparentTemp <= 40){
-        sentences.push(`With a feels-like temperature around ${Math.round(apparentTemp)}°F, cool conditions can leave muscles less loose than usual — worth a longer look at how each horse warms up.`);
+        secondary.push({ tier: 3, text: `A feels-like around ${Math.round(apparentTemp)}°F can leave muscles less loose than usual.` });
       }
     }
 
-    // ---- Humidity vs. stamina (why: humid air makes evaporative cooling
-    // less effective, straining a horse's breathing and stamina even on a
-    // day that isn't especially hot — independent of the heat check above,
-    // though the two compound when they land together). ----
-    if (humidity != null && humidity >= 80){
-      sentences.push(`Humidity is running high today (${Math.round(humidity)}%) — harder for horses to cool themselves through sweat, which can compound whatever heat is already doing to stamina late.`);
+    // Del Mar far-turn headwind — a big-edge handicapping rule when it
+    // applies (10mph+ threshold is the rule of thumb as given), so it's
+    // tier 1 alongside heat/cold safety rather than a minor note.
+    const back = windComponents(speed, dir, activeTrack.heading.backstretch);
+    const backDesc = describeStretchWind(back.headwind, back.crosswind);
+    if (activeTrack.id === "delmar"){
+      const farTurn = windComponents(speed, dir, turnMidpointHeading(activeTrack.heading.backstretch));
+      if (farTurn.headwind >= 10){
+        secondary.push({ tier: 1, text: `A strong far-turn headwind (~${Math.round(farTurn.headwind)} mph) favors horses that can rate covered up, away from runners caught 2-4 wide.` });
+      } else if (backDesc.kind === "crosswind" && backDesc.strength !== "light"){
+        secondary.push({ tier: 3, text: `At Del Mar, this backstretch crosswind (~${Math.round(backDesc.mag)} mph) — not the stretch — is the one that can push horses off their line.` });
+      }
     }
 
-    // ---- Air quality (why: poor air adds respiratory effort for horses and
-    // riders) — only surfaced when it's actually notable (Moderate/Good, the
-    // vast majority of days, isn't worth a sentence). ----
+    // Track surface actively changing — tier 2, the surface itself is
+    // moving, not just a static read of where it sits right now.
+    const hasRain = rainToday > 0 || rainRate > 0;
+    if (trackTrendInfo.label === "Wetting"){
+      secondary.push({ tier: 2, text: `The track is trending wetter — the ${dirtLabel.toLowerCase()} dirt rating could slip further if rain continues.` });
+    } else if (rainOutlook && (dirtLabel === "FAST" || dirtLabel === "GOOD")){
+      secondary.push({ tier: 2, text: `Rain expected by around ${fmtTime(rainOutlook.time)} could start working the currently ${dirtLabel.toLowerCase()} track wetter.` });
+    } else if (hasRain && (dirtLabel === "FAST" || dirtLabel === "GOOD")){
+      secondary.push({ tier: 3, text: `Track conditions should remain ${dirtLabel.toLowerCase()} despite some rain in the area.` });
+    }
+
+    // Turf-specific rain effect — turf drains slower than dirt and doesn't
+    // firm back up the same way, so this is worth surfacing independently.
+    if (turfLabel === "SOFT"){
+      secondary.push({ tier: 2, text: `The turf is playing soft off recent rain — expect slower turf times, and watch for turf races to move to the main track if it persists.` });
+    } else if (turfLabel === "YIELDING"){
+      secondary.push({ tier: 3, text: `The turf has some give (yielding) from recent rain, which tends to slow turf times somewhat.` });
+    }
+
+    // Ocean tide vs. dirt-surface moisture (Del Mar only — tide is only
+    // ever populated when activeTrack.tideStationId is set). A real shape
+    // driver, same tier as the surface-changing notes above.
+    if (tide){
+      if (tide.label === "Low"){
+        secondary.push({ tier: 2, text: `Low, ${tide.trend} tide tends to dry the dirt surface here — a "golden rail" setup that can favor early speed.` });
+      } else if (tide.label === "High"){
+        secondary.push({ tier: 2, text: `High, ${tide.trend} tide adds surface moisture here — can play into the hands of closers.` });
+      }
+    }
+
+    // Backstretch vs. stretch wind reversal — a real shape signal, but a
+    // secondary one next to the headline's own stretch-wind read.
+    if (backDesc.kind !== "calm" && backDesc.kind !== homeDesc.kind){
+      if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){
+        secondary.push({ tier: 3, text: `Wind flips from a backstretch headwind to a stretch tailwind — shields closers early and helps them finish.` });
+      } else if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){
+        secondary.push({ tier: 3, text: `Wind flips from a backstretch tailwind to a stretch headwind — an aided pace early runs into more resistance late.` });
+      }
+    }
+
+    // Humidity and air quality — real but the smallest-magnitude factors
+    // here, tier 4. AQI only above 100 (Moderate/Good isn't worth a line).
+    if (humidity != null && humidity >= 80){
+      secondary.push({ tier: 4, text: `Humidity is running high (${Math.round(humidity)}%) — harder for horses to cool themselves, compounding any heat.` });
+    }
     if (aqi != null && aqi > 100){
       const aqiInfo = classifyAqi(aqi);
-      sentences.push(`Air quality is rated ${aqiInfo.label} today (AQI ${Math.round(aqi)}) — added respiratory effort for horses and riders on top of any heat or surface factors above.`);
+      secondary.push({ tier: 4, text: `Air quality is rated ${aqiInfo.label} (AQI ${Math.round(aqi)}) — added respiratory effort for horses and riders.` });
     }
 
-    // ---- Running-style synthesis (wind-driven; still a shape/archetype read, never a specific pick) ----
-    if (onset){
-      sentences.push("Front-end speed may lose some advantage later in the card if winds continue to strengthen.");
-    } else if (homeDesc.kind === "headwind" && homeDesc.strength !== "light"){
-      sentences.push("Hot fractions figure to come back to the field in this wind — a shape that favors horses rating off the pace over lone-speed types.");
-    } else if (homeDesc.kind === "tailwind" && homeDesc.strength !== "light"){
-      sentences.push("Speed that gets loose on the lead may be tough to run down under this wind — a shape that favors need-to-lead types.");
-    }
-
-    return sentences.slice(0, 12).join(" ");
+    secondary.sort((a, b) => a.tier - b.tier);
+    return [headline, secondary[0]?.text].filter(Boolean).join(" ");
   }
 
   // ---------- Weather Bias Predictor Score (0-10 scale) ----------
@@ -8540,7 +8506,6 @@
       rainRate,
       apparentTemp: c.apparent_temperature,
       humidity: c.relative_humidity_2m,
-      cloudCover: c.cloud_cover,
       aqi: lastAqi,
       tide: lastTide,
       rainOutlook,
