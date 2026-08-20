@@ -1629,6 +1629,56 @@
     border-radius: 4px;
   }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
+  .entries-note-toggle{
+    display: inline-block;
+    margin-left: 6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--sky);
+    background: rgba(96,165,250,0.12);
+    border: 1px solid rgba(96,165,250,0.3);
+    padding: 1px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .entries-note-toggle:hover{ background: rgba(96,165,250,0.2); }
+  .entries-note-snippet{
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--sky);
+    border-radius: 6px;
+    max-width: 340px;
+  }
+  .entries-note-snippet-date{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    margin-bottom: 3px;
+  }
+  .entries-note-snippet-text{
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 12.5px;
+    color: var(--parchment);
+    line-height: 1.45;
+  }
+  /* Older than STABLE_NOTE_STALE_DAYS — de-emphasized, not hidden; the date
+     stays in its normal color so "how old" is still readable at a glance. */
+  .entries-note-stale .entries-note-snippet-text{ color: var(--parchment-dim); }
+  .entries-note-viewall{
+    display: block;
+    margin-top: 6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--tote-amber);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .entries-note-viewall:hover{ text-decoration: underline; }
   .odds-arrow{ margin-left: 4px; font-size: 10px; font-weight: 700; }
   .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
   .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
@@ -3819,6 +3869,11 @@
   let selectedEntriesRace = null;
   let lastEntriesDate = null;
   let lastEntriesRaces = [];
+  // Which horses' Stable Tour note snippets are expanded in the Entries
+  // table — keyed "trainer|horse" (raw, not normalized — only needs to be
+  // stable across re-renders of this same race card, not to match anything
+  // elsewhere). UI state only, not persisted, same as stableOpenTrainers.
+  let entriesOpenNoteKeys = new Set();
 
   // Only Saratoga's entries source is verified to accept an arbitrary
   // future ?date= and return that day's real card (NYRA's own site does
@@ -4668,6 +4723,48 @@
     return (upcoming || races[races.length - 1] || races[0])?.raceNumber ?? null;
   }
 
+  // "First ~2 lines" for notes that actually have paragraph breaks (TDN/
+  // Fasig-Tipton imports, which keep their real \n\n structure) — but
+  // News-Wire-scan auto-imports run their source text through stripHtml()
+  // first, which collapses all whitespace (including newlines) into a
+  // single line, so a plain line-split alone would do nothing useful there.
+  // The character cap is the fallback for exactly that case.
+  const STABLE_NOTE_SNIPPET_CHAR_CAP = 220;
+  function truncateNoteSnippet(text){
+    if (!text) return "";
+    const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean).slice(0, 2).join(" ");
+    return lines.length > STABLE_NOTE_SNIPPET_CHAR_CAP
+      ? lines.slice(0, STABLE_NOTE_SNIPPET_CHAR_CAP).trim() + "…"
+      : lines;
+  }
+
+  // Renders the Stable Tour cross-link for one Entries horse — the small
+  // toggle next to its name plus (once expanded) the most recent note's
+  // snippet, both inline within that horse's own "Horse" table cell rather
+  // than a separate full-width row, since entries-horse-table already wraps
+  // cell content normally (see its CSS) and this avoids colspan juggling
+  // for what's usually a small amount of text. Returns "" (nothing added)
+  // when there's no note for this exact horse — see findHorseStableNotes().
+  function entriesNoteIndicatorHtml(trainer, horseName){
+    const notes = findHorseStableNotes(trainer, horseName);
+    if (!notes.length) return "";
+    const key = `${trainer}|${horseName}`;
+    const isOpen = entriesOpenNoteKeys.has(key);
+    const safeKey = escapeHtml(key);
+    let html = `<button type="button" class="entries-note-toggle" data-note-key="${safeKey}" aria-expanded="${isOpen}" title="Stable Tour note for ${escapeHtml(horseName)}">📝 Note${notes.length > 1 ? ` (${notes.length})` : ""}</button>`;
+    if (isOpen){
+      const top = notes[0];
+      const stale = isStableNoteStale(top.date);
+      html += `
+        <div class="entries-note-snippet${stale ? " entries-note-stale" : ""}">
+          <div class="entries-note-snippet-date">${fmtStableDate(top.date)}</div>
+          <div class="entries-note-snippet-text">${escapeHtml(truncateNoteSnippet(top.note))}</div>
+          ${notes.length > 1 ? `<button type="button" class="entries-note-viewall" data-trainer="${escapeHtml(top.trainer)}" data-horse="${escapeHtml(top.horse)}">View all ${notes.length} notes →</button>` : ""}
+        </div>`;
+    }
+    return html;
+  }
+
   function renderEntriesPage(date, races){
     lastEntriesDate = date;
     lastEntriesRaces = races;
@@ -4722,7 +4819,7 @@
     const rows = race.horses.map(h => `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
-        <td>${escapeHtml(h.name || "—")}</td>
+        <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}</td>
         <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
@@ -5992,6 +6089,17 @@
     list.querySelectorAll(".stableDateInput, .stableExtractDate").forEach(input => {
       if (!input.value) input.value = nowInTrackTZ().date;
     });
+
+    // Entries' note indicators read stableNotes/stableTrainers directly (no
+    // fetch of their own) — every path that changes those and calls this
+    // function (adding/removing a note or trainer, the periodic refresh,
+    // TDN auto-import) needs to keep them in sync too, or a note could go
+    // stale on the Entries tab until something else happens to re-render
+    // it. Harmless no-op before Entries has ever loaded (lastEntriesRaces
+    // is still empty) or while some other page is active — this just
+    // rewrites entriesBody's innerHTML, same as any other hidden-panel
+    // update elsewhere in this app.
+    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
   }
 
   $("addTrainerBtn").addEventListener("click", () => {
@@ -6239,6 +6347,35 @@
   function trainerLastName(name){
     const parts = name.trim().split(/\s+/);
     return parts[parts.length - 1].toLowerCase();
+  }
+
+  // Cross-links a specific Entries horse to its own Stable Tour notes (see
+  // the Entries table's note indicator) — both trainer AND horse have to
+  // match, so a note only ever surfaces here when it's genuinely about this
+  // horse, not just filed under the same barn. Trainer match reuses
+  // trainerLastName() above for the same reason autoImportTdnNotebook() does:
+  // Entries' trainer field comes from NYRA/DMTC/Monmouth's own scraped text,
+  // not guaranteed to string-match a free-typed tracked-trainer name exactly.
+  // Horse name match is exact (case/whitespace-insensitive only, no fuzzy
+  // matching) — deliberately strict, since a wrong match here would be worse
+  // than no match at all.
+  function findHorseStableNotes(trainer, horseName){
+    if (!trainer || !horseName) return [];
+    const wantTrainer = trainerLastName(trainer);
+    const wantHorse = horseName.trim().toLowerCase();
+    return stableNotes
+      .filter(n => n.horse && n.trainer && trainerLastName(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+  }
+
+  // Notes older than this are never hidden, just visually de-emphasized in
+  // the Entries note snippet — see its rendering below.
+  const STABLE_NOTE_STALE_DAYS = 7;
+  function isStableNoteStale(dateStr){
+    if (!dateStr) return false;
+    const noteMs = Date.parse(`${dateStr}T00:00:00Z`);
+    if (Number.isNaN(noteMs)) return false;
+    return (Date.now() - noteMs) / 86400000 > STABLE_NOTE_STALE_DAYS;
   }
 
   async function autoImportTdnNotebook(){
@@ -8645,10 +8782,33 @@
   // renderEntriesPage() rebuilds this innerHTML on every refresh — a
   // click just switches which cached race renders, no re-fetch.
   $("entriesBody").addEventListener("click", (e) => {
-    const btn = e.target.closest(".entries-race-tab");
-    if (!btn) return;
-    selectedEntriesRace = Number(btn.dataset.race);
-    renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+    const raceTab = e.target.closest(".entries-race-tab");
+    if (raceTab){
+      selectedEntriesRace = Number(raceTab.dataset.race);
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      return;
+    }
+    const noteToggle = e.target.closest(".entries-note-toggle");
+    if (noteToggle){
+      const key = noteToggle.dataset.noteKey;
+      if (entriesOpenNoteKeys.has(key)) entriesOpenNoteKeys.delete(key);
+      else entriesOpenNoteKeys.add(key);
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      return;
+    }
+    // Jumps to the Stable Tour tab with this exact trainer expanded and the
+    // search narrowed to this horse — reuses that tab's own existing
+    // expand/search state rather than building a second notes list here.
+    const viewAllBtn = e.target.closest(".entries-note-viewall");
+    if (viewAllBtn){
+      const trainer = viewAllBtn.dataset.trainer;
+      const horse = viewAllBtn.dataset.horse;
+      stableOpenTrainers.add(trainer);
+      stableSearchQuery = horse;
+      $("stableSearchInput").value = horse;
+      setActivePage("stable");
+      renderStableTour();
+    }
   });
 
   // Switching dates is a real re-fetch (different day, different card),
