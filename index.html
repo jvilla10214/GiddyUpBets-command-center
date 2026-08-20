@@ -430,6 +430,38 @@
   }
   #trackSvg{ position:absolute; inset:0; width:100%; height:100%; }
 
+  /* Map-tile aerial view (OpenStreetMap raster tiles) — same background
+     layer as .track-photo above (absolute, inset:0, sits below the wind
+     canvas/caption/compass/condition-tile overlays in source order), just
+     populated with positioned <img> tiles by renderMapTiles() instead of a
+     single <img src>. See renderMapTiles()'s comment for the tile math. */
+  .track-map{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    overflow:hidden;
+    background:#1a1a1a;
+  }
+  .track-map[hidden]{ display:none; }
+  .track-map-tile{
+    position:absolute;
+    width:256px; height:256px;
+  }
+  .track-map-attribution{
+    position:absolute;
+    top:14px; right:14px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:9px;
+    letter-spacing:0.2px;
+    color: var(--parchment-dim);
+    background: rgba(15,23,18,0.7);
+    padding:3px 7px;
+    border-radius:5px;
+    border:1px solid var(--panel-border);
+    text-decoration:none;
+  }
+  .track-map-attribution:hover{ color: var(--parchment); }
+  .track-map-attribution[hidden]{ display:none; }
+
   .compass-shell{
     position:absolute;
     right: 16px;
@@ -2166,6 +2198,8 @@
         </svg>
         <span id="trackPhotoPlaceholderText">Aerial photo coming soon</span>
       </div>
+      <div class="track-map" id="trackMap" hidden></div>
+      <a class="track-map-attribution" id="trackMapAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" hidden>© OpenStreetMap contributors</a>
       <div class="track-caption" id="trackCaption">Live aerial — Saratoga Race Course</div>
 
       <canvas class="wind-flow-canvas" id="windFlowCanvas"></canvas>
@@ -4214,6 +4248,92 @@
     const res = await fetch(stableApiUrl(`/ascot-conditions`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     return res.json();
+  }
+
+  // Map-tile aerial view (OpenStreetMap raster tiles, ODbL-licensed, no API
+  // key) for UK tracks that don't have a licensed aerial photo yet (see
+  // Ascot's TRACKS comment on why) — same per-track allowlist pattern as
+  // every other track-scoped feature here. Zoom is chosen per track's real
+  // footprint (see each track's own heading-derivation comment for the
+  // source measurements): Ascot/Epsom Downs/York are compact enough
+  // (~1.2-1.8km home straights) that zoom 15 shows the whole course with
+  // some surrounding context; Newmarket's Rowley Mile is a genuinely
+  // straight ~2.2km course, too long for zoom 15 to fit end-to-end, so it
+  // gets the wider zoom 14 instead. Saratoga (and any other track with a
+  // real photo) is untouched — renderStaticTrackChrome() only reaches this
+  // path when track.photo is null.
+  const MAP_TILE_ZOOM_BY_TRACK = { ascot: 15, epsomdowns: 15, york: 15, newmarket: 14 };
+  const OSM_TILE_SIZE = 256;
+
+  // Standard Web Mercator slippy-map projection (the same formula behind
+  // every OSM-tile-consuming library) — returns fractional tile coordinates,
+  // not just the integer tile a point falls in, so the caller can position
+  // tiles precisely enough to center the requested lon/lat rather than just
+  // snapping to whichever tile contains it.
+  function lonLatToTileXY(lon, lat, zoom){
+    const n = 2 ** zoom;
+    const x = (lon + 180) / 360 * n;
+    const latRad = lat * Math.PI / 180;
+    const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+    return { x, y };
+  }
+
+  // Composites a grid of raw OSM tiles into #trackMap, centered on the
+  // track's own coordinates — a static mosaic, not a pannable map (nothing
+  // here needs interactivity, same as the photo it replaces), so this is a
+  // plain positioned-<img> grid rather than pulling in a mapping library
+  // for a single-file app that otherwise has zero JS dependencies. Re-run
+  // on every resize (see the ResizeObserver below) since the container is a
+  // responsive % width, not a fixed design-time size.
+  function renderMapTiles(track){
+    const container = $("trackMap");
+    if (!container) return;
+    const zoom = MAP_TILE_ZOOM_BY_TRACK[track.id];
+    if (zoom == null) return;
+    const rect = container.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+    if (w < 1 || h < 1) return; // not laid out yet — a later resize will retry
+
+    const { x: centerX, y: centerY } = lonLatToTileXY(track.lon, track.lat, zoom);
+    const centerTileX = Math.floor(centerX);
+    const centerTileY = Math.floor(centerY);
+    const n = 2 ** zoom;
+    // Half the box in tile units, rounded up, plus one buffer tile so a
+    // fractional center offset never leaves a gap at the container's edge.
+    const spanX = Math.ceil(w / OSM_TILE_SIZE / 2) + 1;
+    const spanY = Math.ceil(h / OSM_TILE_SIZE / 2) + 1;
+
+    const fragment = document.createDocumentFragment();
+    for (let dy = -spanY; dy <= spanY; dy++){
+      const ty = centerTileY + dy;
+      if (ty < 0 || ty >= n) continue; // off the top/bottom of the projection
+      for (let dx = -spanX; dx <= spanX; dx++){
+        const tx = ((centerTileX + dx) % n + n) % n; // wrap the antimeridian
+        const img = document.createElement("img");
+        img.className = "track-map-tile";
+        img.loading = "lazy";
+        img.decoding = "async";
+        img.alt = "";
+        img.src = `https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
+        img.style.left = `${(centerTileX + dx - centerX) * OSM_TILE_SIZE + w / 2}px`;
+        img.style.top = `${(centerTileY + dy - centerY) * OSM_TILE_SIZE + h / 2}px`;
+        fragment.appendChild(img);
+      }
+    }
+    container.innerHTML = "";
+    container.appendChild(fragment);
+  }
+
+  // Re-renders the current track's map tiles on resize — mirrors
+  // resizeFlowCanvas()/initWindFlow()'s ResizeObserver pattern for the same
+  // "responsive %-width box, needs real pixel dimensions" problem. A no-op
+  // whenever the active track isn't a map-tile track (renderMapTiles()
+  // itself already guards on MAP_TILE_ZOOM_BY_TRACK, so this can fire
+  // unconditionally on every resize without checking first).
+  function initTrackMapResize(){
+    const wrap = $("trackWrap");
+    if (!wrap) return;
+    new ResizeObserver(() => renderMapTiles(activeTrack)).observe(wrap);
   }
 
   // Del Mar's own post-position win-rate stats (see the worker's job #10
@@ -8277,14 +8397,25 @@
   function renderStaticTrackChrome(track){
     $("trackPanelTitle").textContent = track.name;
     $("trackCaption").textContent = `Live aerial — ${track.name}`;
+    const mapZoomSupported = MAP_TILE_ZOOM_BY_TRACK[track.id] != null;
     if (track.photo){
       $("trackPhoto").src = track.photo;
       $("trackPhoto").alt = track.photoAlt;
       $("trackPhoto").hidden = false;
       $("trackPhotoPlaceholder").hidden = true;
+      $("trackMap").hidden = true;
+      $("trackMapAttribution").hidden = true;
+    } else if (mapZoomSupported){
+      $("trackPhoto").hidden = true;
+      $("trackPhotoPlaceholder").hidden = true;
+      $("trackMap").hidden = false;
+      $("trackMapAttribution").hidden = false;
+      renderMapTiles(track);
     } else {
       $("trackPhoto").hidden = true;
       $("trackPhotoPlaceholder").hidden = false;
+      $("trackMap").hidden = true;
+      $("trackMapAttribution").hidden = true;
       $("trackPhotoPlaceholderText").textContent = `${track.name} — aerial photo coming soon`;
     }
     $("nyraFrame").title = `${track.name} scratches, official track conditions, and turf rail settings from NYRA`;
@@ -8741,6 +8872,7 @@
   setInterval(checkForUpdate, UPDATE_CHECK_MS);
 
   initWindFlow();
+  initTrackMapResize();
   refreshNyraFrame();
   refreshOfficialTrackConditions();
   refreshPpStats();
