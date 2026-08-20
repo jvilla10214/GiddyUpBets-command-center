@@ -150,13 +150,22 @@
 //
 // 11. Severe weather alerts (GET /nws-alerts?lat=<lat>&lon=<lon>) — proxies
 //    api.weather.gov's active-alerts-by-point endpoint, filtered server-
-//    side to exactly "Severe Thunderstorm Warning" and "Tornado Warning"
-//    (not Watches, not any other alert type). Free, keyless, official
-//    government source. This is the one job in this file that a browser
-//    could never do directly even though the API itself is CORS-open —
-//    NWS documents a descriptive User-Agent as required, and fetch() is
-//    spec-forbidden from setting its own User-Agent header, so this has to
-//    go through a server-side context. See NWS_USER_AGENT above.
+//    side to exactly "Severe Thunderstorm Warning", "Tornado Warning", and
+//    "Flash Flood Warning" (not Watches, not Advisories, not any other
+//    alert type) — Flash Flood Warning added alongside the original two
+//    since it's directly relevant to whether a track can run at all, same
+//    bar as the other two (an active, in-progress WARNING, not a lower-
+//    confidence Watch/Advisory). Free, keyless, official government
+//    source. This is the one job in this file that a browser could never
+//    do directly even though the API itself is CORS-open — NWS documents a
+//    descriptive User-Agent as required, and fetch() is spec-forbidden
+//    from setting its own User-Agent header, so this has to go through a
+//    server-side context. See NWS_USER_AGENT above.
+//    Called once per US track (client-side, see index.html's
+//    refreshSevereWeatherAlerts()) — every US track's own coordinates, not
+//    just whichever one is currently active, so a Belmont tornado warning
+//    still surfaces while looking at Saratoga's dashboard. International
+//    tracks aren't queried at all — NWS has no coverage outside the US.
 //
 // 12. Ascot live on-site weather (GET /ascot-conditions) — proxies
 //    TurfTrax's WeatherTrax station feed for Ascot (its.turftrax.co.uk),
@@ -691,7 +700,7 @@ async function handleRequest(request, env) {
       const data = await res.json();
       const alerts = (data.features || [])
         .map((f) => f.properties)
-        .filter((p) => p?.event === "Severe Thunderstorm Warning" || p?.event === "Tornado Warning")
+        .filter((p) => p?.event === "Severe Thunderstorm Warning" || p?.event === "Tornado Warning" || p?.event === "Flash Flood Warning")
         .map((p) => ({
           id: p.id, event: p.event, headline: p.headline, severity: p.severity,
           effective: p.effective, expires: p.expires, areaDesc: p.areaDesc,

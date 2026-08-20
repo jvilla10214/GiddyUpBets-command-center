@@ -6659,10 +6659,13 @@
   // User-Agent as required and browser fetch() is spec-forbidden from
   // setting its own User-Agent header; there's no way to comply with that
   // from client-side JS at all, not just a style preference. Narrowly
-  // scoped to exactly Severe Thunderstorm Warning and Tornado Warning (not
-  // Watches, not any other NWS alert type) — filtered server-side, see the
-  // worker's job #11 comment. Current-track-only, same scope the rest of
-  // this app's live weather already uses (see activeTrack.lat/lon below).
+  // scoped to exactly Severe Thunderstorm Warning, Tornado Warning, and
+  // Flash Flood Warning (not Watches, not Advisories, not any other NWS
+  // alert type) — filtered server-side, see the worker's job #11 comment.
+  // Polled for every US track (see refreshAllSevereWeatherAlerts() below),
+  // not just whichever one is active — a Belmont tornado warning shouldn't
+  // depend on Belmont happening to be the selected track to surface at all.
+  // International tracks aren't queried — no NWS coverage outside the US.
   const NWS_SEEN_KEY = "giddyupbets_nws_seen_alerts_v1";
 
   function loadSeenNwsAlerts(){
@@ -6679,11 +6682,20 @@
     try{ localStorage.setItem(NWS_SEEN_KEY, JSON.stringify(list)); }
     catch(err){ console.error("NWS alert state failed to save", err); }
   }
+  // Flat, not track-scoped — a single running record of every US track's
+  // alert IDs seen so far, so the "in effect"/"ended" diff below works
+  // correctly across all of them at once, not just whichever was active
+  // when an alert first appeared.
   let seenNwsAlerts = loadSeenNwsAlerts();
-  // Currently-active severe alerts for activeTrack, as last fetched — drives
-  // the prominent top-of-page banner (renderSevereAlertBanners() below).
-  // Separate from seenNwsAlerts, which only tracks IDs for the "in effect"/
-  // "ended" history entries in the alert-feed dropdown.
+  // trackId -> that track's own alerts[], as last fetched. Keeping every
+  // track's own list (not just the active one) is what lets switching
+  // tracks repaint the banner instantly from cache below, and lets the
+  // bell/notification diff cover every track on each poll.
+  let severeAlertsByTrack = {};
+  // The subset of severeAlertsByTrack actually shown right now — always
+  // just activeTrack's own list. Separate from severeAlertsByTrack (every
+  // track) and from seenNwsAlerts (which only tracks IDs for the "in
+  // effect"/"ended" history entries in the alert-feed dropdown).
   let activeSevereAlerts = [];
 
   async function severeWeatherApiGet(lat, lon){
@@ -6699,6 +6711,11 @@
   // authority here. Also re-filters against each alert's own `expires` on
   // every call (see the setInterval below) so a banner disappears close to
   // its real expiration moment rather than waiting on the next 5-min poll.
+  // Deliberately scoped to activeTrack only, even though every US track's
+  // alerts are already fetched — showing every track's warnings here at
+  // once would bury the one that actually matters to what's on screen;
+  // the bell/notification feed (see refreshAllSevereWeatherAlerts()) is
+  // where the other tracks' alerts still surface.
   function renderSevereAlertBanners(){
     const container = $("severeAlertList");
     if (!container) return;
@@ -6716,41 +6733,54 @@
     `).join("");
   }
 
-  // Diffs this poll's active alerts against the last-seen set (persisted, same
-  // edge-triggered pattern as detectWeatherAlerts above): newly-appeared alerts
-  // push an "in effect" message, alerts that dropped out of the active list
-  // push an "ended" message using the name we already had stored for them —
-  // this feeds the alert-feed dropdown's historical record. The banner
-  // itself is driven directly by activeSevereAlerts, not this diff.
-  async function refreshSevereWeatherAlerts(){
-    const trackId = activeTrack.id;
-    let fetched;
-    try{
-      fetched = await severeWeatherApiGet(activeTrack.lat, activeTrack.lon);
-    } catch(err){
-      console.error("Severe weather alerts fetch failed", err);
-      return;
-    }
-    if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
+  // Instant, no-fetch repaint of the banner for whichever track is active
+  // right now — reads straight from severeAlertsByTrack's cache, so
+  // switching tracks updates this immediately instead of showing nothing
+  // until the next poll lands (see switchTrack()'s own call to this).
+  function renderActiveTrackSevereBanner(){
+    activeSevereAlerts = severeAlertsByTrack[activeTrack.id] || [];
+    renderSevereAlertBanners();
+  }
 
-    const withTrack = fetched.map(a => ({ ...a, trackShortName: activeTrack.shortName }));
-    const activeIds = withTrack.map(a => a.id);
+  // Polls every US track's own coordinates in parallel (not just the active
+  // one) and diffs the combined set against the last-seen record: newly-
+  // appeared alerts push an "in effect" message, alerts that dropped out
+  // push an "ended" message using the name/track already stored for them —
+  // this feeds the alert-feed dropdown's historical record across all
+  // tracks. makeAlert()'s `track` param is passed explicitly here (rather
+  // than left to its activeTrack.shortName default) since an alert found
+  // for Belmont is about Belmont regardless of which track happens to be
+  // active when this poll runs.
+  async function refreshAllSevereWeatherAlerts(){
+    const results = await Promise.all(TRACK_REGIONS.US.map(async (trackId) => {
+      const track = TRACKS[trackId];
+      try{
+        const alerts = await severeWeatherApiGet(track.lat, track.lon);
+        return { trackId, alerts: alerts.map(a => ({ ...a, trackShortName: track.shortName })) };
+      } catch(err){
+        console.error(`Severe weather alerts fetch failed (${track.shortName})`, err);
+        return null; // keep this track's last-known list rather than blanking it over a transient failure
+      }
+    }));
+    results.forEach(r => { if (r) severeAlertsByTrack[r.trackId] = r.alerts; });
 
-    withTrack.forEach(a => {
+    const allCurrent = TRACK_REGIONS.US.flatMap(id => severeAlertsByTrack[id] || []);
+    const activeIds = allCurrent.map(a => a.id);
+
+    allCurrent.forEach(a => {
       if (!seenNwsAlerts.some(s => s.id === a.id)){
-        pushAlert(makeAlert("severe", `${a.event} in effect — until ${fmtTime(a.expires)}`));
+        pushAlert(makeAlert("severe", `${a.event} in effect — until ${fmtTime(a.expires)}`, a.trackShortName));
       }
     });
     seenNwsAlerts.forEach(s => {
       if (!activeIds.includes(s.id)){
-        pushAlert(makeAlert("severe", `${s.event} has ended`));
+        pushAlert(makeAlert("severe", `${s.event} has ended`, s.trackShortName));
       }
     });
-    seenNwsAlerts = withTrack.map(a => ({ id: a.id, event: a.event }));
+    seenNwsAlerts = allCurrent.map(a => ({ id: a.id, event: a.event, trackShortName: a.trackShortName }));
     saveSeenNwsAlerts(seenNwsAlerts);
 
-    activeSevereAlerts = withTrack;
-    renderSevereAlertBanners();
+    renderActiveTrackSevereBanner();
   }
 
   // ---------- Air Quality (Open-Meteo Air Quality API) ----------
@@ -8283,7 +8313,6 @@
       render(data, ascotConditions);
       setStatus(true, "Live");
       $("asOf").textContent = "Updated " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit', timeZone: activeTrack.timezone});
-      refreshSevereWeatherAlerts(); // separate free-standing API — a hiccup here shouldn't affect the weather status pill
     } catch(err){
       console.error(err);
       setStatus(false, "Connection issue — retrying");
@@ -8682,12 +8711,12 @@
     lastDirtEstimate = null;
     lastTurfEstimate = null;
     lastOfficialConditions = null;
-    // Same reasoning — severe weather alerts are current-track-only, so a
-    // Saratoga tornado warning shouldn't stay on screen after switching to
-    // Del Mar just because the next 5-min poll hasn't landed yet.
-    activeSevereAlerts = [];
-    renderSevereAlertBanners();
-    refreshSevereWeatherAlerts();
+    // Every US track's alerts are already fetched independently of which
+    // one is active (see refreshAllSevereWeatherAlerts()), so switching
+    // repaints the banner instantly from that cache — no blank gap waiting
+    // on a fetch, and no stale alert from the PREVIOUS track staying on
+    // screen either.
+    renderActiveTrackSevereBanner();
     $("soilMoistureSurface").textContent = "—";
     $("soilMoistureDeep").textContent = "Root zone (9–27cm) —";
     $("forecastSlider").value = 0;
@@ -9073,10 +9102,12 @@
   fetchAirQuality();
   fetchTideData(); // no-ops internally for tracks without tideStationId
   loadRainNowcast();
+  refreshAllSevereWeatherAlerts(); // independent of which track is active — see its own comment
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
   setInterval(renderAlertFeed, 60 * 1000); // keeps "Xm ago" timestamps fresh even with no new alerts
   setInterval(renderSevereAlertBanners, 30 * 1000); // re-checks each banner's own expires — clears it close to the real moment, not just on the next 5-min poll
+  setInterval(refreshAllSevereWeatherAlerts, REFRESH_MS);
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(refreshOfficialTrackConditions, TRACK_CONDITIONS_REFRESH_MS);
   setInterval(refreshRaceResults, REFRESH_MS); // same cadence as the main live refresh — a race can go final any time during a card
