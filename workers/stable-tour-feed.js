@@ -118,6 +118,24 @@
 //    conditions the morning after, once the live page has moved on.
 //    Only Saratoga is wired up (NYRA_SCRATCHES_CODE_BY_TRACK) — same
 //    verify-before-adding rule as every other track map in this file.
+//    York also answers through this same endpoint, but via a different
+//    upstream: its going condition/rail come from TurfTrax's WDV API
+//    Stream (job #12's data source, verified for York the same way it was
+//    for Ascot — its own going-report.html embeds this exact stream via
+//    iframe, and a bare request without the matching Referer is rejected
+//    with "Unlicensed Direct Access", same as job #12). TURFTRAX_GOING_
+//    STREAM_URL_BY_TRACK/TURFTRAX_GOING_REFERER_BY_TRACK below select this
+//    path instead of NYRA_SCRATCHES_CODE_BY_TRACK's, and
+//    parseTurftraxGoingReport() maps its "going-report"/"going-race-date"/
+//    "going-report-date" fields onto the same {available, cardDate,
+//    turfConditions, ...} shape parseNyraTrackConditions() returns (plus a
+//    "provider" field so the client can label the source correctly) —
+//    everything downstream (KV persistence, the date-rollover fallback)
+//    is shared, unchanged code. No rail/GoingStick parsing here: York's
+//    rail text is a multi-day paragraph, not a short "Set at N Ft" value
+//    the client's rail tile can hold, so that detail is left to the
+//    client's existing link-out card instead (pointed at TurfTrax's own
+//    public visualiser page) rather than force-fit into this endpoint.
 //
 // 10. Del Mar post-position stats (GET /pp-stats?track=<id>) — fetches
 //    DMTC's own "Winning Post Positions" page and parses its win-rate-by-
@@ -182,6 +200,13 @@ const NYRA_TRENDS_URL_BY_TRACK = { saratoga: "https://www.nyra.com/saratoga/raci
 // misleadingly-official read. Once Belmont's meet is actually live, the
 // same endpoint starts returning real same-day data automatically.
 const NYRA_SCRATCHES_CODE_BY_TRACK = { saratoga: "SAR", belmont: "BEL" };
+// Job #9's TurfTrax path (York) — separate maps from TURFTRAX_STREAM_URL/
+// TURFTRAX_REFERER above since those are Ascot's own weather-sensor feed
+// (job #12, a different content shape); same one-entry-per-verified-track
+// rule as every other map in this file.
+const TURFTRAX_GOING_STREAM_URL_BY_TRACK = { york: "https://its.turftrax.co.uk/visualiser/stream/york.html" };
+const TURFTRAX_GOING_REFERER_BY_TRACK = { york: "https://its.turftrax.co.uk/visualiser/york/" };
+const TURFTRAX_GOING_COURSE_LABEL_BY_TRACK = { york: "York" };
 // Job #10 — same one-entry-per-verified-track rule as every other map here.
 const DMTC_PP_STATS_URL_BY_TRACK = { delmar: "https://www.dmtc.com/handicapping/pp-stats" };
 // Lock this to the dashboard's real origin once it has one; "*" is fine
@@ -531,16 +556,30 @@ async function handleRequest(request, env) {
       const track = url.searchParams.get("track") || "";
       const date = url.searchParams.get("date") || "";
       const code = NYRA_SCRATCHES_CODE_BY_TRACK[track];
-      if (!code) return json({ error: "Not supported for this track" }, 400);
+      const turfTraxUrl = TURFTRAX_GOING_STREAM_URL_BY_TRACK[track];
+      if (!code && !turfTraxUrl) return json({ error: "Not supported for this track" }, 400);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
 
       let parsed = { available: false };
       try {
-        const res = await fetch(`https://tr-cdn.nyra.com/direct/scratches/${code}scratch.html`, {
-          headers: { "User-Agent": BROWSER_UA },
-          cf: { cacheTtl: 300, cacheEverything: true }, // this source's own cache-control is only 30s, but sub-5-minute freshness isn't needed
-        });
-        if (res.ok) parsed = parseNyraTrackConditions(await res.text());
+        if (turfTraxUrl) {
+          const res = await fetch(turfTraxUrl, {
+            headers: { "User-Agent": BROWSER_UA, "Referer": TURFTRAX_GOING_REFERER_BY_TRACK[track], "Accept": "application/json" },
+            cf: { cacheTtl: 300, cacheEverything: true },
+          });
+          if (res.ok) {
+            const raw = await res.json();
+            if (raw.status === 0 && raw.payload?.content) {
+              parsed = parseTurftraxGoingReport(raw.payload, TURFTRAX_GOING_COURSE_LABEL_BY_TRACK[track] || track);
+            }
+          }
+        } else {
+          const res = await fetch(`https://tr-cdn.nyra.com/direct/scratches/${code}scratch.html`, {
+            headers: { "User-Agent": BROWSER_UA },
+            cf: { cacheTtl: 300, cacheEverything: true }, // this source's own cache-control is only 30s, but sub-5-minute freshness isn't needed
+          });
+          if (res.ok) parsed = parseNyraTrackConditions(await res.text());
+        }
       } catch (err) {
         // treat as unavailable — falls through to the KV lookup below
       }
@@ -1091,7 +1130,45 @@ function parseNyraTrackConditions(html) {
   }
 
   const available = !!(dirtCondition || turfConditions.length || railSettings.length);
-  return { available, cardDate, cardDateLabel, lastUpdatedLabel, dirtCondition, turfConditions, railSettings };
+  return { available, provider: "nyra", cardDate, cardDateLabel, lastUpdatedLabel, dirtCondition, turfConditions, railSettings };
+}
+
+// Maps TurfTrax's WDV API Stream "content" block (same stream shape job
+// #12 already parses for Ascot's weather sensor, but this reads its going-
+// report fields instead) onto the same shape parseNyraTrackConditions()
+// above returns, so the client's existing turf-tile rendering needs zero
+// changes to consume either source. Deliberately doesn't parse rail-report/
+// stick-report — see job #9's comment for why those are left to the
+// client's link-out card instead. "Good to Soft\r\nWhole course terra
+// spiked since last meeting" -> condition is just the first line; the rest
+// is course-staff commentary this shape has nowhere structured to put.
+function parseTurftraxGoingReport(payload, courseLabel) {
+  const c = payload.content || {};
+  const goingLines = (c["going-report"] || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const condition = goingLines[0] ? goingLines[0].toUpperCase() : null;
+  if (!condition) return { available: false, provider: "turftrax" };
+
+  // "Thursday, 20th August, 2026" -> "2026-08-20"
+  const MONTHS = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+  const dateMatch = (c["going-race-date"] || "").match(/(\d{1,2})\w*\s+([a-z]+),?\s+(\d{4})/i);
+  const cardDate = dateMatch && MONTHS[dateMatch[2].toLowerCase()]
+    ? `${dateMatch[3]}-${String(MONTHS[dateMatch[2].toLowerCase()]).padStart(2, "0")}-${dateMatch[1].padStart(2, "0")}`
+    : null;
+
+  // "Thursday, 20th August, 2026 at 8:45 am" -> "8:45 am"
+  const updatedMatch = (c["going-report-date"] || "").match(/at\s+([\d:]+\s*[ap]m)/i);
+  const lastUpdatedLabel = updatedMatch ? updatedMatch[1] : null;
+
+  return {
+    available: true,
+    provider: "turftrax",
+    cardDate,
+    cardDateLabel: c["going-race-date"] || null,
+    lastUpdatedLabel,
+    dirtCondition: null,
+    turfConditions: [{ course: courseLabel, condition }],
+    railSettings: [],
+  };
 }
 
 // ---------- NYRA Entries / morning-line odds parser ----------

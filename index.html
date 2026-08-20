@@ -3197,7 +3197,13 @@
       // courses share the Knavesmire), so backstretch is the reciprocal
       // rather than an independently-measured far-side segment.
       heading: { homestretch: 358, backstretch: 178 },
-      nyraCode: null, scratchesUrl: null,
+      // Turf/rail condition itself comes through OFFICIAL_CONDITIONS_PROVIDER
+      // (TurfTrax, wired up separately) and shows directly on the Turf
+      // Course tile — scratchesUrl here is TurfTrax's own public going-
+      // report visualiser, the same page York's official going-report.html
+      // embeds, for the fuller rail/GoingStick/weather detail that doesn't
+      // fit in a tile.
+      nyraCode: null, scratchesUrl: "https://its.turftrax.co.uk/visualiser/york/",
       // No legally-clean high-res source found yet — same UK aerial-imagery
       // dead end as Ascot/Epsom Downs/Newmarket (see Ascot's comment).
       photo: null, photoAlt: "Aerial view of York Racecourse",
@@ -4168,15 +4174,26 @@
     return Array.isArray(data.races) ? data.races : [];
   }
 
-  // Live official dirt/turf/rail conditions, parsed by the worker from
-  // NYRA's own live scratches page (see the worker's job #9 comment).
-  // Saratoga and Belmont are wired up — same allowlist rule as every other
-  // per-track feature in this file. Belmont is a real NYRA track but isn't
-  // racing during Saratoga's meet — updateTrackConditionTiles() below
-  // treats "in this set but no live-dated data" as "not racing today" for
-  // any track that isn't NYRA_CURRENTLY_LIVE_TRACK, distinct from Saratoga's
-  // own "hasn't posted yet" fallback.
-  const NYRA_TRACK_CONDITIONS_SUPPORTED = new Set(["saratoga", "belmont"]);
+  // Live official dirt/turf/rail conditions, parsed by the worker from each
+  // track's own live conditions feed — NYRA's live scratches page for the
+  // NYRA tracks, TurfTrax's WDV API Stream (the same source York's own
+  // going-report.html embeds) for York — see the worker's job #9 comment.
+  // OFFICIAL_CONDITIONS_PROVIDER is the single source of truth for which
+  // tracks are wired up (same allowlist rule as every other per-track
+  // feature in this file) and which upstream backs each one, so the label
+  // shown alongside a reading ("NYRA confirmed…" vs "TurfTrax confirmed…")
+  // always matches where the data actually came from.
+  const OFFICIAL_CONDITIONS_PROVIDER = { saratoga: "nyra", belmont: "nyra", york: "turftrax" };
+  const OFFICIAL_CONDITIONS_LABEL = { nyra: "NYRA", turftrax: "TurfTrax" };
+  const OFFICIAL_CONDITIONS_SUPPORTED = new Set(Object.keys(OFFICIAL_CONDITIONS_PROVIDER));
+  // Belmont is a real NYRA track but isn't racing during Saratoga's meet —
+  // updateTrackConditionTiles() below treats "NYRA-provider track with no
+  // live-dated data" as "not racing today" for any track that isn't
+  // NYRA_CURRENTLY_LIVE_TRACK, distinct from Saratoga's own "hasn't posted
+  // yet" fallback. Scoped to the NYRA provider specifically (not every
+  // supported track) — York has no such "dark twin track" concept, it
+  // just falls back to the heuristic estimate like any other unsupported
+  // track when TurfTrax hasn't got a same-day reading.
   const NYRA_CURRENTLY_LIVE_TRACK = "saratoga";
   async function trackConditionsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/track-conditions?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
@@ -5231,7 +5248,7 @@
     // card by the time this runs, so this reads back the KV snapshot the
     // worker captured while that card was still live, not a fresh fetch.
     let nyraSourced = false;
-    if (NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId)){
+    if (OFFICIAL_CONDITIONS_SUPPORTED.has(trackId)){
       try{
         const official = await trackConditionsApiGet(trackId, yesterdayStr);
         if (activeTrack.id !== trackId) return; // stale — track changed while this was in flight
@@ -5243,6 +5260,12 @@
         console.error("Official track conditions fetch failed (Daily Log auto-log)", err);
       }
     }
+    // Field name kept as "nyraSourced" for backward compatibility with
+    // already-persisted log entries (only ever NYRA-sourced before York
+    // existed) — conditionsProvider is the new, correctly-labeled field the
+    // badge render below actually reads, falling back to "nyra" for any
+    // entry (old or new) that doesn't have it set.
+    const conditionsProvider = nyraSourced ? (OFFICIAL_CONDITIONS_PROVIDER[trackId] || "nyra") : null;
 
     // Stores a RETROSPECTIVE Weather Bias Predictor Score for this now-
     // completed day, for the calibration check in the Bias Tracker's Trends
@@ -5265,7 +5288,7 @@
     });
 
     const entry = {
-      ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString(),
+      ...stats, isPartial: false, nyraSourced, conditionsProvider, capturedAt: new Date().toISOString(),
       insideSpeed: retroScore?.insideSpeed ?? null,
       outsideClosers: retroScore?.outsideClosers ?? null,
     };
@@ -5323,7 +5346,7 @@
 
   function fmtLogRow(entry){
     return `
-      <td>${entry.date}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}${entry.nyraSourced ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
+      <td>${entry.date}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}${entry.nyraSourced ? ` <span class="log-partial-tag">${OFFICIAL_CONDITIONS_LABEL[entry.conditionsProvider] || "NYRA"}</span>` : ""}</td>
       <td>${entry.tempHigh != null ? Math.round(entry.tempHigh) + "°" : "—"}</td>
       <td>${entry.tempLow != null ? Math.round(entry.tempLow) + "°" : "—"}</td>
       <td>${entry.windAvg != null ? Math.round(entry.windAvg) + " mph" : "—"}</td>
@@ -7618,24 +7641,30 @@
       ? payload.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
       : "—";
 
+    const providerLabel = OFFICIAL_CONDITIONS_LABEL[OFFICIAL_CONDITIONS_PROVIDER[activeTrack.id]] || "NYRA";
     $("ocTimestamp").textContent = (payload?.available && payload.lastUpdatedLabel)
-      ? `NYRA confirmed ${payload.lastUpdatedLabel} · ${payload.cardDateLabel ?? ""}`
-      : "NYRA hasn't confirmed conditions for today yet";
+      ? `${providerLabel} confirmed ${payload.lastUpdatedLabel} · ${payload.cardDateLabel ?? ""}`
+      : `${providerLabel} hasn't confirmed conditions for today yet`;
 
     lastOfficialConditions = payload;
     updateTrackConditionTiles();
   }
 
-  // NYRA's live scratches page prints these in fixed uppercase vocabulary —
-  // reuses the exact same 4 severity classes (fast/good/muddy/sloppy) the
-  // weather heuristic's estimateDirtCondition()/estimateTurfCondition()
-  // already use, so an official read and an estimated read of the same
-  // severity look identical in color, only the little source tag differs.
-  const NYRA_CONDITION_CLASS = {
-    FAST: "cond-fast", FIRM: "cond-fast",
+  // Each official source prints its condition in its own fixed vocabulary —
+  // NYRA's live scratches page uses single-word dirt/turf terms, TurfTrax's
+  // going report uses the British Horseracing Authority's turf going scale
+  // (which can be two words, e.g. "GOOD TO SOFT" — the worker already
+  // uppercases these to match NYRA's convention before they reach the
+  // client, see parseTurftraxGoingReport()). Both map onto the exact same 4
+  // severity classes (fast/good/muddy/sloppy) the weather heuristic's
+  // estimateDirtCondition()/estimateTurfCondition() already use, so an
+  // official read and an estimated read of the same severity look
+  // identical in color, only the little source tag differs.
+  const OFFICIAL_CONDITION_CLASS = {
+    FAST: "cond-fast", FIRM: "cond-fast", HARD: "cond-fast", "GOOD TO FIRM": "cond-fast",
     GOOD: "cond-good",
-    MUDDY: "cond-muddy", YIELDING: "cond-muddy",
-    SLOPPY: "cond-sloppy", "SLOPPY / WET": "cond-sloppy", SOFT: "cond-sloppy",
+    MUDDY: "cond-muddy", YIELDING: "cond-muddy", "GOOD TO SOFT": "cond-muddy",
+    SLOPPY: "cond-sloppy", "SLOPPY / WET": "cond-sloppy", SOFT: "cond-sloppy", HEAVY: "cond-sloppy", "SOFT TO HEAVY": "cond-sloppy",
   };
 
   // "h:mm" — trims NYRA's raw "2:15:03 PM" down to fit the tile's tiny
@@ -7658,7 +7687,7 @@
   //     fallback estimate here is fine, this tile has always shown a
   //     best-guess read, official data just makes it more accurate when
   //     available, not a new claim of certainty.
-  //   - Belmont (in NYRA_TRACK_CONDITIONS_SUPPORTED but not the live
+  //   - Belmont (in OFFICIAL_CONDITIONS_SUPPORTED but not the live
   //     track): "NOT RACING" — Belmont's meet isn't running right now, so
   //     unlike Saratoga this isn't "hasn't posted yet", it's "there's
   //     nothing to post". Showing either a stale NYRA tag or a silent
@@ -7669,16 +7698,17 @@
   //     official NYRA read.
   function updateTrackConditionTiles(){
     const trackId = activeTrack.id;
-    const official = NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId) ? lastOfficialConditions : null;
+    const official = OFFICIAL_CONDITIONS_SUPPORTED.has(trackId) ? lastOfficialConditions : null;
     const officialTime = official?.available ? shortTimeLabel(official.lastUpdatedLabel) : "";
-    const isDarkNyraTrack = NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId) && trackId !== NYRA_CURRENTLY_LIVE_TRACK && !official?.available;
+    const providerLabel = OFFICIAL_CONDITIONS_LABEL[OFFICIAL_CONDITIONS_PROVIDER[trackId]] || "NYRA";
+    const isDarkNyraTrack = OFFICIAL_CONDITIONS_PROVIDER[trackId] === "nyra" && trackId !== NYRA_CURRENTLY_LIVE_TRACK && !official?.available;
 
     const dirtValueEl = $("dirtConditionValue");
     const dirtSourceEl = $("dirtSourceTag");
     if (official?.available && official.dirtCondition){
       dirtValueEl.textContent = official.dirtCondition;
-      dirtValueEl.className = "tc-value " + (NYRA_CONDITION_CLASS[official.dirtCondition] || "");
-      dirtSourceEl.textContent = `NYRA${officialTime ? " " + officialTime : ""}`;
+      dirtValueEl.className = "tc-value " + (OFFICIAL_CONDITION_CLASS[official.dirtCondition] || "");
+      dirtSourceEl.textContent = `${providerLabel}${officialTime ? " " + officialTime : ""}`;
       dirtSourceEl.className = "tc-source";
       dirtSourceEl.hidden = false;
     } else if (isDarkNyraTrack){
@@ -7688,8 +7718,14 @@
     } else if (lastDirtEstimate){
       dirtValueEl.textContent = lastDirtEstimate.label;
       dirtValueEl.className = "tc-value " + lastDirtEstimate.cls;
-      if (NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId)){
-        dirtSourceEl.hidden = true; // Saratoga, NYRA just hasn't posted yet — unchanged
+      // NYRA-specific: NYRA's payload always carries a dirt reading once
+      // posted, so "supported but no official dirt yet" really does mean
+      // "hasn't posted today's card yet" there. TurfTrax/York never reports
+      // a dirt condition at all (no dirt track) — that's not a "not yet"
+      // state, so its tile should always carry the "Estimated" tag rather
+      // than silently waiting on data that's never coming.
+      if (OFFICIAL_CONDITIONS_PROVIDER[trackId] === "nyra"){
+        dirtSourceEl.hidden = true; // this track's official source just hasn't posted yet today — unchanged
       } else {
         dirtSourceEl.textContent = "Estimated";
         dirtSourceEl.className = "tc-source tc-source-estimated";
@@ -7702,8 +7738,8 @@
     const officialTurf = official?.available ? official.turfConditions?.[0] : null;
     if (officialTurf){
       turfValueEl.textContent = officialTurf.condition;
-      turfValueEl.className = "tc-value " + (NYRA_CONDITION_CLASS[officialTurf.condition] || "");
-      turfSourceEl.textContent = `NYRA${officialTime ? " " + officialTime : ""}`;
+      turfValueEl.className = "tc-value " + (OFFICIAL_CONDITION_CLASS[officialTurf.condition] || "");
+      turfSourceEl.textContent = `${providerLabel}${officialTime ? " " + officialTime : ""}`;
       turfSourceEl.className = "tc-source";
       turfSourceEl.hidden = false;
     } else if (isDarkNyraTrack){
@@ -7713,8 +7749,8 @@
     } else if (lastTurfEstimate){
       turfValueEl.textContent = lastTurfEstimate.label;
       turfValueEl.className = "tc-value " + lastTurfEstimate.cls;
-      if (NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId)){
-        turfSourceEl.hidden = true; // Saratoga, NYRA just hasn't posted yet — unchanged
+      if (OFFICIAL_CONDITIONS_SUPPORTED.has(trackId)){
+        turfSourceEl.hidden = true; // this track's official source just hasn't posted yet today — unchanged
       } else {
         turfSourceEl.textContent = "Estimated";
         turfSourceEl.className = "tc-source tc-source-estimated";
@@ -7727,7 +7763,7 @@
     const block = $("officialConditionsBlock");
     if (!block) return;
     const trackId = activeTrack.id;
-    if (!NYRA_TRACK_CONDITIONS_SUPPORTED.has(trackId)){
+    if (!OFFICIAL_CONDITIONS_SUPPORTED.has(trackId)){
       block.hidden = true;
       return;
     }
@@ -8223,14 +8259,14 @@
     // Hide immediately on switch rather than showing the previous track's
     // official-conditions block until refreshOfficialTrackConditions()'s
     // own fetch resolves — that fetch re-shows it once it has real data.
-    $("officialConditionsBlock").hidden = !NYRA_TRACK_CONDITIONS_SUPPORTED.has(track.id);
+    $("officialConditionsBlock").hidden = !OFFICIAL_CONDITIONS_SUPPORTED.has(track.id);
     $("nyraXPanel").hidden = !hasNyra; // NYRA's own X account only makes sense for NYRA tracks
     $("scratchesLinkPanel").hidden = !hasScratchesLink;
     $("nyraFallbackPanel").hidden = hasNyra || hasScratchesLink;
     if (hasScratchesLink){
       const source = new URL(track.scratchesUrl).hostname.replace(/^www\./, "").toUpperCase();
       $("scratchesLinkTag").textContent = `LIVE · ${source}`;
-      $("scratchesLinkTitle").textContent = `View ${track.name}'s Official Scratches`;
+      $("scratchesLinkTitle").textContent = `View ${track.name}'s Official Track Conditions`;
       $("scratchesLinkCard").href = track.scratchesUrl;
     } else if (!hasNyra){
       $("nyraFallbackText").textContent =
