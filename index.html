@@ -1649,7 +1649,9 @@
     border: 1px solid var(--panel-border);
     border-left: 3px solid var(--sky);
     border-radius: 6px;
-    max-width: 340px;
+    max-width: 420px;
+    max-height: 260px;
+    overflow-y: auto;
   }
   .entries-note-snippet-date{
     font-family:'IBM Plex Mono', monospace;
@@ -1662,6 +1664,7 @@
     font-size: 12.5px;
     color: var(--parchment);
     line-height: 1.45;
+    white-space: pre-wrap;
   }
   /* Older than STABLE_NOTE_STALE_DAYS — de-emphasized, not hidden; the date
      stays in its normal color so "how old" is still readable at a glance. */
@@ -4723,28 +4726,15 @@
     return (upcoming || races[races.length - 1] || races[0])?.raceNumber ?? null;
   }
 
-  // "First ~2 lines" for notes that actually have paragraph breaks (TDN/
-  // Fasig-Tipton imports, which keep their real \n\n structure) — but
-  // News-Wire-scan auto-imports run their source text through stripHtml()
-  // first, which collapses all whitespace (including newlines) into a
-  // single line, so a plain line-split alone would do nothing useful there.
-  // The character cap is the fallback for exactly that case.
-  const STABLE_NOTE_SNIPPET_CHAR_CAP = 220;
-  function truncateNoteSnippet(text){
-    if (!text) return "";
-    const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean).slice(0, 2).join(" ");
-    return lines.length > STABLE_NOTE_SNIPPET_CHAR_CAP
-      ? lines.slice(0, STABLE_NOTE_SNIPPET_CHAR_CAP).trim() + "…"
-      : lines;
-  }
-
   // Renders the Stable Tour cross-link for one Entries horse — the small
-  // toggle next to its name plus (once expanded) the most recent note's
-  // snippet, both inline within that horse's own "Horse" table cell rather
+  // toggle next to its name plus (once expanded) the most recent note in
+  // full, both inline within that horse's own "Horse" table cell rather
   // than a separate full-width row, since entries-horse-table already wraps
-  // cell content normally (see its CSS) and this avoids colspan juggling
-  // for what's usually a small amount of text. Returns "" (nothing added)
-  // when there's no note for this exact horse — see findHorseStableNotes().
+  // cell content normally (see its CSS) and this avoids colspan juggling.
+  // Shows the note's complete text, not a truncated preview — the toggle is
+  // the only click a reader needs to actually read the quote, not a teaser
+  // that then sends them somewhere else. Returns "" (nothing added) when
+  // there's no note for this exact horse — see findHorseStableNotes().
   function entriesNoteIndicatorHtml(trainer, horseName){
     const notes = findHorseStableNotes(trainer, horseName);
     if (!notes.length) return "";
@@ -4758,7 +4748,7 @@
       html += `
         <div class="entries-note-snippet${stale ? " entries-note-stale" : ""}">
           <div class="entries-note-snippet-date">${fmtStableDate(top.date)}</div>
-          <div class="entries-note-snippet-text">${escapeHtml(truncateNoteSnippet(top.note))}</div>
+          <div class="entries-note-snippet-text">${escapeHtml(top.note)}</div>
           ${notes.length > 1 ? `<button type="button" class="entries-note-viewall" data-trainer="${escapeHtml(top.trainer)}" data-horse="${escapeHtml(top.horse)}">View all ${notes.length} notes →</button>` : ""}
         </div>`;
     }
