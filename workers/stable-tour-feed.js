@@ -118,14 +118,15 @@
 //    conditions the morning after, once the live page has moved on.
 //    Only Saratoga is wired up (NYRA_SCRATCHES_CODE_BY_TRACK) — same
 //    verify-before-adding rule as every other track map in this file.
-//    York also answers through this same endpoint, but via a different
-//    upstream: its going condition/rail come from TurfTrax's WDV API
-//    Stream (job #12's data source, verified for York the same way it was
-//    for Ascot — its own going-report.html embeds this exact stream via
-//    iframe, and a bare request without the matching Referer is rejected
-//    with "Unlicensed Direct Access", same as job #12). TURFTRAX_GOING_
-//    STREAM_URL_BY_TRACK/TURFTRAX_GOING_REFERER_BY_TRACK below select this
-//    path instead of NYRA_SCRATCHES_CODE_BY_TRACK's, and
+//    York, Ascot, Newmarket, and Epsom Downs also answer through this same
+//    endpoint, but via a different upstream: their going condition comes
+//    from TurfTrax's WDV API Stream (job #12's data source, verified for
+//    each of these four directly the same way — their own going-report
+//    pages embed this exact stream via iframe, and a bare request without
+//    the matching Referer is rejected with "Unlicensed Direct Access",
+//    same as job #12). TURFTRAX_GOING_STREAM_URL_BY_TRACK/TURFTRAX_GOING_
+//    REFERER_BY_TRACK below select this path instead of NYRA_SCRATCHES_
+//    CODE_BY_TRACK's, and
 //    parseTurftraxGoingReport() maps its "going-report"/"going-race-date"/
 //    "going-report-date" fields onto the same {available, cardDate,
 //    turfConditions, ...} shape parseNyraTrackConditions() returns (plus a
@@ -204,9 +205,26 @@ const NYRA_SCRATCHES_CODE_BY_TRACK = { saratoga: "SAR", belmont: "BEL" };
 // TURFTRAX_REFERER above since those are Ascot's own weather-sensor feed
 // (job #12, a different content shape); same one-entry-per-verified-track
 // rule as every other map in this file.
-const TURFTRAX_GOING_STREAM_URL_BY_TRACK = { york: "https://its.turftrax.co.uk/visualiser/stream/york.html" };
-const TURFTRAX_GOING_REFERER_BY_TRACK = { york: "https://its.turftrax.co.uk/visualiser/york/" };
-const TURFTRAX_GOING_COURSE_LABEL_BY_TRACK = { york: "York" };
+// Ascot/Newmarket both verified directly the same way York was (their own
+// going-report pages embed this exact stream). Epsom Downs' internal track
+// id is "epsomdowns" but TurfTrax's own URL slug for it is just "epsom" —
+// confirmed directly (a request against ".../stream/epsomdowns.html" 404s,
+// ".../stream/epsom.html" doesn't) — so the map's key is our id, the value
+// is TurfTrax's real slug, same as everywhere else this file translates
+// between our ids and an upstream's own naming.
+const TURFTRAX_GOING_STREAM_URL_BY_TRACK = {
+  york: "https://its.turftrax.co.uk/visualiser/stream/york.html",
+  ascot: "https://its.turftrax.co.uk/visualiser/stream/ascot.html",
+  newmarket: "https://its.turftrax.co.uk/visualiser/stream/newmarket.html",
+  epsomdowns: "https://its.turftrax.co.uk/visualiser/stream/epsom.html",
+};
+const TURFTRAX_GOING_REFERER_BY_TRACK = {
+  york: "https://its.turftrax.co.uk/visualiser/york/",
+  ascot: "https://its.turftrax.co.uk/visualiser/ascot/",
+  newmarket: "https://its.turftrax.co.uk/visualiser/newmarket/",
+  epsomdowns: "https://its.turftrax.co.uk/visualiser/epsom/",
+};
+const TURFTRAX_GOING_COURSE_LABEL_BY_TRACK = { york: "York", ascot: "Ascot", newmarket: "Newmarket", epsomdowns: "Epsom Downs" };
 // Job #10 — same one-entry-per-verified-track rule as every other map here.
 const DMTC_PP_STATS_URL_BY_TRACK = { delmar: "https://www.dmtc.com/handicapping/pp-stats" };
 // Lock this to the dashboard's real origin once it has one; "*" is fine
@@ -1142,10 +1160,17 @@ function parseNyraTrackConditions(html) {
 // client's link-out card instead. "Good to Soft\r\nWhole course terra
 // spiked since last meeting" -> condition is just the first line; the rest
 // is course-staff commentary this shape has nowhere structured to put.
+// Some courses report a compound reading on that first line too (Newmarket,
+// verified directly: "Good to Firm, Good (in places)" — different parts of
+// the course going differently) — only the primary clause before the first
+// comma is taken as the tile's single condition value, same reasoning as
+// dropping the trailing commentary: there's no structured place to put the
+// qualifier, and a shorter clean BHA term is what the tile's small space
+// and the color-class lookup both expect.
 function parseTurftraxGoingReport(payload, courseLabel) {
   const c = payload.content || {};
   const goingLines = (c["going-report"] || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  const condition = goingLines[0] ? goingLines[0].toUpperCase() : null;
+  const condition = goingLines[0] ? goingLines[0].split(",")[0].trim().toUpperCase() : null;
   if (!condition) return { available: false, provider: "turftrax" };
 
   // "Thursday, 20th August, 2026" -> "2026-08-20"

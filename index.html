@@ -4210,14 +4210,18 @@
 
   // Live official dirt/turf/rail conditions, parsed by the worker from each
   // track's own live conditions feed — NYRA's live scratches page for the
-  // NYRA tracks, TurfTrax's WDV API Stream (the same source York's own
-  // going-report.html embeds) for York — see the worker's job #9 comment.
-  // OFFICIAL_CONDITIONS_PROVIDER is the single source of truth for which
-  // tracks are wired up (same allowlist rule as every other per-track
-  // feature in this file) and which upstream backs each one, so the label
-  // shown alongside a reading ("NYRA confirmed…" vs "TurfTrax confirmed…")
-  // always matches where the data actually came from.
-  const OFFICIAL_CONDITIONS_PROVIDER = { saratoga: "nyra", belmont: "nyra", york: "turftrax" };
+  // NYRA tracks, TurfTrax's WDV API Stream (the same source each UK
+  // track's own going-report page embeds) for York/Ascot/Newmarket/Epsom
+  // Downs — see the worker's job #9 comment. OFFICIAL_CONDITIONS_PROVIDER
+  // is the single source of truth for which tracks are wired up (same
+  // allowlist rule as every other per-track feature in this file) and
+  // which upstream backs each one, so the label shown alongside a reading
+  // ("NYRA confirmed…" vs "TurfTrax confirmed…") always matches where the
+  // data actually came from.
+  const OFFICIAL_CONDITIONS_PROVIDER = {
+    saratoga: "nyra", belmont: "nyra",
+    york: "turftrax", ascot: "turftrax", newmarket: "turftrax", epsomdowns: "turftrax",
+  };
   const OFFICIAL_CONDITIONS_LABEL = { nyra: "NYRA", turftrax: "TurfTrax" };
   const OFFICIAL_CONDITIONS_SUPPORTED = new Set(Object.keys(OFFICIAL_CONDITIONS_PROVIDER));
   // Belmont is a real NYRA track but isn't racing during Saratoga's meet —
@@ -4274,6 +4278,15 @@
   // explicitly-named constant (a genuine fact about the track, not a UI
   // detail) rather than reused, since the two could diverge later.
   const TURF_ONLY_TRACKS = new Set(["ascot", "epsomdowns", "york", "newmarket"]);
+
+  // British Horseracing Authority official turf going-scale vocabulary,
+  // used only to relabel the heuristic estimate's tile TEXT for these four
+  // tracks — see updateTrackConditionTiles()'s turf branch for where this
+  // is applied and why it's display-only. estimateTurfCondition()'s FIRM/
+  // GOOD/SOFT buckets already are valid BHA terms, so only YIELDING (not
+  // BHA vocabulary — that's more of a generic racing term) needs mapping,
+  // to the scale's actual intermediate grade between Good and Soft.
+  const UK_TURF_DISPLAY_LABEL = { YIELDING: "GOOD TO SOFT" };
 
   // Standard Web Mercator slippy-map projection (the same formula behind
   // every OSM-tile-consuming library) — returns fractional tile coordinates,
@@ -7877,9 +7890,26 @@
       turfValueEl.className = "tc-value cond-dark";
       turfSourceEl.hidden = true;
     } else if (lastTurfEstimate){
-      turfValueEl.textContent = lastTurfEstimate.label;
+      // Display-only relabel for UK tracks: FIRM/GOOD/SOFT are already
+      // valid BHA going-scale terms so they pass through unchanged; only
+      // YIELDING isn't BHA vocabulary, so it maps to the scale's actual
+      // intermediate grade. This only changes the tile's TEXT — lastTurf
+      // Estimate.label itself (what the AI summary, Bias Score, and
+      // Historical Log all read) stays exactly as estimateTurfCondition()
+      // returns it, same "heuristic drives the logic, tile display is a
+      // separate concern" split as the dirt tile's own comment above.
+      turfValueEl.textContent = TURF_ONLY_TRACKS.has(trackId)
+        ? (UK_TURF_DISPLAY_LABEL[lastTurfEstimate.label] || lastTurfEstimate.label)
+        : lastTurfEstimate.label;
       turfValueEl.className = "tc-value " + lastTurfEstimate.cls;
-      if (OFFICIAL_CONDITIONS_SUPPORTED.has(trackId)){
+      // NYRA-specific, same reasoning as the dirt branch above: NYRA posts
+      // once a day, so "no official turf yet" briefly means "hasn't posted
+      // today's card yet" there. TurfTrax-provider tracks only publish a
+      // going report near their own raceday — often days or weeks between
+      // meetings — so "no official reading" is their normal default state,
+      // not a same-day gap, and deserves the explicit "Estimated" tag every
+      // time rather than going silent for a stretch that long.
+      if (OFFICIAL_CONDITIONS_PROVIDER[trackId] === "nyra"){
         turfSourceEl.hidden = true; // this track's official source just hasn't posted yet today — unchanged
       } else {
         turfSourceEl.textContent = "Estimated";
