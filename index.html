@@ -2205,7 +2205,7 @@
       <canvas class="wind-flow-canvas" id="windFlowCanvas"></canvas>
 
       <div class="track-condition-group">
-        <div class="track-condition">
+        <div class="track-condition" id="dirtConditionTile">
           <span class="label">Main Track (Dirt)</span>
           <span class="tc-value skel" id="dirtConditionValue">—</span>
           <span class="tc-trend skel" id="dirtTrend">—</span>
@@ -4264,6 +4264,16 @@
   // path when track.photo is null.
   const MAP_TILE_ZOOM_BY_TRACK = { ascot: 15, epsomdowns: 15, york: 15, newmarket: 14 };
   const OSM_TILE_SIZE = 256;
+
+  // British racecourses don't run a dirt surface at all (unlike the US
+  // tracks this app otherwise covers) — the Main Track (Dirt) tile has
+  // nothing real to show for these four, official or estimated, so
+  // renderStaticTrackChrome() hides it entirely rather than displaying a
+  // heuristic guess for a surface that doesn't exist here. Same set as
+  // MAP_TILE_ZOOM_BY_TRACK's four tracks today, but kept as its own
+  // explicitly-named constant (a genuine fact about the track, not a UI
+  // detail) rather than reused, since the two could diverge later.
+  const TURF_ONLY_TRACKS = new Set(["ascot", "epsomdowns", "york", "newmarket"]);
 
   // Standard Web Mercator slippy-map projection (the same formula behind
   // every OSM-tile-consuming library) — returns fractional tile coordinates,
@@ -8418,6 +8428,7 @@
       $("trackMapAttribution").hidden = true;
       $("trackPhotoPlaceholderText").textContent = `${track.name} — aerial photo coming soon`;
     }
+    $("dirtConditionTile").hidden = TURF_ONLY_TRACKS.has(track.id);
     $("nyraFrame").title = `${track.name} scratches, official track conditions, and turf rail settings from NYRA`;
     $("radarFrame").title = `${track.name} radar and storm forecast`;
     $("radarPanelTrackName").textContent = track.shortName;
