@@ -2152,6 +2152,16 @@ function sportingLifeMapRace(raceEntry, date, surface){
       mlOdds: null,
     };
   });
+  // Sporting Life's own `rides` array isn't in post-position order (nor
+  // odds order, nor anything obviously meaningful — verified directly:
+  // draws came back as 1,2,7,6,3,9,8,4,5 for a real race) — every other
+  // source's own entries page already lists horses by post position, so
+  // this sorts to match instead of showing Sporting Life's raw order.
+  horses.sort((a, b) => {
+    const pa = a.postPosition != null ? Number(a.postPosition) : Infinity;
+    const pb = b.postPosition != null ? Number(b.postPosition) : Infinity;
+    return pa - pb;
+  });
   return {
     postTimeIso: rs.time ? `${date}T${rs.time}` : null,
     mtpLabel: null,
