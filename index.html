@@ -3249,6 +3249,10 @@
       // worth shipping. Revisit with a proper source later.
       photo: null, photoAlt: "Aerial view of Ascot Racecourse",
       tideStationId: null, tideRangeFt: null,
+      // Sourced from Sporting Life — see York's own comment on this field
+      // for why (verified directly, exact course-name match against real
+      // Sporting Life meeting data, not assumed just because York works).
+      entriesSource: "sportinglife",
     },
     epsomdowns: {
       id: "epsomdowns", name: "Epsom Downs Racecourse", shortName: "Epsom Downs",
@@ -3268,6 +3272,7 @@
       nyraCode: null, scratchesUrl: null,
       photo: null, photoAlt: "Aerial view of Epsom Downs Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
+      entriesSource: "sportinglife", // see Ascot's own comment on this field
     },
     newmarket: {
       id: "newmarket", name: "Newmarket Racecourse", shortName: "Newmarket",
@@ -3286,6 +3291,7 @@
       nyraCode: null, scratchesUrl: null,
       photo: null, photoAlt: "Aerial view of Newmarket Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
+      entriesSource: "sportinglife", // see Ascot's own comment on this field
     },
     york: {
       id: "york", name: "York Racecourse", shortName: "York",
@@ -3336,6 +3342,10 @@
       // free, no key, public-sector open imagery.
       photo: "assets/track-shatin.png", photoAlt: "Aerial view of Sha Tin Racecourse",
       tideStationId: null, tideRangeFt: null,
+      // see Ascot's own comment on this field. Off-season as of this
+      // writing (2025/26 season ended, 2026/27 opens ~Sept) — reads as "no
+      // races" until then, same as any other dark day.
+      entriesSource: "sportinglife",
     },
     happyvalley: {
       id: "happyvalley", name: "Happy Valley Racecourse", shortName: "Happy Valley",
@@ -3353,6 +3363,7 @@
       // Hong Kong Lands Department imagery API — see Sha Tin's comment above.
       photo: "assets/track-happyvalley.png", photoAlt: "Aerial view of Happy Valley Racecourse",
       tideStationId: null, tideRangeFt: null,
+      entriesSource: "sportinglife", // see Sha Tin's own comment — same season, same off-season caveat
     },
     longchamp: {
       id: "longchamp", name: "Longchamp Racecourse", shortName: "Longchamp",
@@ -3375,6 +3386,10 @@
       // Licence Ouverte (Etalab 2.0) since Jan 2021, 20cm resolution.
       photo: "assets/track-longchamp.png", photoAlt: "Aerial view of Longchamp Racecourse",
       tideStationId: null, tideRangeFt: null,
+      // see Ascot's own comment on this field. Sporting Life's course name
+      // here is "ParisLongchamp" (one word) — verified directly, not the
+      // two-word "Paris Longchamp" the venue's own branding sometimes uses.
+      entriesSource: "sportinglife",
     },
     curragh: {
       id: "curragh", name: "The Curragh", shortName: "Curragh",
@@ -3396,6 +3411,7 @@
       // worth shipping. Revisit with a proper source later.
       photo: null, photoAlt: "Aerial view of The Curragh racecourse",
       tideStationId: null, tideRangeFt: null,
+      entriesSource: "sportinglife", // see Ascot's own comment on this field
     },
     meydan: {
       id: "meydan", name: "Meydan Racecourse", shortName: "Meydan",
@@ -3418,6 +3434,10 @@
       // huge scale keeps the grandstand and track legible at this res.
       photo: "assets/track-meydan.png", photoAlt: "Aerial view of Meydan Racecourse",
       tideStationId: null, tideRangeFt: null,
+      // see Ascot's own comment on this field. Off-season as of this
+      // writing — the Dubai Racing Carnival doesn't open until Nov 6 —
+      // reads as "no races" until then, same as any other dark day.
+      entriesSource: "sportinglife",
     },
   };
 
@@ -3929,8 +3949,15 @@
   // via its date dropdown; Sporting Life's meeting lookup does too, though
   // a date it hasn't published declarations for yet just comes back with
   // no races — see the worker's fetchSportingLifeEntriesDay() comment).
+  // Every Sporting Life track gets this, not just York — several of them
+  // (Ascot, Epsom Downs) race only a handful of days a year, so being able
+  // to jump ahead to the next known meeting matters more here than it does
+  // for a track that races almost daily.
   // null = defer to today in track TZ.
-  const ENTRIES_DATE_PICKER_TRACKS = new Set(["saratoga", "york"]);
+  const ENTRIES_DATE_PICKER_TRACKS = new Set([
+    "saratoga", "york", "ascot", "epsomdowns", "newmarket",
+    "curragh", "longchamp", "shatin", "happyvalley", "meydan",
+  ]);
   let selectedEntriesDate = null;
 
   // Official race results (same worker route regardless of source — see

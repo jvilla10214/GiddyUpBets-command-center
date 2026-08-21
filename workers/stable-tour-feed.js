@@ -69,8 +69,16 @@
 //    problem and fix as jobs #2/#4. One route, dispatched by
 //    ENTRIES_SOURCE_BY_TRACK to a per-track parser — fetchNyraEntriesDay()
 //    for NYRA tracks (Saratoga), fetchDmtcEntriesDay() for Del Mar,
-//    fetchMonmouthEntriesDay() for Monmouth — since each track's site has
-//    genuinely different markup. All three require the requested `date` to
+//    fetchMonmouthEntriesDay() for Monmouth, fetchSportingLifeEntriesDay()
+//    (see its own comment below) for York plus 8 more international tracks
+//    added at once (Ascot, Epsom Downs, Newmarket, Curragh, Longchamp, Sha
+//    Tin, Happy Valley, Meydan) — one Sporting Life meeting-lookup pipeline
+//    already covers all of them, verified per track (exact course-name
+//    string, not just a guessed match) rather than assumed from York
+//    working. Three of the eight (Sha Tin, Happy Valley, Meydan) are
+//    off-season as of this writing and will just read "no races" until
+//    their meets resume — same graceful behavior as any other dark day,
+//    not a broken integration. All sources require the requested `date` to
 //    match what the source currently has published, returning no races
 //    otherwise — a non-race day reads as "no races today", never a preview
 //    of some other day's card.
@@ -1381,7 +1389,12 @@ const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
 // either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
 // here only once its source has actually been fetched and its markup
 // verified (same rule as every other scrape in this file).
-const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth", york: "sportinglife" };
+const ENTRIES_SOURCE_BY_TRACK = {
+  saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth",
+  york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
+  curragh: "sportinglife", longchamp: "sportinglife",
+  shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
+};
 
 // Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
 // map (not reused from ENTRIES_SOURCE_BY_TRACK) because a track can have
@@ -2066,8 +2079,23 @@ async function fetchMonmouthEntriesDay(date) {
 // case: the requested date is compared against the date actually found on
 // the matching meeting, and a mismatch is treated as "not published yet"
 // (empty races), never as that day's real card under the wrong label.
-const SPORTINGLIFE_COURSE_NAME_BY_TRACK = { york: "York" };
-const SPORTINGLIFE_COURSE_SLUG_BY_TRACK = { york: "york" };
+// Course name is the load-bearing half of this pair — it's matched
+// verbatim against Sporting Life's own `course.name` field, so it has to
+// be exact (verified directly per track, not guessed: "ParisLongchamp" is
+// one word/no space, "Epsom Downs"/"Sha Tin"/"Happy Valley" do have
+// spaces). Slug is decorative (see the comment above) so these are just
+// reasonable lowercase-hyphenated guesses, unverified and low-risk if
+// wrong.
+const SPORTINGLIFE_COURSE_NAME_BY_TRACK = {
+  york: "York", ascot: "Ascot", epsomdowns: "Epsom Downs", newmarket: "Newmarket",
+  curragh: "Curragh", longchamp: "ParisLongchamp",
+  shatin: "Sha Tin", happyvalley: "Happy Valley", meydan: "Meydan",
+};
+const SPORTINGLIFE_COURSE_SLUG_BY_TRACK = {
+  york: "york", ascot: "ascot", epsomdowns: "epsom-downs", newmarket: "newmarket",
+  curragh: "curragh", longchamp: "paris-longchamp",
+  shatin: "sha-tin", happyvalley: "happy-valley", meydan: "meydan",
+};
 
 async function sportingLifeFetchJson(path) {
   const res = await fetch(`https://www.sportinglife.com${path}`, {
