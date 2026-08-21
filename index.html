@@ -6999,10 +6999,16 @@
   // Step 7's fallback: beyond the ~60-minute Pirate Weather window, look at
   // the site's own Open-Meteo minutely_15 data (already fetched every
   // refresh for the forecast scrubber) for the next 15-min interval with
-  // measurable precipitation. No probability field exists at this
-  // resolution, so this can only say "rain looks possible around <time>",
-  // never classify intensity — deliberately vaguer, to match how much less
-  // this data source actually knows at that range.
+  // measurable precipitation, THROUGH THE REST OF TODAY only — this hint
+  // sits right above the "Estimated total today" line and is framed as
+  // "beyond that" (i.e. later this hour/day), so it must stop at midnight.
+  // Without that bound this found real hits days out (once literally caught
+  // a Sunday-afternoon shower two days away) and formatPostTimeLabel()
+  // — which only ever prints a bare time-of-day, no date — displayed it as
+  // if it were happening any minute now. No probability field exists at
+  // this resolution, so this can only say "rain looks possible around
+  // <time>", never classify intensity — deliberately vaguer, to match how
+  // much less this data source actually knows at that range.
   //
   // Threshold is 0.0125in — computeTodayRainOutlook()'s own 0.05in/hr
   // "meaningful rain" bar, divided down to this function's 15-min
@@ -7023,10 +7029,12 @@
     // the point it's actually already happened. String-compare against
     // nowInTrackTZIso() instead, same fix as pickDefaultEntriesRace() uses.
     const nowIso = nowInTrackTZIso();
+    const todayPrefix = nowIso.slice(0, 10); // "YYYY-MM-DD", track-local
     const startIdx = m.time.findIndex(t => t > nowIso);
     if (startIdx < 0) return null;
     const beyondIdx = startIdx + 4; // ~60 minutes further out, at 15-min spacing
     for (let i = beyondIdx; i < m.time.length; i++){
+      if (!m.time[i].startsWith(todayPrefix)) break; // stop at midnight — see comment above
       if ((m.precipitation?.[i] ?? 0) >= RAIN_THRESHOLD_15MIN){
         return { atLabel: formatPostTimeLabel(m.time[i]) };
       }
