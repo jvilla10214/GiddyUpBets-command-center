@@ -185,12 +185,48 @@
 //    report system covers other UK tracks too but only this one has been
 //    fetched and verified.
 //
+// 13. Race results (GET /results?track=<id>&date=YYYY-MM-DD) — official
+//    order of finish + payouts once a race has gone final. Was Saratoga-only
+//    (NYRA's rdl/race/?limit=results fragment, same endpoint shape as job
+//    #6's entries) until this job's own doc entry got added; now also
+//    covers Del Mar via fetchDmtcResultsDay(), dispatched by
+//    RESULTS_SOURCE_BY_TRACK (a separate map from job #6's
+//    ENTRIES_SOURCE_BY_TRACK — a track's entries and results sources aren't
+//    guaranteed to land in the same commit). DMTC's results page takes the
+//    date directly in its URL (/racing/results/YYYY-MM-DD) rather than
+//    always reflecting "whichever day is current" the way its entries page
+//    does, so this fetches the exact requested date. isFinal is the
+//    table's-presence-is-the-signal rule from parseNyraResultsFragment(),
+//    not a guess off scheduled post time — DMTC's own page only renders a
+//    race's panel once it has results to show, same effect. DMTC only
+//    tables the top 3 finishers (win/place/show); the rest of the field
+//    comes back as a flat alsoRan name list, which NYRA's shape has no
+//    equivalent for — carried as its own field rather than forced into fake
+//    finishOrder rows. Read-only, no storage, short cache (a race can go
+//    final mid-poll-interval).
+//
+// 14. Del Mar changes/scratches notes (GET /changes?track=delmar&date=
+//    YYYY-MM-DD) — DMTC's own page for Equibase's "Changes & Scratches"
+//    feed: free-text per-race notes (temp rail distance, gelding reports,
+//    equipment/jockey changes, and occasionally scratches, all in one
+//    unstructured sentence with no consistent sub-format) — genuinely
+//    different from job #6's entries scratches (which DMTC's entries page
+//    already surfaces structurally, "Name - Reason", with a real reason
+//    each time) or job #9's dirt/turf/rail conditions. This job doesn't try
+//    to classify or split each race's note further, just returns whatever
+//    text DMTC published for that race — the client displays it as-is.
+//    No date param on DMTC's side (same "always shows today's currently-
+//    open card" rule as job #6's DMTC entries source), so a request for any
+//    other date reads back empty. Read-only, no storage. Del Mar only —
+//    CHANGES_SOURCE_BY_TRACK, same verify-before-adding rule as every other
+//    track map in this file.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
 // for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, #10, #11,
-// and #12 (fetch-and-parse only, no storage) work without it. Job #8
-// additionally requires a PIRATE_WEATHER_API_KEY secret (Worker settings ->
-// Variables and Secrets -> Add, type "Secret") — get a free key at
+// #12, #13, and #14 (fetch-and-parse only, no storage) work without it. Job
+// #8 additionally requires a PIRATE_WEATHER_API_KEY secret (Worker settings
+// -> Variables and Secrets -> Add, type "Secret") — get a free key at
 // pirateweather.net.
 // -----------------------------------------------------------------------
 
@@ -652,17 +688,32 @@ async function handleRequest(request, env) {
     if (url.pathname === "/results" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const date = url.searchParams.get("date") || "";
-      if (!NYRA_ENTRIES_BASE[track]) return json({ error: "Not supported for this track" }, 400);
+      const resultsSource = RESULTS_SOURCE_BY_TRACK[track];
+      if (!resultsSource) return json({ error: "Not supported for this track" }, 400);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
       let result;
       try {
-        result = await fetchNyraResultsDay(track, date);
+        result = resultsSource === "dmtc" ? await fetchDmtcResultsDay(date) : await fetchNyraResultsDay(track, date);
       } catch (err) {
         return json({ error: `Results fetch failed: ${err.message}` }, 502);
       }
       // Short cache — a race can go from not-yet-final to final at any
       // moment during a card, unlike entries/odds which only drift slowly.
       return json(result, 200, { "Cache-Control": "public, max-age=90" });
+    }
+
+    if (url.pathname === "/changes" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "";
+      const date = url.searchParams.get("date") || "";
+      if (!CHANGES_SOURCE_BY_TRACK[track]) return json({ error: "Not supported for this track" }, 400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
+      let result;
+      try {
+        result = await fetchDmtcChangesDay(date);
+      } catch (err) {
+        return json({ error: `Changes fetch failed: ${err.message}` }, 502);
+      }
+      return json(result, 200, { "Cache-Control": "public, max-age=120" });
     }
 
     if (url.pathname === "/pp-stats" && request.method === "GET") {
@@ -1226,6 +1277,17 @@ const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
 // verified (same rule as every other scrape in this file).
 const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth", york: "sportinglife" };
 
+// Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
+// map (not reused from ENTRIES_SOURCE_BY_TRACK) because a track can have
+// entries wired up before its results page has actually been verified, or
+// vice versa; the two shouldn't silently move in lockstep.
+const RESULTS_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc" };
+
+// Same idea again, for the /changes route (DMTC's free-text race-notes
+// feed — see parseDmtcChanges()'s own file-level comment). No NYRA
+// equivalent exists yet, so this only has Del Mar for now.
+const CHANGES_SOURCE_BY_TRACK = { delmar: "dmtc" };
+
 // Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
 // matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
 function maxRaceNumberFromNav(html) {
@@ -1528,6 +1590,191 @@ async function fetchDmtcEntriesDay(date) {
   if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
   const html = await res.text();
   return parseDmtcEntries(html, date);
+}
+
+// ---------- Del Mar (DMTC) Results parser ----------
+// Source verified directly: unlike the entries page, dmtc.com/racing/results
+// DOES take a date in the URL (/racing/results/YYYY-MM-DD) and serves that
+// exact day rather than always whichever card is currently open, so this
+// fetches the specific requested date instead of the "fetch once, verify,
+// discard if wrong day" pattern parseDmtcEntries() needs. A day with no
+// results yet (race not run, or a dark day) renders no per-race panels at
+// all — same "table's presence IS the isFinal signal" rule
+// parseNyraResultsFragment() uses, not a guess based on scheduled post time.
+// Each race panel is plain, unique-enough markup (<div title="Race N
+// Results">) to split on directly, same as the entries page's own
+// per-race chunks. Only the top 3 finishers get a table row (DMTC's own
+// UI choice) — the rest of the field is a flat "ALSO RAN" name list with no
+// per-horse finish position, and NYRA's shape has no equivalent field for
+// that, so it's carried as its own alsoRan array rather than forced into
+// fake finishOrder entries. SCRATCHED here (unlike the entries page's own
+// "Name - Reason" format) is just a bare name list — this is the SAME
+// physical scratch as what the entries page already shows inline via SCR
+// tags, just DMTC's results page repeating it without a reason, so it's
+// carried through as-is rather than being reconciled against entries data.
+const DMTC_RESULTS_URL_BASE = "https://www.dmtc.com/racing/results";
+
+function dmtcResultsCardDate(html) {
+  // <meta name="description" content="Del Mar race results for Thursday,
+  // August 20th, 2026. ...">
+  const m = html.match(/race results for (\w+),\s*(\w+)\s+(\d{1,2})\w{0,2},\s*(\d{4})/i);
+  if (!m) return null;
+  const month = NYRA_MONTHS[m[2].toLowerCase()];
+  if (!month) return null;
+  return `${m[4]}-${String(month).padStart(2, "0")}-${String(parseInt(m[3], 10)).padStart(2, "0")}`;
+}
+
+function parseDmtcResultsRaceChunk(chunk) {
+  const headerMatch = chunk.match(/<div title="Race (\d+) Results">/);
+  if (!headerMatch) return null;
+  const raceNumber = Number(headerMatch[1]);
+
+  const condMatch = chunk.match(/<div class="bold text-muted-dark">([\s\S]*?)<\/div>/);
+  let surface = null, distanceLabel = null, raceType = null, purse = null;
+  if (condMatch) {
+    const flat = decodeEntities(condMatch[1]).replace(/\s+/g, " ").trim();
+    const parts = flat.split(/\s\/\s/).map((s) => s.trim());
+    if (parts[0]) {
+      const sd = parts[0].split(",").map((s) => s.trim());
+      surface = sd[0] || null;
+      distanceLabel = sd.slice(1).join(", ") || null;
+    }
+    raceType = parts[1] || null;
+    const purseMatch = (parts[2] || "").match(/PURSE:\s*(.+)/i);
+    purse = purseMatch ? purseMatch[1].trim() : null;
+  }
+
+  const finishOrder = [];
+  // Post position captured directly off the silk div's own class (e.g.
+  // "silk7"), not its padded text content — group 1 below.
+  const rowRe = /<div class="silk silk silk(\d+)">\s*\d+\s*<\/div>[\s\S]*?<div class="bigger"><strong>([^<]+)<\/strong><\/div>[\s\S]*?<td class="hidden-xs vertical-center">\s*([^<]*?)\s*<\/td>\s*<td class="hidden-xs vertical-center">\s*([^<]*?)\s*<\/td>\s*<td class="vertical-center text-right">\s*<div class="bigger">([^<]*)<\/div>\s*<\/td>\s*<td class="vertical-center text-right">\s*<div class="bigger">([^<]*)<\/div>\s*<\/td>\s*<td class="vertical-center text-right">\s*<div class="bigger">([^<]*)<\/div>\s*<\/td>/g;
+  let m;
+  let position = 0;
+  while ((m = rowRe.exec(chunk))) {
+    position += 1;
+    const [, postPosition, nameRaw, jockeyRaw, trainerRaw, winRaw, placeRaw, showRaw] = m;
+    finishOrder.push({
+      finishPosition: position,
+      postPosition: postPosition || null,
+      horseName: decodeEntities(nameRaw).trim(),
+      jockey: decodeEntities(jockeyRaw).trim() || null,
+      trainer: decodeEntities(trainerRaw).trim() || null,
+      winPayout: decodeEntities(winRaw).trim() || null,
+      placePayout: decodeEntities(placeRaw).trim() || null,
+      showPayout: decodeEntities(showRaw).trim() || null,
+    });
+  }
+
+  const alsoRan = [];
+  const alsoRanMatch = chunk.match(/ALSO RAN:\s*<\/strong>&nbsp;\s*([\s\S]*?)\s*<\/div>/);
+  if (alsoRanMatch) {
+    decodeEntities(alsoRanMatch[1]).replace(/\s+/g, " ").trim().split(",").forEach((s) => {
+      const name = s.trim();
+      if (name) alsoRan.push(name);
+    });
+  }
+
+  const scratched = [];
+  const scrMatch = chunk.match(/SCRATCHED:\s*<\/strong>&nbsp;\s*([\s\S]*?)\s*<\/div>/);
+  if (scrMatch) {
+    decodeEntities(scrMatch[1]).replace(/\s+/g, " ").trim().split(",").forEach((s) => {
+      const name = s.trim();
+      if (name) scratched.push(name);
+    });
+  }
+
+  const payouts = [];
+  const payoffsMatch = chunk.match(/PAYOFFS:\s*<\/strong>\s*([\s\S]*?)\s*<\/div>/);
+  if (payoffsMatch) {
+    const text = decodeEntities(payoffsMatch[1]).replace(/\s+/g, " ").trim();
+    const payoutRe = /\$([\d.]+)\s+([A-Za-z][A-Za-z ]*?)\s+paid\s+(\$[\d,.]+)\s+\(([^)]+)\)/g;
+    let pom;
+    while ((pom = payoutRe.exec(text))) {
+      const [, wagerAmount, wagerTypeRaw, payout, comboRaw] = pom;
+      payouts.push({
+        wagerAmount: `$${wagerAmount}`,
+        wagerType: wagerTypeRaw.trim(),
+        winningCombo: comboRaw.trim(),
+        payout,
+      });
+    }
+  }
+
+  return {
+    raceNumber, surface, distanceLabel, raceType, purse,
+    isFinal: finishOrder.length > 0, finishOrder, alsoRan, scratched, payouts,
+  };
+}
+
+function parseDmtcResults(html, date) {
+  const cardDate = dmtcResultsCardDate(html);
+  if (!cardDate || cardDate !== date) return { date, races: [] }; // wrong day (dark, or DMTC redirected) — nothing to show
+  const chunks = html.split(/(?=<div title="Race \d+ Results">)/).filter((c) => /^<div title="Race \d+ Results">/.test(c));
+  const races = chunks.map(parseDmtcResultsRaceChunk).filter(Boolean);
+  races.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date, races };
+}
+
+async function fetchDmtcResultsDay(date) {
+  const res = await fetch(`${DMTC_RESULTS_URL_BASE}/${date}`, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 90, cacheEverything: true }, // short — a race can go final mid-poll-interval, same as NYRA results
+  });
+  if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
+  const html = await res.text();
+  return parseDmtcResults(html, date);
+}
+
+// ---------- Del Mar (DMTC) Changes/Scratches parser ----------
+// Source verified directly: dmtc.com/racing/changes is DMTC's own page for
+// Equibase's "Changes & Scratches" feed — plain free-text notes per race
+// (temp rail distance, gelding reports, equipment/jockey changes, and
+// occasionally scratches) rather than the structured entries/results
+// tables above. No date param, same "always shows today's card" rule and
+// caveat as the entries page (see DMTC_ENTRIES_URL's own note). Each race's
+// note is carried as one opaque string — this page mixes several unrelated
+// note types in the same freeform sentence with no consistent sub-format to
+// parse further, so this deliberately doesn't try to classify or split them;
+// the client just displays whatever text DMTC published for that race.
+const DMTC_CHANGES_URL = "https://www.dmtc.com/racing/changes";
+
+function dmtcChangesCardDate(html) {
+  // <meta name="description" content="Late jockey changes and scratches at
+  // Del Mar for Friday, August 21st, 2026.">
+  const m = html.match(/for (\w+),\s*(\w+)\s+(\d{1,2})\w{0,2},\s*(\d{4})/i);
+  if (!m) return null;
+  const month = NYRA_MONTHS[m[2].toLowerCase()];
+  if (!month) return null;
+  return `${m[4]}-${String(month).padStart(2, "0")}-${String(parseInt(m[3], 10)).padStart(2, "0")}`;
+}
+
+function parseDmtcChanges(html, date) {
+  const cardDate = dmtcChangesCardDate(html);
+  if (!cardDate || cardDate !== date) return { date, postedLabel: null, notes: [] };
+
+  const postedMatch = html.match(/posted at ([^<]+)</);
+  const postedLabel = postedMatch ? decodeEntities(postedMatch[1]).trim() : null;
+
+  const notes = [];
+  const noteRe = /<h3 class="panel-title">Race (\d+)<\/h3><\/div>\s*<div class="panel-body">([\s\S]*?)<\/div>/g;
+  let m;
+  while ((m = noteRe.exec(html))) {
+    const raceNumber = Number(m[1]);
+    const note = decodeEntities(m[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+    if (note) notes.push({ raceNumber, note });
+  }
+  notes.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date, postedLabel, notes };
+}
+
+async function fetchDmtcChangesDay(date) {
+  const res = await fetch(DMTC_CHANGES_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 120, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
+  const html = await res.text();
+  return parseDmtcChanges(html, date);
 }
 
 // ---------- DMTC Post Position stats parser (job #10) ----------

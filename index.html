@@ -1565,6 +1565,15 @@
   }
   .entries-weather-label{ color: var(--sky); }
   .entries-weather-unknown{ font-style: italic; }
+  .entries-changes-strip{
+    background: rgba(240,180,41,0.08);
+    border: 1px solid rgba(240,180,41,0.3);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    font-size: 13px;
+  }
+  .entries-changes-label{ color: var(--tote-amber); margin-right: 4px; }
   .entries-race-card{ margin-bottom: 22px; }
   .entries-race-card:last-child{ margin-bottom: 0; }
   .entries-results-card{
@@ -1597,6 +1606,7 @@
     color: var(--parchment);
   }
   .entries-results-table th, .entries-payouts-table th{ opacity: 0.6; font-weight: 400; }
+  .entries-results-also-ran{ margin-top: 10px; font-size: 12.5px; opacity: 0.75; }
   .entries-payouts-table{ margin-top: 10px; }
   .entries-race-header{
     display: flex;
@@ -2958,7 +2968,7 @@
       nyraCode: "SAR", scratchesUrl: null,
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
       tideStationId: null, tideRangeFt: null,
-      entriesSource: "nyra",
+      entriesSource: "nyra", resultsSource: "nyra",
     },
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
@@ -3022,7 +3032,7 @@
       // from NOAA's published datums) — used to turn a raw water-level
       // reading into a 0-1 "how full is the tidal range" fraction.
       tideStationId: "9410230", tideRangeFt: 5.32,
-      entriesSource: "dmtc",
+      entriesSource: "dmtc", resultsSource: "dmtc", changesSource: "dmtc",
     },
     belmont: {
       id: "belmont", name: "Belmont Park", shortName: "Belmont",
@@ -3909,12 +3919,12 @@
   const ENTRIES_DATE_PICKER_TRACKS = new Set(["saratoga", "york"]);
   let selectedEntriesDate = null;
 
-  // Official NYRA Results (same rdl/race/ endpoint as entries, limit=
-  // results) — Saratoga only for the same reason as everywhere else in
-  // this file: the only NYRA results URL actually verified end-to-end.
-  // Belmont should work identically once it's racing and gets added here.
-  const NYRA_RESULTS_SUPPORTED = new Set(["saratoga"]);
-  let lastResultsByRace = {}; // { [raceNumber]: {isFinal, finishOrder, payouts} } for lastEntriesDate — reset on track/date switch
+  // Official race results (same worker route regardless of source — see
+  // the worker's job #13 comment for how it dispatches NYRA vs. DMTC).
+  // Gated by activeTrack.resultsSource, same pattern as entriesSource:
+  // only tracks with a verified results source are wired up here.
+  const RESULTS_SOURCE_LABEL = { nyra: "Official — NYRA Results", dmtc: "Official — DMTC/Equibase Results" };
+  let lastResultsByRace = {}; // { [raceNumber]: {isFinal, finishOrder, payouts, alsoRan?, scratched?} } for lastEntriesDate — reset on track/date switch
   async function resultsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/results?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
@@ -3925,7 +3935,7 @@
   // refresh — a race can go official at any point during a card, so this
   // needs its own timer rather than only checking on track/date switch.
   async function refreshRaceResults(){
-    if (!NYRA_RESULTS_SUPPORTED.has(activeTrack.id) || !lastEntriesDate) return;
+    if (!activeTrack.resultsSource || !lastEntriesDate) return;
     const trackId = activeTrack.id;
     const date = lastEntriesDate;
     let results;
@@ -4623,8 +4633,38 @@
     if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
     if (entriesTag) entriesTag.textContent = `LIVE · ${ENTRIES_SOURCE_LABEL[source] ?? source.toUpperCase()}`;
     lastResultsByRace = {}; // new date's card — any cached results were for whatever date was showing before
+    lastChangesByRace = {};
     renderEntriesPage(date, races);
     refreshRaceResults();
+    refreshRaceChanges();
+  }
+
+  // Per-race free-text notes (temp rail distance, gelding reports,
+  // equipment/jockey changes, occasionally scratches) from the worker's
+  // job #14 — see parseDmtcChanges()'s own comment for why this is one
+  // opaque string per race rather than structured fields. Gated by
+  // activeTrack.changesSource, same pattern as entriesSource/resultsSource.
+  // Polled alongside results on the same live-refresh cadence, since DMTC
+  // posts these "several times per hour" per its own page copy.
+  let lastChangesByRace = {}; // { [raceNumber]: note } for lastEntriesDate — reset on track/date switch
+  async function changesApiGet(track, date){
+    const res = await fetch(stableApiUrl(`/changes?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    return Array.isArray(data.notes) ? data.notes : [];
+  }
+  async function refreshRaceChanges(){
+    if (!activeTrack.changesSource || !lastEntriesDate) return;
+    const trackId = activeTrack.id;
+    const date = lastEntriesDate;
+    let notes;
+    try{ notes = await changesApiGet(trackId, date); }
+    catch(err){ console.error("Race changes fetch failed", err); return; }
+    if (activeTrack.id !== trackId || lastEntriesDate !== date) return; // stale — switched away while this was in flight
+    const byRace = {};
+    notes.forEach(n => { byRace[n.raceNumber] = n.note; });
+    lastChangesByRace = byRace;
+    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
   }
 
   // Small window of upcoming dates a user can jump to, mirroring NYRA's own
@@ -4810,6 +4850,15 @@
       [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
     ].filter(Boolean);
 
+    // Free-text race note from the worker's job #14 (temp rail distance,
+    // gelding reports, equipment/jockey changes) — see refreshRaceChanges()
+    // above. Only ever present for tracks with a changesSource; absent
+    // races (or tracks with no source) just show nothing extra here.
+    const changeNote = lastChangesByRace[race.raceNumber];
+    const changesHtml = changeNote
+      ? `<div class="entries-changes-strip"><span class="entries-changes-label">Changes:</span>${escapeHtml(changeNote)}</div>`
+      : "";
+
     const weather = weatherAtPostTime(race.postTimeIso);
     const timeLabel = formatPostTimeLabel(race.postTimeIso);
     let weatherHtml;
@@ -4842,14 +4891,18 @@
       </tr>
     `).join("");
 
-    // Official NYRA Results — shown above the entries/odds table, never
+    // Official Results — shown above the entries/odds table, never
     // replacing it, since morning-line/final odds stay useful for review
-    // after the fact. Only appears once NYRA itself has posted a full order
-    // of finish (see refreshRaceResults()/parseNyraResultsFragment on the
-    // worker) — upcoming races render nothing extra here at all.
+    // after the fact. Only appears once the source itself has posted a full
+    // order of finish (see refreshRaceResults() / the worker's job #13) —
+    // upcoming races render nothing extra here at all. Label text is
+    // per-source: DMTC's own results page is sourced from Equibase, not
+    // DMTC's own scoring, so it's credited as such rather than implying
+    // Del Mar runs its own results desk the way NYRA does.
     const result = lastResultsByRace[race.raceNumber];
     let resultsHtml = "";
     if (result?.isFinal){
+      const resultsSourceLabel = RESULTS_SOURCE_LABEL[activeTrack.resultsSource] || "Official Results";
       const finishRows = result.finishOrder.map(f => `
         <tr>
           <td>${escapeHtml(String(f.finishPosition))}</td>
@@ -4867,10 +4920,17 @@
           <td>${escapeHtml(p.payout)}</td>
         </tr>
       `).join("");
+      // "Also ran" — DMTC's results source doesn't rank the field beyond
+      // 3rd (see the worker's parseDmtcResultsRaceChunk() comment), so this
+      // is the only record of who else was in the race; NYRA's source has
+      // no equivalent field, so this stays empty/hidden there.
+      const alsoRanHtml = result.alsoRan?.length
+        ? `<div class="entries-results-also-ran"><strong>Also ran:</strong> ${escapeHtml(result.alsoRan.join(", "))}</div>`
+        : "";
       resultsHtml = `
         <div class="entries-results-card">
           <div class="entries-results-header">
-            <span class="tag entries-results-tag">Official — NYRA Results</span>
+            <span class="tag entries-results-tag">${escapeHtml(resultsSourceLabel)}</span>
             <span class="entries-results-title">Race ${race.raceNumber} — Final</span>
           </div>
           <div class="log-table-wrap">
@@ -4879,6 +4939,7 @@
               <tbody>${finishRows}</tbody>
             </table>
           </div>
+          ${alsoRanHtml}
           ${result.payouts.length ? `
             <div class="log-table-wrap">
               <table class="log-table entries-payouts-table">
@@ -4900,6 +4961,7 @@
           ${metaBits.map(bit => `<span class="entries-race-meta">${escapeHtml(bit)}</span>`).join("")}
           ${race.mtpLabel ? `<span class="entries-race-mtp">${escapeHtml(race.mtpLabel)}</span>` : ""}
         </div>
+        ${changesHtml}
         ${weatherHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
@@ -8887,6 +8949,7 @@
     selectedEntriesRace = null;
     selectedEntriesDate = null; // back to today's card, not whatever date was picked for the old track
     lastResultsByRace = {};
+    lastChangesByRace = {};
     $("entriesBody").innerHTML = `
       <div class="skel-block skel-line" style="width:220px;height:26px;margin-bottom:14px;"></div>
       <div class="skel-block skel-row"></div>
@@ -9261,6 +9324,7 @@
   setInterval(refreshNyraFrame, REFRESH_MS);
   setInterval(refreshOfficialTrackConditions, TRACK_CONDITIONS_REFRESH_MS);
   setInterval(refreshRaceResults, REFRESH_MS); // same cadence as the main live refresh — a race can go final any time during a card
+  setInterval(refreshRaceChanges, REFRESH_MS); // DMTC posts these "several times per hour" per its own page copy — same cadence is plenty
   setInterval(refreshPpStats, PP_STATS_REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
