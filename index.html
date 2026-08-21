@@ -7016,8 +7016,14 @@
     const RAIN_THRESHOLD_15MIN = 0.0125; // see comment above
     const m = lastWeatherData?.minutely_15;
     if (!m?.time?.length) return null;
-    const nowMs = Date.now();
-    const startIdx = m.time.findIndex(t => new Date(t).getTime() > nowMs);
+    // m.time entries are naive track-local wall time (no offset) — comparing
+    // via `new Date(t).getTime() > Date.now()` would parse them in the
+    // BROWSER's zone instead, drifting whenever that differs from the
+    // track's, which could keep a slot flagged as "still ahead" well past
+    // the point it's actually already happened. String-compare against
+    // nowInTrackTZIso() instead, same fix as pickDefaultEntriesRace() uses.
+    const nowIso = nowInTrackTZIso();
+    const startIdx = m.time.findIndex(t => t > nowIso);
     if (startIdx < 0) return null;
     const beyondIdx = startIdx + 4; // ~60 minutes further out, at 15-min spacing
     for (let i = beyondIdx; i < m.time.length; i++){
@@ -7935,8 +7941,12 @@
 
     const m = data.minutely_15;
     if (m?.time?.length){
-      const nowMs = Date.now();
-      let startIdx = m.time.findIndex(t => new Date(t).getTime() > nowMs);
+      // See analyzeLongerRangeOutlook()'s comment: m.time is naive
+      // track-local wall time, so this must be a string compare against
+      // nowInTrackTZIso(), not a Date parse against Date.now() (which reads
+      // the timestamp in the browser's zone instead of the track's).
+      const nowIso = nowInTrackTZIso();
+      let startIdx = m.time.findIndex(t => t > nowIso);
       if (startIdx < 0) startIdx = 0;
       for (let i = 0; i < FORECAST_STEP_COUNT; i++){
         const pos = startIdx + i * 2;
