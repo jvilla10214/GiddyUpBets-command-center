@@ -7003,7 +7003,17 @@
   // resolution, so this can only say "rain looks possible around <time>",
   // never classify intensity — deliberately vaguer, to match how much less
   // this data source actually knows at that range.
+  //
+  // Threshold is 0.0125in — computeTodayRainOutlook()'s own 0.05in/hr
+  // "meaningful rain" bar, divided down to this function's 15-min
+  // resolution. Was a flat 0.01in before, which sits BELOW that hourly bar
+  // once scaled up (0.01in × 4 = 0.04in/hr) and could flag amounts this
+  // app's own hourly-based "Estimated total today" line correctly calls too
+  // small to matter, producing two contradicting-looking lines in the same
+  // panel from what was actually just a threshold mismatch, not a real
+  // model disagreement.
   function analyzeLongerRangeOutlook(){
+    const RAIN_THRESHOLD_15MIN = 0.0125; // see comment above
     const m = lastWeatherData?.minutely_15;
     if (!m?.time?.length) return null;
     const nowMs = Date.now();
@@ -7011,7 +7021,7 @@
     if (startIdx < 0) return null;
     const beyondIdx = startIdx + 4; // ~60 minutes further out, at 15-min spacing
     for (let i = beyondIdx; i < m.time.length; i++){
-      if ((m.precipitation?.[i] ?? 0) >= 0.01){
+      if ((m.precipitation?.[i] ?? 0) >= RAIN_THRESHOLD_15MIN){
         return { atLabel: formatPostTimeLabel(m.time[i]) };
       }
     }
@@ -7026,7 +7036,7 @@
   // rather than just "total", same "don't overclaim" framing as this
   // panel's own info-disclosure text and the "not a guarantee" language on
   // the forward outlook above it.
-  function describeTodayRainOutlook(outlook){
+  function describeTodayRainOutlook(outlook, longer){
     const totalStr = `Estimated total today ~${outlook.total.toFixed(2)} in`;
     if (outlook.startTime){
       return outlook.alreadyStarted
@@ -7035,7 +7045,15 @@
     }
     // No hour crosses the "meaningful rain" threshold, but trace amounts
     // (drizzle under 0.05in/hr) can still add up to a nonzero total.
-    return outlook.total > 0 ? `${totalStr} — light/trace rain only` : `${totalStr} — no rain expected`;
+    if (outlook.total > 0) return `${totalStr} — light/trace rain only`;
+    // The hourly model (this line) sees nothing crossing the "meaningful
+    // rain" bar for the rest of today, but the finer-grained minutely_15
+    // hint above (if shown) is a real, lower-confidence read on the same
+    // window from a different model — echo it instead of flatly
+    // contradicting it with "no rain expected".
+    return longer
+      ? `${totalStr} — hourly forecast is dry, but see the longer-range hint above`
+      : `${totalStr} — no rain expected`;
   }
 
   // Cached across this panel's two independent render triggers (its own
@@ -7059,10 +7077,14 @@
   function renderRainNowcastPanel(){
     const body = $("rainNowcastBody");
     const result = lastRainNowcastResult;
+    // Computed here (not inside the branch below) so the "Estimated total
+    // today" line built further down can reference it too — otherwise that
+    // line has no way to know a longer-range hint was already shown above
+    // it, and can end up flatly contradicting it (see describeTodayRainOutlook).
+    const longer = result.detected ? null : analyzeLongerRangeOutlook();
 
     let forwardHtml;
     if (!result.detected){
-      const longer = analyzeLongerRangeOutlook();
       forwardHtml = `
         <div class="rain-nowcast-headline">No rain expected in the next hour</div>
         ${longer
@@ -7092,7 +7114,7 @@
       : `<div class="rain-nowcast-detail-dim">Not currently raining</div>`;
 
     const totalHtml = todayRainOutlookData
-      ? `<div class="rain-nowcast-detail-dim">${escapeHtml(describeTodayRainOutlook(todayRainOutlookData))}</div>`
+      ? `<div class="rain-nowcast-detail-dim">${escapeHtml(describeTodayRainOutlook(todayRainOutlookData, longer))}</div>`
       : "";
 
     body.innerHTML = `
