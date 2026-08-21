@@ -641,6 +641,7 @@ async function handleRequest(request, env) {
       try {
         if (source === "nyra") result = await fetchNyraEntriesDay(track, date);
         else if (source === "dmtc") result = await fetchDmtcEntriesDay(date);
+        else if (source === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
         else result = await fetchMonmouthEntriesDay(date);
       } catch (err) {
         return json({ error: `Entries fetch failed: ${err.message}` }, 502);
@@ -1223,7 +1224,7 @@ const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
 // either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
 // here only once its source has actually been fetched and its markup
 // verified (same rule as every other scrape in this file).
-const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth" };
+const ENTRIES_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth", york: "sportinglife" };
 
 // Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
 // matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
@@ -1681,6 +1682,132 @@ async function fetchMonmouthEntriesDay(date) {
   if (!res.ok) throw new Error(`Monmouth returned HTTP ${res.status}`);
   const html = await res.text();
   return parseMonmouthEntries(html, date);
+}
+
+// ---------- Sporting Life entries parser (York) ----------
+// Verified directly: Sporting Life's racecard pages are server-rendered
+// Next.js pages — the full page's data (race times, purses, every runner's
+// name/jockey/trainer/weight/odds) ships as a single JSON blob in a
+// <script id="__NEXT_DATA__"> tag, confirmed present with a plain fetch, no
+// browser/JS execution needed. robots.txt doesn't restrict these paths, and
+// unlike Racing Post/At The Races, Sporting Life isn't itself a betting
+// operator — Sky Sports-owned racing/sports media, the closest UK
+// equivalent to how the US sources here are each the track/circuit's own
+// direct-from-the-source page rather than a bookmaker's.
+//
+// Two-step lookup, both plain JSON, no HTML tag scraping:
+//  1. GET /racing/racecards/<date> lists every UK/Ireland/US meeting
+//     running that day with each course's own numeric "meeting ID" — used
+//     to find the requested track's meeting ID for that date.
+//  2. GET /racing/fast-cards/<meetingId>/<date>/<course-slug> returns the
+//     WHOLE day's card in one request — every race, every runner — rather
+//     than needing one request per race the way NYRA's own site does. The
+//     course-slug path segment is decorative (verified: an intentionally
+//     wrong slug still 200s), only the meeting ID is actually load-bearing.
+//
+// Future dates only resolve once Sporting Life has actually published that
+// day's declarations (typically the day before racing) — until then their
+// own site silently serves today's meetings list instead of 404ing.
+// Guarded the same way the York TurfTrax going-report work handles an
+// equivalent "site rolled to a different day than what was asked for"
+// case: the requested date is compared against the date actually found on
+// the matching meeting, and a mismatch is treated as "not published yet"
+// (empty races), never as that day's real card under the wrong label.
+const SPORTINGLIFE_COURSE_NAME_BY_TRACK = { york: "York" };
+const SPORTINGLIFE_COURSE_SLUG_BY_TRACK = { york: "york" };
+
+async function sportingLifeFetchJson(path) {
+  const res = await fetch(`https://www.sportinglife.com${path}`, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 120, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`Sporting Life returned HTTP ${res.status}`);
+  const html = await res.text();
+  const m = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!m) throw new Error("Sporting Life page didn't contain the expected data script");
+  return JSON.parse(m[1]);
+}
+
+// Sums every listed finishing position's prize money — the closest
+// available proxy for a "total purse" figure (matching how NYRA's own
+// purse field is shown), though it may run slightly under the full
+// advertised purse if a race also carries unlisted prize-money supplements
+// not broken out by position.
+function sportingLifeFormatPurse(prizes) {
+  const list = prizes?.prize;
+  if (!Array.isArray(list) || !list.length) return null;
+  const total = list.reduce((sum, p) => {
+    const n = parseFloat(p.prize);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+  return total ? `£${Math.round(total).toLocaleString("en-GB")}` : null;
+}
+
+// UK racing has no "morning line" equivalent to pair with a live current-
+// price the way US pari-mutuel racing does — mlOdds is left null rather
+// than duplicating current_odds into both columns (see the plan this was
+// built from). "9-9" (stone-lbs) weight format is passed through as-is,
+// the standard way British racing media already presents it, not
+// converted to lbs-only.
+function sportingLifeMapRace(raceEntry, date, surface){
+  const rs = raceEntry.race_summary || {};
+  const horses = (raceEntry.rides || []).map((ride) => {
+    const isRunner = ride.ride_status === "RUNNER";
+    return {
+      postPosition: ride.draw_number != null ? String(ride.draw_number) : null,
+      name: ride.horse?.name || null,
+      // A withdrawn ride's jockey.name is literally the string "Non Runner"
+      // in Sporting Life's own data (verified directly against real
+      // scratches), not null/omitted — suppressed here the same way
+      // currentOdds already is below, rather than showing that placeholder
+      // as if it were a real jockey name next to the SCR tag.
+      jockey: isRunner ? (ride.jockey?.name || null) : null,
+      trainer: ride.trainer?.name || null,
+      weight: ride.handicap || null,
+      medication: null,
+      ageSex: ride.horse?.age != null ? `${ride.horse.age}yo` : null,
+      scratched: !isRunner,
+      currentOdds: isRunner ? (ride.betting?.current_odds || null) : null,
+      mlOdds: null,
+    };
+  });
+  return {
+    postTimeIso: rs.time ? `${date}T${rs.time}` : null,
+    mtpLabel: null,
+    purse: sportingLifeFormatPurse(raceEntry.prizes),
+    raceType: rs.race_class ? `Class ${rs.race_class}` : null,
+    distanceLabel: rs.distance || null,
+    surface,
+    horses,
+  };
+}
+
+async function fetchSportingLifeEntriesDay(track, date) {
+  const courseName = SPORTINGLIFE_COURSE_NAME_BY_TRACK[track];
+  const courseSlug = SPORTINGLIFE_COURSE_SLUG_BY_TRACK[track];
+  if (!courseName) throw new Error("Not supported for this track");
+
+  const listing = await sportingLifeFetchJson(`/racing/racecards/${date}`);
+  const meetings = listing?.props?.pageProps?.meetings || [];
+  const meeting = meetings.find((m) => m.meeting_summary?.course?.name === courseName);
+  if (!meeting || meeting.meeting_summary.date !== date) {
+    // Either this course isn't running that day, or (for a future date)
+    // Sporting Life hasn't published it yet — both are a genuine "nothing
+    // to show", not an error.
+    return { date, races: [] };
+  }
+
+  const meetingId = meeting.meeting_summary.meeting_reference.id;
+  const surface = meeting.meeting_summary.surface_summary || null;
+
+  const card = await sportingLifeFetchJson(`/racing/fast-cards/${meetingId}/${date}/${courseSlug}`);
+  const races = card?.props?.pageProps?.meeting?.races || [];
+  const mapped = races
+    .map((r) => sportingLifeMapRace(r, date, surface))
+    .sort((a, b) => (a.postTimeIso || "").localeCompare(b.postTimeIso || ""))
+    .map((r, i) => ({ raceNumber: i + 1, ...r }));
+
+  return { date, races: mapped };
 }
 
 // ---------- TDN Saratoga Notebook parser ----------

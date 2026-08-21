@@ -3295,6 +3295,11 @@
       // dead end as Ascot/Epsom Downs/Newmarket (see Ascot's comment).
       photo: null, photoAlt: "Aerial view of York Racecourse",
       tideStationId: null, tideRangeFt: null,
+      // Sourced from Sporting Life's own racecard data (server-rendered
+      // Next.js pages, verified directly — see the worker's
+      // fetchSportingLifeEntriesDay() comment for why this source and not
+      // a betting-affiliate site like Racing Post/At The Races).
+      entriesSource: "sportinglife",
     },
     shatin: {
       id: "shatin", name: "Sha Tin Racecourse", shortName: "Sha Tin",
@@ -3878,10 +3883,13 @@
   // elsewhere). UI state only, not persisted, same as stableOpenTrainers.
   let entriesOpenNoteKeys = new Set();
 
-  // Only Saratoga's entries source is verified to accept an arbitrary
-  // future ?date= and return that day's real card (NYRA's own site does
-  // the same via its date dropdown). null = defer to today in track TZ.
-  const ENTRIES_DATE_PICKER_TRACKS = new Set(["saratoga"]);
+  // Only tracks whose entries source is verified to accept an arbitrary
+  // future date and return that day's real card (NYRA's own site does this
+  // via its date dropdown; Sporting Life's meeting lookup does too, though
+  // a date it hasn't published declarations for yet just comes back with
+  // no races — see the worker's fetchSportingLifeEntriesDay() comment).
+  // null = defer to today in track TZ.
+  const ENTRIES_DATE_PICKER_TRACKS = new Set(["saratoga", "york"]);
   let selectedEntriesDate = null;
 
   // Official NYRA Results (same rdl/race/ endpoint as entries, limit=
@@ -4575,7 +4583,7 @@
   // autoImportNyraTrends() above, no "done" flag, since odds and scratches
   // change throughout the racing day and the worker's own edge cache already
   // keeps this from hammering the source site.
-  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM", monmouth: "MONMOUTHPARK.COM" };
+  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM", monmouth: "MONMOUTHPARK.COM", sportinglife: "SPORTINGLIFE.COM" };
   async function loadEntries(){
     const entriesTag = $("entriesTag");
     const source = activeTrack.entriesSource;
