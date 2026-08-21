@@ -2968,7 +2968,7 @@
       nyraCode: "SAR", scratchesUrl: null,
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
       tideStationId: null, tideRangeFt: null,
-      entriesSource: "nyra", resultsSource: "nyra",
+      entriesSource: "nyra", resultsSource: "nyra", changesSource: "nyra-conditions",
     },
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
@@ -4654,7 +4654,10 @@
     return Array.isArray(data.notes) ? data.notes : [];
   }
   async function refreshRaceChanges(){
-    if (!activeTrack.changesSource || !lastEntriesDate) return;
+    // "dmtc" only — other changesSource values (e.g. Saratoga's
+    // "nyra-conditions") build their note client-side from data another
+    // job already fetches, with no /changes route of their own to call.
+    if (activeTrack.changesSource !== "dmtc" || !lastEntriesDate) return;
     const trackId = activeTrack.id;
     const date = lastEntriesDate;
     let notes;
@@ -4850,11 +4853,19 @@
       [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
     ].filter(Boolean);
 
-    // Free-text race note from the worker's job #14 (temp rail distance,
-    // gelding reports, equipment/jockey changes) — see refreshRaceChanges()
-    // above. Only ever present for tracks with a changesSource; absent
-    // races (or tracks with no source) just show nothing extra here.
-    const changeNote = lastChangesByRace[race.raceNumber];
+    // Free-text race note. Two sources, same UI: DMTC tracks (job #14, see
+    // refreshRaceChanges() above) get one opaque string per race straight
+    // from the worker; Saratoga instead builds its own note client-side out
+    // of job #9's already-fetched lastOfficialConditions (see
+    // saratogaRaceChangeNote() below) — rail-out distance for turf races
+    // (using the correct course, Inner or Mellon, not just whichever) plus
+    // any MISCELLANEOUS CHANGES entries for this race. Deliberately leaves
+    // out scratches/jockey changes even though NYRA's page has them — both
+    // are already visible elsewhere in this app (SCR tags, the jockey
+    // column), so repeating them here would just be noise.
+    const changeNote = activeTrack.changesSource === "nyra-conditions"
+      ? saratogaRaceChangeNote(race.raceNumber, race.surface)
+      : lastChangesByRace[race.raceNumber];
     const changesHtml = changeNote
       ? `<div class="entries-changes-strip"><span class="entries-changes-label">Changes:</span>${escapeHtml(changeNote)}</div>`
       : "";
@@ -8098,6 +8109,28 @@
     }
   }
 
+  // Saratoga's per-race "Changes" note (see the entries-card renderer's own
+  // comment above for why this exists client-side instead of coming
+  // straight off the worker like DMTC's does). Rail-out distance only
+  // applies to turf races, and only for the course that specific race
+  // actually runs on — turfRaceCourse (job #9) is what makes that lookup
+  // possible instead of just dumping both courses' settings on every turf
+  // race regardless of which one it's on.
+  function saratogaRaceChangeNote(raceNumber, surface){
+    const official = lastOfficialConditions;
+    if (!official?.available) return null;
+    const parts = [];
+    if (surface && /turf/i.test(surface)){
+      const course = official.turfRaceCourse?.[String(raceNumber)];
+      const rail = course && official.railSettings?.find(r => r.course === course);
+      if (rail) parts.push(`${rail.course} rail: ${rail.label}`);
+    }
+    (official.miscChanges || [])
+      .filter(c => c.raceNumber === raceNumber)
+      .forEach(c => parts.push(`${c.horseName}: ${c.change}`));
+    return parts.length ? parts.join(" · ") : null;
+  }
+
   // ---------- Official (NYRA) track conditions, structured ----------
   // Renders the worker's parsed NYRA scratches-page fields (job #9) — just
   // the rail-out distances now (Inner/Mellon feet), since Dirt/Turf moved
@@ -8124,6 +8157,13 @@
 
     lastOfficialConditions = payload;
     updateTrackConditionTiles();
+    // Saratoga's per-race "Changes" note (saratogaRaceChangeNote()) reads
+    // straight off lastOfficialConditions, so a fresh fetch here needs to
+    // repaint the Entries page too — same reasoning as refreshRaceResults()/
+    // refreshRaceChanges() re-rendering after their own polls.
+    if (activeTrack.changesSource === "nyra-conditions" && lastEntriesRaces.length){
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+    }
   }
 
   // Each official source prints its condition in its own fixed vocabulary —

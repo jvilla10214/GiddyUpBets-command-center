@@ -118,6 +118,19 @@
 //    conditions the morning after, once the live page has moved on.
 //    Only Saratoga is wired up (NYRA_SCRATCHES_CODE_BY_TRACK) — same
 //    verify-before-adding rule as every other track map in this file.
+//    Also parses two more fields this page has, both surfaced client-side
+//    as Saratoga's own per-race "Changes" note (same UI job #6's DMTC
+//    entries source already has for Del Mar): turfRaceCourse (the page's
+//    "Turf Races: Mellon: 1,5,8  Inner: 6,10" row, mapping a race number to
+//    which turf course it actually runs on — rail-out distance is set per
+//    course, not per card, so this is what lets a specific race's note cite
+//    the RIGHT course's rail setting) and miscChanges (the page's own
+//    MISCELLANEOUS CHANGES table — equipment/gelding/etc., via the shared
+//    extractNyraChangeRows() helper). Deliberately does NOT parse this
+//    page's SCRATCHES or JOCKEY CHANGES tables — scratches already come
+//    through the entries page's own SCR marker, and jockey changes are
+//    already visible on each entries row, so both would just be a second,
+//    redundant read of a fact this app already surfaces elsewhere.
 //    York, Ascot, Newmarket, and Epsom Downs also answer through this same
 //    endpoint, but via a different upstream: their going condition comes
 //    from TurfTrax's WDV API Stream (job #12's data source, verified for
@@ -1208,8 +1221,73 @@ function parseNyraTrackConditions(html) {
     if (raw && /Set at/i.test(raw)) railSettings.push({ course, label: raw });
   }
 
+  // Which turf course each numbered race actually runs on ("Turf Races:
+  // Mellon: 1,5,8  Inner: 6,10") — rail-out distance is set per course, not
+  // per card, so this is what lets the client attach the RIGHT course's
+  // rail setting to a specific race instead of just listing both. Same
+  // "label: value, value  label: value" shape the Turf: row above already
+  // has, just with comma-separated race numbers instead of a single word.
+  const turfRaceCourse = {};
+  const turfRacesRaw = field("Turf Races");
+  if (turfRacesRaw) {
+    const re = /([A-Za-z]+):\s*([\d,\s]+)/g;
+    let m;
+    while ((m = re.exec(turfRacesRaw))) {
+      const course = m[1];
+      m[2].split(",").map((s) => s.trim()).filter(Boolean).forEach((n) => { turfRaceCourse[n] = course; });
+    }
+  }
+
+  // MISCELLANEOUS CHANGES table (equipment/gelding/etc. — race/program#/
+  // horse/change, same 4-column shape as SCRATCHES and JOCKEY CHANGES on
+  // this page, but deliberately the only one of the three actually parsed
+  // here: scratches already come through the entries page's own SCR
+  // marker (see parseNyraRaceFragment()), and jockey changes are out of
+  // scope per the client's own reasoning — this app already surfaces the
+  // rider on each entries row, so a same-day swap there would just be a
+  // second, redundant read of the same fact.
+  const miscChanges = extractNyraChangeRows(html, "MISCELLANEOUS CHANGES");
+
   const available = !!(dirtCondition || turfConditions.length || railSettings.length);
-  return { available, provider: "nyra", cardDate, cardDateLabel, lastUpdatedLabel, dirtCondition, turfConditions, railSettings };
+  return {
+    available, provider: "nyra", cardDate, cardDateLabel, lastUpdatedLabel,
+    dirtCondition, turfConditions, railSettings, turfRaceCourse, miscChanges,
+  };
+}
+
+// Shared by parseNyraTrackConditions() for any of this page's 4-column
+// "Race / Program # / Horse / Changes" tables (SCRATCHES has a 5th "Notes"
+// column NYRA's own scratches table needs, which is why that one isn't
+// routed through here — see parseNyraTrackConditions()'s own comment on
+// why scratches aren't parsed from this page at all). A blank Race cell
+// means "same race as the row above" (NYRA collapses repeated values the
+// same way its SCRATCHES table does), so this carries the last seen race
+// number forward rather than treating a blank as "no race".
+function extractNyraChangeRows(html, sectionTitle) {
+  const headerIdx = html.search(new RegExp(`>${sectionTitle}<`, "i"));
+  if (headerIdx === -1) return [];
+  const afterHeader = html.slice(headerIdx);
+  const tableEndIdx = afterHeader.search(/<\/TABLE>/i);
+  const chunk = tableEndIdx === -1 ? afterHeader : afterHeader.slice(0, tableEndIdx);
+
+  const rowMatches = Array.from(chunk.matchAll(/<TR[^>]*>([\s\S]*?)<\/TR>/gi));
+  const rows = [];
+  let lastRaceNumber = null;
+  // Skip the first row only: chunk starts mid-way through the colored
+  // section-title bar's own <TR> (headerIdx lands on the title TEXT, which
+  // sits inside that row's <TD><Font><B>, not at the row's opening <TR>
+  // tag), so the title bar's row never forms a complete <TR>...</TR> match
+  // here at all — index 0 is already the column header row (Race/Program
+  // #/Horse/Changes), and real data starts at index 1.
+  for (let i = 1; i < rowMatches.length; i++) {
+    const cells = Array.from(rowMatches[i][1].matchAll(/<TD[^>]*>([\s\S]*?)<\/TD>/gi)).map((c) => cleanCell(c[1]));
+    if (cells.length < 4) continue;
+    const [raceCell, programNumber, horseName, change] = cells;
+    if (raceCell) lastRaceNumber = raceCell;
+    if (!lastRaceNumber || !horseName || !change) continue;
+    rows.push({ raceNumber: Number(lastRaceNumber), programNumber: programNumber || null, horseName, change });
+  }
+  return rows;
 }
 
 // Maps TurfTrax's WDV API Stream "content" block (same stream shape job
