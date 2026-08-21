@@ -182,6 +182,14 @@
 //    just whichever one is currently active, so a Belmont tornado warning
 //    still surfaces while looking at Saratoga's dashboard. International
 //    tracks aren't queried at all — NWS has no coverage outside the US.
+//    The route itself still treats an out-of-coverage point as a normal,
+//    non-error "no alerts" response (200, empty array) rather than the
+//    502 every other failure here gets — NWS answers a non-US point with
+//    its own 400 "Parameter point is invalid: out of bounds", which isn't
+//    a fetch failure at all, just "nothing to report for this location."
+//    No current caller can actually hit this (client-side is already
+//    US-only, above), but the route shouldn't mislabel a coverage
+//    boundary as an error if something ever does.
 //
 // 12. Ascot live on-site weather (GET /ascot-conditions) — proxies
 //    TurfTrax's WeatherTrax station feed for Ascot (its.turftrax.co.uk),
@@ -763,6 +771,18 @@ async function handleRequest(request, env) {
         });
       } catch (err) {
         return json({ error: `NWS fetch failed: ${err.message}` }, 502);
+      }
+      if (res.status === 400) {
+        // NWS's own signal for "this point isn't in our coverage area" —
+        // {"title":"Invalid Parameter","detail":"Parameter \"point\" is
+        // invalid: out of bounds"} — not a fetch failure, just nothing to
+        // report here. Body is read defensively (a non-JSON 400 falls
+        // through to the generic 502 below instead of throwing).
+        let body = null;
+        try { body = await res.json(); } catch (err) { /* fall through */ }
+        if (body && /out of bounds/i.test(body.detail || "")) {
+          return json({ alerts: [] }, 200, { "Cache-Control": "public, max-age=3600" });
+        }
       }
       if (!res.ok) return json({ error: `NWS returned HTTP ${res.status}` }, 502);
       const data = await res.json();
