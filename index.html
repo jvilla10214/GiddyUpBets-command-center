@@ -7565,7 +7565,15 @@
 
     // Track surface actively changing — tier 2, the surface itself is
     // moving, not just a static read of where it sits right now.
-    const hasRain = rainToday > 0 || rainRate > 0;
+    //
+    // Threshold is 0.05 — the same "meaningful rain" bar used everywhere
+    // else in this app (trackTrend(), computeTodayRainOutlook(), the Rain
+    // Nowcast fallback). A bare >0 check used to fire this off a 0.004in
+    // overnight trace that the Past Rainfall tile rounds down to "0.00in"
+    // and Rain Nowcast calls "Not currently raining" — producing a "despite
+    // some rain in the area" line that contradicted both, for rain too
+    // small to be real "rain in the area" by this app's own standard.
+    const hasRain = rainToday > 0.05 || rainRate > 0.05;
     if (trackTrendInfo.label === "Wetting"){
       secondary.push({ tier: 2, text: `The track is trending wetter — the ${dirtLabel.toLowerCase()} dirt rating could slip further if rain continues.` });
     } else if (rainOutlook && (dirtLabel === "FAST" || dirtLabel === "GOOD")){
