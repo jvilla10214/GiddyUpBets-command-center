@@ -8081,6 +8081,21 @@
     SLOPPY: "cond-sloppy", "SLOPPY / WET": "cond-sloppy", SOFT: "cond-sloppy", HEAVY: "cond-sloppy", "SOFT TO HEAVY": "cond-sloppy",
   };
 
+  // Reverse of the map above, one per surface — lets an official reading be
+  // translated back into estimateDirtCondition()/estimateTurfCondition()'s
+  // own label vocabulary (by severity class, not string equality, since an
+  // official "SLOPPY" and the heuristic's "SLOPPY / WET" are the same
+  // severity under different spellings) for narrativeDirtLabel/
+  // narrativeTurfLabel below — the AI Summary and Bias Predictor Score used
+  // to always read the heuristic even when an official, more-authoritative
+  // reading was already posted and visibly shown in the tile right next to
+  // them (e.g. tile "FAST" vs. summary text "good"). Kept separate from
+  // dirtLabel/turfLabel below (which stay heuristic-only) because those
+  // still drive the weather-changed alert, which should keep reacting only
+  // to real weather shifts, not to whenever NYRA happens to post.
+  const DIRT_LABEL_BY_CLASS = { "cond-fast": "FAST", "cond-good": "GOOD", "cond-muddy": "MUDDY", "cond-sloppy": "SLOPPY / WET" };
+  const TURF_LABEL_BY_CLASS = { "cond-fast": "FIRM", "cond-good": "GOOD", "cond-muddy": "YIELDING", "cond-sloppy": "SOFT" };
+
   // "h:mm" — trims NYRA's raw "2:15:03 PM" down to fit the tile's tiny
   // source tag without the seconds.
   function shortTimeLabel(label){
@@ -8590,13 +8605,11 @@
       hourlyPrecip: correctedPrecip, nowHourIdx, rainRate,
       cloudCover: c.cloud_cover, windSpeed: c.wind_speed_10m,
     });
-    // dirtLabel below (and turfLabel) stay driven by the heuristic ONLY,
-    // same as always — they feed the weather-changed alert, the AI summary
-    // text, and the Weather Bias Predictor Score, none of which should
-    // start silently reacting to whether NYRA happened to post official
-    // conditions yet. The TILE DISPLAY (updateTrackConditionTiles(), below)
-    // is a separate, display-only concern that prefers the official read
-    // when one's available for today.
+    // dirtLabel/turfLabel stay driven by the heuristic ONLY — they feed the
+    // weather-changed alert, which should keep reacting to real weather
+    // shifts, not to whenever NYRA/TurfTrax happens to post. The TILE
+    // DISPLAY (updateTrackConditionTiles(), below) is a separate,
+    // display-only concern that prefers the official read when available.
     const dirtLabel = dirtEst.label;
     lastDirtEstimate = dirtEst;
 
@@ -8607,6 +8620,17 @@
     const turfLabel = turfEst.label;
     lastTurfEstimate = turfEst;
     updateTrackConditionTiles();
+
+    // AI Summary/Bias Score narrative only: prefer today's official reading
+    // (translated to the heuristic's own label vocabulary — see
+    // DIRT_LABEL_BY_CLASS/TURF_LABEL_BY_CLASS above) over the heuristic
+    // whenever one's posted, so the narrative never contradicts the tile
+    // sitting right above it (e.g. tile "FAST" vs. old text "good").
+    const officialForNarrative = OFFICIAL_CONDITIONS_SUPPORTED.has(activeTrack.id) ? lastOfficialConditions : null;
+    const officialDirtClass = officialForNarrative?.available ? OFFICIAL_CONDITION_CLASS[officialForNarrative.dirtCondition] : null;
+    const officialTurfClass = officialForNarrative?.available ? OFFICIAL_CONDITION_CLASS[officialForNarrative.turfConditions?.[0]?.condition] : null;
+    const narrativeDirtLabel = (officialDirtClass && DIRT_LABEL_BY_CLASS[officialDirtClass]) || dirtLabel;
+    const narrativeTurfLabel = (officialTurfClass && TURF_LABEL_BY_CLASS[officialTurfClass]) || turfLabel;
 
     const rainOutlook = upcomingRainOutlook(
       data.hourly?.precipitation, data.hourly?.weather_code, data.hourly?.time, nowHourIdx, 6, rainRate
@@ -8649,8 +8673,8 @@
       dir: c.wind_direction_10m,
       windTrend,
       forecastSteps,
-      dirtLabel,
-      turfLabel,
+      dirtLabel: narrativeDirtLabel,
+      turfLabel: narrativeTurfLabel,
       trackTrendInfo: trend,
       rainToday,
       rainRate,
