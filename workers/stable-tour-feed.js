@@ -118,19 +118,22 @@
 //    conditions the morning after, once the live page has moved on.
 //    Only Saratoga is wired up (NYRA_SCRATCHES_CODE_BY_TRACK) — same
 //    verify-before-adding rule as every other track map in this file.
-//    Also parses two more fields this page has, both surfaced client-side
-//    as Saratoga's own per-race "Changes" note (same UI job #6's DMTC
-//    entries source already has for Del Mar): turfRaceCourse (the page's
-//    "Turf Races: Mellon: 1,5,8  Inner: 6,10" row, mapping a race number to
-//    which turf course it actually runs on — rail-out distance is set per
-//    course, not per card, so this is what lets a specific race's note cite
-//    the RIGHT course's rail setting) and miscChanges (the page's own
-//    MISCELLANEOUS CHANGES table — equipment/gelding/etc., via the shared
-//    extractNyraChangeRows() helper). Deliberately does NOT parse this
-//    page's SCRATCHES or JOCKEY CHANGES tables — scratches already come
-//    through the entries page's own SCR marker, and jockey changes are
-//    already visible on each entries row, so both would just be a second,
-//    redundant read of a fact this app already surfaces elsewhere.
+//    Also parses three more fields this page has. turfRaceCourse (the
+//    page's "Turf Races: Mellon: 1,5,8  Inner: 6,10" row, mapping a race
+//    number to which turf course it actually runs on — rail-out distance
+//    is set per course, not per card, so this is what lets a specific
+//    race's note cite the RIGHT course's rail setting) and miscChanges
+//    (the page's own MISCELLANEOUS CHANGES table — equipment/gelding/etc.,
+//    via the shared extractNyraChangeRows() helper) are both surfaced
+//    client-side as Saratoga's own per-race "Changes" note (same UI job
+//    #6's DMTC entries source already has for Del Mar). jockeyChanges (the
+//    page's JOCKEY CHANGES table, same helper) is surfaced differently —
+//    applied INTO the entries table itself, replacing the stale jockey
+//    name on that horse's own row, since a rider swap corrects a fact
+//    already shown per-horse rather than adding a new one. Deliberately
+//    does NOT parse this page's SCRATCHES table — that already comes
+//    through the entries page's own SCR marker, so parsing it again here
+//    would just be a second, redundant read of the same fact.
 //    York, Ascot, Newmarket, and Epsom Downs also answer through this same
 //    endpoint, but via a different upstream: their going condition comes
 //    from TurfTrax's WDV API Stream (job #12's data source, verified for
@@ -1240,18 +1243,23 @@ function parseNyraTrackConditions(html) {
 
   // MISCELLANEOUS CHANGES table (equipment/gelding/etc. — race/program#/
   // horse/change, same 4-column shape as SCRATCHES and JOCKEY CHANGES on
-  // this page, but deliberately the only one of the three actually parsed
-  // here: scratches already come through the entries page's own SCR
-  // marker (see parseNyraRaceFragment()), and jockey changes are out of
-  // scope per the client's own reasoning — this app already surfaces the
-  // rider on each entries row, so a same-day swap there would just be a
-  // second, redundant read of the same fact.
+  // this page). Scratches are NOT parsed from here — they already come
+  // through the entries page's own SCR marker (see parseNyraRaceFragment()).
   const miscChanges = extractNyraChangeRows(html, "MISCELLANEOUS CHANGES");
+
+  // JOCKEY CHANGES table — same 4-column shape, "change" here is the new
+  // rider's name. Unlike miscChanges (shown as its own note strip),
+  // this one is applied INTO the entries table itself, replacing the
+  // stale jockey name on that horse's own row — see the client's
+  // saratogaJockeyChange() for why: a rider swap is a correction to a
+  // fact already shown per-horse, not a separate note, so it reads
+  // better fixed at the source than bolted on alongside it.
+  const jockeyChanges = extractNyraChangeRows(html, "JOCKEY CHANGES");
 
   const available = !!(dirtCondition || turfConditions.length || railSettings.length);
   return {
     available, provider: "nyra", cardDate, cardDateLabel, lastUpdatedLabel,
-    dirtCondition, turfConditions, railSettings, turfRaceCourse, miscChanges,
+    dirtCondition, turfConditions, railSettings, turfRaceCourse, miscChanges, jockeyChanges,
   };
 }
 

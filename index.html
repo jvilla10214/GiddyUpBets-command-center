@@ -1574,6 +1574,7 @@
     font-size: 13px;
   }
   .entries-changes-label{ color: var(--tote-amber); margin-right: 4px; }
+  .entries-jockey-changed{ color: var(--tote-amber); font-weight: 600; }
   .entries-race-card{ margin-bottom: 22px; }
   .entries-race-card:last-child{ margin-bottom: 0; }
   .entries-results-card{
@@ -4891,16 +4892,26 @@
       weatherHtml = `<div class="entries-weather-strip entries-weather-unknown">No forecast match for this race's post time yet.</div>`;
     }
 
-    const rows = race.horses.map(h => `
+    const rows = race.horses.map(h => {
+      // Applies only to live rides (scratched horses aren't running, so a
+      // rider swap for one is moot) — see saratogaJockeyChange()'s own
+      // comment for why this replaces the row's jockey instead of adding
+      // a separate note.
+      const newJockey = !h.scratched ? saratogaJockeyChange(race.raceNumber, h.postPosition) : null;
+      const jockeyHtml = newJockey
+        ? `<span class="entries-jockey-changed" title="Changed from ${escapeHtml(h.jockey || "—")}">${escapeHtml(newJockey)}</span>`
+        : escapeHtml(h.jockey || "—");
+      return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
         <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}</td>
-        <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
+        <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
 
     // Official Results — shown above the entries/odds table, never
     // replacing it, since morning-line/final odds stay useful for review
@@ -8129,6 +8140,20 @@
       .filter(c => c.raceNumber === raceNumber)
       .forEach(c => parts.push(`${c.horseName}: ${c.change}`));
     return parts.length ? parts.join(" · ") : null;
+  }
+
+  // Jockey swaps get applied INTO the entries table (replacing the stale
+  // name on that horse's own row), not folded into saratogaRaceChangeNote()
+  // above — a rider change corrects a fact already shown per-horse, it
+  // isn't a new fact to note alongside it. Matched by program # (NYRA's
+  // own post-position numbering), not horse name, since that's an exact
+  // numeric key instead of a free-text name that could differ in
+  // capitalization/punctuation between the two NYRA pages.
+  function saratogaJockeyChange(raceNumber, postPosition){
+    const changes = lastOfficialConditions?.jockeyChanges;
+    if (!changes?.length || !postPosition) return null;
+    const match = changes.find(c => c.raceNumber === raceNumber && c.programNumber === String(postPosition));
+    return match ? match.change : null;
   }
 
   // ---------- Official (NYRA) track conditions, structured ----------
