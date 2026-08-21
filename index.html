@@ -733,6 +733,14 @@
     margin-top: 6px;
     line-height: 1.5;
   }
+  /* Separates the current-rate line from the forward outlook above it —
+     same top-border treatment already used to separate a stacked section
+     elsewhere (.stable-trainer-body), not a new pattern. */
+  .rain-nowcast-section{
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--panel-border);
+  }
   .rain-intensity-light{ background: rgba(111,168,201,0.15); color: var(--sky); }
   .rain-intensity-moderate{ background: rgba(240,180,41,0.12); color: var(--tote-amber); }
   .rain-intensity-heavy{ background: rgba(224,82,82,0.12); color: #e05252; }
@@ -2471,15 +2479,14 @@
 
     <div class="tile tile-rain" id="rainTile">
       <div>
-        <div class="tlabel">Rainfall</div>
+        <div class="tlabel">Past Rainfall</div>
         <div class="rain-tab-toggle">
-          <button type="button" class="rain-tab-btn active" data-window="today">Today</button>
-          <button type="button" class="rain-tab-btn" data-window="6h">6h</button>
+          <button type="button" class="rain-tab-btn active" data-window="today">Midnight</button>
           <button type="button" class="rain-tab-btn" data-window="24h">24h</button>
           <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
+          <button type="button" class="rain-tab-btn" data-window="7d">7d</button>
         </div>
-        <div class="tsub skel" id="rainRate">Current rate —</div>
-        <div class="tsub" id="rainTodayOutlook" hidden>—</div>
+        <div class="tsub" id="rainWindowLabel">Since midnight, track-local</div>
       </div>
       <div class="tvalue"><span id="rainTotal" class="skel">—</span><span class="tunit">in</span></div>
     </div>
@@ -3483,7 +3490,7 @@
       `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
       `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
       `wind_speed_10m_max,wind_gusts_10m_max,weather_code` +
-      `&past_days=2` +
+      `&past_days=8` + // covers the Past Rainfall tile's 7-day window (168h) plus a buffer, regardless of what hour "now" falls on
       `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=${encodeURIComponent(t.timezone)}`;
   }
 
@@ -3522,13 +3529,21 @@
   let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
   let lastNewsItems = []; // cached so switchTrack() can re-flag matches without a network refetch
 
-  // Rainfall tile totals for all four windows, computed once per render() so
-  // switching tabs is instant (no refetch) — keyed to match .rain-tab-btn's
-  // data-window values.
-  let rainWindowTotals = { today: null, "6h": null, "24h": null, "48h": null };
-  const RAIN_WINDOW_ALERT_THRESHOLD = { today: 0.5, "6h": 0.5, "24h": 0.5, "48h": 1.0 };
-  // Full-day predicted total + rain start time, shown only under the Today
-  // tab — see computeTodayRainOutlook().
+  // Past Rainfall tile totals for all four windows, computed once per
+  // render() so switching tabs is instant (no refetch) — keyed to match
+  // .rain-tab-btn's data-window values. "today" means "since midnight in
+  // the track's own local timezone" (see nowInTrackTZ()) — kept as the
+  // internal key name since it already threads through
+  // computeTodayRainOutlook()/todayStartIdx/todayEndIdx elsewhere; only the
+  // tab's visible label says "Midnight".
+  let rainWindowTotals = { today: null, "24h": null, "48h": null, "7d": null };
+  // 7d's threshold is this file's own judgment call, same as the other
+  // three — no external "this many inches in a week is alert-worthy"
+  // standard being cited here, just scaled up from 48h's own threshold.
+  const RAIN_WINDOW_ALERT_THRESHOLD = { today: 0.5, "24h": 0.5, "48h": 1.0, "7d": 3.0 };
+  // Full-day predicted total + rain start time — now surfaced on the Rain
+  // Nowcast panel (see renderRainNowcastPanel()) rather than this tile,
+  // which is purely historical/backward-looking. See computeTodayRainOutlook().
   let todayRainOutlookData = null;
 
   const WMO = {
@@ -3572,7 +3587,7 @@
   // classifyDirtCondition/classifyTurfCondition above only look at today's
   // elapsed rain (dirt) or a flat 24h/48h total (turf) — fine for historical/
   // archive snapshots where that's all the data we have, but the live
-  // dashboard already fetches ~72h of real hourly rain (past_days=2) plus
+  // dashboard already fetches real hourly rain going back several days plus
   // current sun/wind, which is enough to model how a track actually
   // recovers: dirt drains and gets harrowed back to fast within a day or so,
   // turf holds water for days. Still a rule-based heuristic, not a live AI
@@ -3770,8 +3785,10 @@
   function currentRainHistoryUrl(){
     const t = activeTrack;
     const { date: today } = nowInTrackTZ();
-    // 4 days back covers the 72h decayedRainIndex lookback plus a buffer.
-    const startStr = daysBeforeDateStr(today, 4);
+    // 8 days back covers the Past Rainfall tile's 7-day (168h) window plus
+    // a buffer — was 4 (just past decayedRainIndex's own 72h lookback)
+    // before that tile grew a 7-day tab.
+    const startStr = daysBeforeDateStr(today, 8);
     return `${ARCHIVE_API_BASE}?latitude=${t.lat}&longitude=${t.lon}` +
       `&start_date=${startStr}&end_date=${today}` +
       `&hourly=precipitation&precipitation_unit=inch&timezone=${encodeURIComponent(t.timezone)}`;
@@ -6917,10 +6934,26 @@
     return Array.isArray(data.minutely) ? data.minutely : [];
   }
 
+  // Whether it's raining RIGHT NOW, from the minutely array's own first
+  // entry (Pirate Weather's minutely[0] is the current minute) — a
+  // different question from analyzeRainNowcast()'s own "detected" (which
+  // asks whether rain starts/continues ANYWHERE in the next ~55 minutes,
+  // including not-yet-started). Reuses the exact same start-floor and
+  // light/moderate/heavy bands as the rest of this section rather than
+  // introducing a second set of thresholds for what's otherwise the same
+  // underlying measurement.
+  function classifyCurrentRainRate(minuteZero){
+    const rate = minuteZero?.precipIntensity ?? 0;
+    if (rate < RAIN_START_INTENSITY) return { active: false, rate };
+    const intensity = rate > RAIN_MODERATE_MAX ? "heavy" : rate > RAIN_LIGHT_MAX ? "moderate" : "light";
+    return { active: true, rate, intensity };
+  }
+
   // Pure function over the minutely array — kept separate from rendering so
   // the logic itself is easy to reason about in isolation.
   function analyzeRainNowcast(minutely){
-    if (!minutely || !minutely.length) return { detected: false };
+    const current = classifyCurrentRainRate(minutely?.[0]);
+    if (!minutely || !minutely.length) return { detected: false, current };
 
     let startIdx = -1;
     const scanEnd = Math.min(minutely.length, RAIN_SCAN_MINUTES + 1);
@@ -6931,7 +6964,7 @@
         break;
       }
     }
-    if (startIdx === -1) return { detected: false };
+    if (startIdx === -1) return { detected: false, current };
 
     // Duration: scan forward from the start until 2 consecutive minutes both
     // drop back under the START floor (not the light/moderate classification
@@ -6959,6 +6992,7 @@
       intensity,
       durationMinutes: endIdx - startIdx,
       openEnded,
+      current,
     };
   }
 
@@ -6984,28 +7018,87 @@
     return null;
   }
 
+  // "Estimated total today" — moved here from the Past Rainfall tile
+  // (which is purely historical now): the SINCE-MIDNIGHT elapsed total
+  // (Part 1's own "today" window, archive-corrected) plus the forecast
+  // endpoint's own remaining-hours-of-today precipitation, already summed
+  // together by computeTodayRainOutlook(). Explicitly labeled "Estimated"
+  // rather than just "total", same "don't overclaim" framing as this
+  // panel's own info-disclosure text and the "not a guarantee" language on
+  // the forward outlook above it.
+  function describeTodayRainOutlook(outlook){
+    const totalStr = `Estimated total today ~${outlook.total.toFixed(2)} in`;
+    if (outlook.startTime){
+      return outlook.alreadyStarted
+        ? `${totalStr} — started ~${fmtTime(outlook.startTime)}`
+        : `${totalStr} — starting ~${fmtTime(outlook.startTime)}`;
+    }
+    // No hour crosses the "meaningful rain" threshold, but trace amounts
+    // (drizzle under 0.05in/hr) can still add up to a nonzero total.
+    return outlook.total > 0 ? `${totalStr} — light/trace rain only` : `${totalStr} — no rain expected`;
+  }
+
+  // Cached across this panel's two independent render triggers (its own
+  // Pirate Weather poll below, and render()'s own call right after
+  // todayRainOutlookData updates) so either one can repaint the full panel
+  // using whatever's currently known on both sides, rather than the two
+  // needing to resolve in lockstep.
+  let lastRainNowcastResult = { detected: false, current: { active: false, rate: 0 } };
+  // Distinguishes "hasn't loaded yet" (keep showing the skeleton) from
+  // "loaded and confirmed no rain" — without this, render()'s own call to
+  // renderRainNowcastPanel() (see below) could win a race against
+  // loadRainNowcast()'s first-ever resolve and prematurely paint
+  // lastRainNowcastResult's placeholder default over the skeleton.
+  let rainNowcastLoaded = false;
+
   function renderRainNowcast(result){
+    lastRainNowcastResult = result;
+    renderRainNowcastPanel();
+  }
+
+  function renderRainNowcastPanel(){
     const body = $("rainNowcastBody");
+    const result = lastRainNowcastResult;
+
+    let forwardHtml;
     if (!result.detected){
       const longer = analyzeLongerRangeOutlook();
-      body.innerHTML = `
+      forwardHtml = `
         <div class="rain-nowcast-headline">No rain expected in the next hour</div>
         ${longer
           ? `<div class="rain-nowcast-detail-dim">Beyond that (lower-confidence, longer-range): rain looks possible around ${escapeHtml(longer.atLabel)}.</div>`
           : ""}
       `;
-      return;
+    } else {
+      const whenLabel = result.startMinutes <= 0 ? "now" : `in ~${result.startMinutes} minutes`;
+      const durationLabel = result.openEnded
+        ? `~${result.durationMinutes}+ min (continuing past the forecast window)`
+        : `~${result.durationMinutes} min`;
+      forwardHtml = `
+        <div class="rain-nowcast-headline">Rain expected ${whenLabel}</div>
+        <div class="rain-nowcast-detail">
+          <span class="tag rain-intensity-${result.intensity}">${result.intensity.toUpperCase()}</span>
+          <span>${escapeHtml(durationLabel)}</span>
+        </div>
+      `;
     }
-    const whenLabel = result.startMinutes <= 0 ? "now" : `in ~${result.startMinutes} minutes`;
-    const durationLabel = result.openEnded
-      ? `~${result.durationMinutes}+ min (continuing past the forecast window)`
-      : `~${result.durationMinutes} min`;
+
+    const current = result.current;
+    const currentHtml = current?.active
+      ? `<div class="rain-nowcast-detail">
+          <span class="tag rain-intensity-${current.intensity}">${current.intensity.toUpperCase()}</span>
+          <span>Currently ${current.rate.toFixed(2)} in/hr</span>
+        </div>`
+      : `<div class="rain-nowcast-detail-dim">Not currently raining</div>`;
+
+    const totalHtml = todayRainOutlookData
+      ? `<div class="rain-nowcast-detail-dim">${escapeHtml(describeTodayRainOutlook(todayRainOutlookData))}</div>`
+      : "";
+
     body.innerHTML = `
-      <div class="rain-nowcast-headline">Rain expected ${whenLabel}</div>
-      <div class="rain-nowcast-detail">
-        <span class="tag rain-intensity-${result.intensity}">${result.intensity.toUpperCase()}</span>
-        <span>${escapeHtml(durationLabel)}</span>
-      </div>
+      ${forwardHtml}
+      <div class="rain-nowcast-section">${currentHtml}</div>
+      ${totalHtml}
     `;
   }
 
@@ -7023,6 +7116,7 @@
     }
     if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
     if (tag) tag.textContent = "LIVE · PIRATE WEATHER";
+    rainNowcastLoaded = true;
     renderRainNowcast(analyzeRainNowcast(minutely));
   }
 
@@ -7866,7 +7960,6 @@
       readout.textContent = "Showing current live conditions";
       $("windAt10").textContent = `Sustained ${Math.round(step.wind ?? 0)} mph`;
       $("feelsLike").textContent = `Feels like ${Math.round(lastApparentTemp ?? step.temp)}°F`;
-      $("rainRate").textContent = `Current rate ${(step.precip ?? 0).toFixed(2)} in/hr`;
     } else {
       const mins = idx * 30;
       const label = mins < 60 ? `+${mins}m` : `+${(mins / 60).toFixed(mins % 60 ? 1 : 0)}h`;
@@ -7875,7 +7968,6 @@
       readout.textContent = `Projected for ${fmtTime(step.time)} (${label})`;
       $("windAt10").textContent = `Projected sustained ${Math.round(step.wind ?? 0)} mph`;
       $("feelsLike").textContent = `Projected — feels-like unavailable`;
-      $("rainRate").textContent = `Projected rate ${(step.precip ?? 0).toFixed(2)} in/hr`;
     }
 
     renderTrackPlayAnalysis(idx, step);
@@ -8189,34 +8281,26 @@
     }
   }
 
-  // ---------- Rainfall tile (Today / 6h / 24h / 48h tabs) ----------
+  // ---------- Past Rainfall tile (Midnight / 24h / 48h / 7d tabs) ----------
+  // Purely historical/backward-looking now — current rate and the
+  // predicted-total-today forecast both moved to Rain Nowcast (see its own
+  // section below), since this tile is about what's already fallen, not
+  // what's happening right now or what's still to come.
   function activeRainWindowKey(){
     return document.querySelector(".rain-tab-btn.active")?.dataset.window || "today";
   }
-  function describeTodayRainOutlook(outlook){
-    const totalStr = `Predicted total today ${outlook.total.toFixed(2)} in`;
-    if (outlook.startTime){
-      return outlook.alreadyStarted
-        ? `${totalStr} — started ~${fmtTime(outlook.startTime)}`
-        : `${totalStr} — starting ~${fmtTime(outlook.startTime)}`;
-    }
-    // No hour crosses the "meaningful rain" threshold, but trace amounts
-    // (drizzle under 0.05in/hr) can still add up to a nonzero total.
-    return outlook.total > 0 ? `${totalStr} — light/trace rain only` : `${totalStr} — no rain expected`;
-  }
+  const RAIN_WINDOW_LABEL = {
+    today: "Since midnight, track-local",
+    "24h": "Rolling last 24 hours",
+    "48h": "Rolling last 48 hours",
+    "7d": "Rolling last 7 days",
+  };
   function renderRainTile(){
     const key = activeRainWindowKey();
     const total = rainWindowTotals[key];
     $("rainTotal").textContent = total != null ? total.toFixed(2) : "—";
     $("rainTile").classList.toggle("alert", total != null && total > RAIN_WINDOW_ALERT_THRESHOLD[key]);
-
-    const outlookEl = $("rainTodayOutlook");
-    if (key === "today" && todayRainOutlookData){
-      outlookEl.hidden = false;
-      outlookEl.textContent = describeTodayRainOutlook(todayRainOutlookData);
-    } else {
-      outlookEl.hidden = true;
-    }
+    $("rainWindowLabel").textContent = RAIN_WINDOW_LABEL[key] || "";
   }
   function setRainWindow(key){
     document.querySelectorAll(".rain-tab-btn").forEach(btn => {
@@ -8333,7 +8417,7 @@
     // First real weather payload for this page load/track — every element
     // below is about to get its actual value, so drop their skeleton state
     // together, once, rather than one-by-one at each individual assignment.
-    clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainRate", "rainTotal",
+    clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainTotal",
       "humidity", "cloudCover", "pressure", "weatherDesc", "sunTimes",
       "soilMoistureSurface", "soilMoistureDeep");
 
@@ -8387,8 +8471,9 @@
     let todayIdx = data.daily?.time?.findIndex(t => t === todayStr) ?? -1;
     if (todayIdx < 0) todayIdx = 0;
 
-    // Rolling last-24-hours total (past_days=2 gives us prior hourly data so
-    // this window doesn't just reset at midnight like "Today" does)
+    // Rolling last-24-hours total (past_days=8 gives us enough prior hourly
+    // data for this and the 48h/7d windows below, none of which reset at
+    // midnight like "Since midnight" does)
     let nowHourIdx = data.hourly?.time?.findIndex(t => t.startsWith(nowHourPrefix)) ?? -1;
     // Backward-looking totals use the archive-corrected array (see
     // correctedHourlyPrecip) — the forecast endpoint's own past_days history
@@ -8413,14 +8498,17 @@
 
     const rain24h = sumPrecip(nowHourIdx - 23, nowHourIdx);
     const rain48h = sumPrecip(nowHourIdx - 47, nowHourIdx);
+    const rain7d = sumPrecip(nowHourIdx - 167, nowHourIdx); // 7 * 24 - 1
+    // Still computed (feeds trackTrend()'s Wetting/Drying read below) even
+    // though it's no longer one of the Past Rainfall tile's own tabs.
     const rainLast6h = sumPrecip(nowHourIdx - 5, nowHourIdx);
     const rainPrior6h = sumPrecip(nowHourIdx - 11, nowHourIdx - 6);
 
     rainWindowTotals = {
       today: nowHourIdx >= 0 ? rainToday : null,
-      "6h": nowHourIdx >= 0 ? rainLast6h : null,
       "24h": nowHourIdx >= 0 ? rain24h : null,
       "48h": nowHourIdx >= 0 ? rain48h : null,
+      "7d": nowHourIdx >= 0 ? rain7d : null,
     };
 
     let todayEndIdx = todayStartIdx;
@@ -8435,6 +8523,12 @@
       todayStartIdx, todayEndIdx, nowHourIdx,
     });
     renderRainTile();
+    // Repaints the "estimated total today" line immediately rather than
+    // waiting on loadRainNowcast()'s own independent poll — but only once
+    // that panel has genuinely loaded at least once (rainNowcastLoaded),
+    // so this can't win a startup race and paint over its skeleton loader
+    // with a placeholder "no rain"/"not currently raining" default.
+    if (rainNowcastLoaded) renderRainNowcastPanel();
 
     if (data.daily?.sunrise?.[todayIdx] && data.daily?.sunset?.[todayIdx]){
       $("sunTimes").textContent = `Sunrise ${fmtTime(data.daily.sunrise[todayIdx])} / Sunset ${fmtTime(data.daily.sunset[todayIdx])}`;
@@ -8647,9 +8741,20 @@
     lastAiSummaryCtx = null;
     rainHistoryByTime = null;
     rainHistoryTrackId = null;
-    rainWindowTotals = { today: null, "6h": null, "24h": null, "48h": null };
+    rainWindowTotals = { today: null, "24h": null, "48h": null, "7d": null };
     todayRainOutlookData = null;
     renderRainTile();
+    // Rain Nowcast is genuinely loading again for the new track too — same
+    // reasoning as weatherLogLoaded/biasLogLoaded elsewhere: show its
+    // skeleton again rather than either the old track's stale reading or a
+    // premature "no rain" default.
+    rainNowcastLoaded = false;
+    lastRainNowcastResult = { detected: false, current: { active: false, rate: 0 } };
+    addSkeleton("rainTotal");
+    $("rainNowcastBody").innerHTML = `
+      <div class="skel-block skel-line wide" style="height:14px;"></div>
+      <div class="skel-block skel-line narrow"></div>
+    `;
     flowAngleDeg = 90;
     flowSpeedMph = 0;
     $("aqiValue").textContent = "—";
