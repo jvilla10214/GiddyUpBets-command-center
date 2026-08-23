@@ -550,14 +550,6 @@
   }
   .track-condition .label{ color: var(--parchment-dim); font-size:9.5px; letter-spacing:1.5px; display:block; font-family:'IBM Plex Mono', monospace; font-weight:400; margin-bottom:3px;}
   .track-condition .tc-value{ display:block; }
-  .track-condition .tc-trend{
-    display:block;
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 9.5px;
-    letter-spacing: 0.5px;
-    text-transform:none;
-    margin-top: 3px;
-  }
   .cond-fast{ color: var(--rail-green); }
   .cond-good{ color: var(--sky); }
   .cond-muddy{ color: var(--clay); }
@@ -592,9 +584,6 @@
     color: var(--parchment-dim);
     background: rgba(255,255,255,0.07);
   }
-  .trend-dry{ color: var(--rail-green); }
-  .trend-wet{ color: var(--silk-red); }
-  .trend-hold{ color: var(--parchment-dim); }
   .aqi-good{ color: var(--rail-green); }
   .aqi-moderate{ color: var(--tote-amber); }
   .aqi-usg{ color: var(--clay); }
@@ -2354,13 +2343,11 @@
         <div class="track-condition" id="dirtConditionTile">
           <span class="label">Main Track (Dirt)</span>
           <span class="tc-value skel" id="dirtConditionValue">—</span>
-          <span class="tc-trend skel" id="dirtTrend">—</span>
           <span class="tc-source" id="dirtSourceTag" hidden></span>
         </div>
         <div class="track-condition">
           <span class="label">Turf Course</span>
           <span class="tc-value skel" id="turfConditionValue">—</span>
-          <span class="tc-trend skel" id="turfTrend">—</span>
           <span class="tc-source" id="turfSourceTag" hidden></span>
         </div>
       </div>
@@ -3868,13 +3855,6 @@
       return { label: "Drying", arrow: "↑", cls: "trend-dry" };
     }
     return { label: "Holding", arrow: "→", cls: "trend-hold" };
-  }
-
-  function renderTrackTrend(trend){
-    [$("dirtTrend"), $("turfTrend")].forEach(el => {
-      el.className = `tc-trend ${trend.cls}`;
-      el.textContent = `${trend.arrow} ${trend.label}`;
-    });
   }
 
   // ---------- Weather log + historical lookup ----------
@@ -9279,7 +9259,6 @@
     renderStormBanner(rainOutlook);
 
     const trend = trackTrend(rainLast6h, rainPrior6h, c.wind_speed_10m ?? 0, c.cloud_cover ?? 0);
-    renderTrackTrend(trend);
     detectWeatherAlerts(c, rainToday, dirtLabel);
 
     // Hourly ticker — next 8 hours from now
@@ -9482,8 +9461,6 @@
     $("windDir").textContent = "—";
     $("dirtConditionValue").textContent = "—";
     $("turfConditionValue").textContent = "—";
-    $("dirtTrend").textContent = "—";
-    $("turfTrend").textContent = "—";
     $("dirtSourceTag").hidden = true;
     $("turfSourceTag").hidden = true;
     // Back to skeleton-loading, not a static "—" — every one of these is
@@ -9494,7 +9471,7 @@
     // real "loading again" moment for that badge too, same as everything
     // else in this block.)
     addSkeleton("aqiValue", "aqiCategory", "tideHeight", "tideState", "windSpeed", "windDir",
-      "dirtConditionValue", "turfConditionValue", "dirtTrend", "turfTrend",
+      "dirtConditionValue", "turfConditionValue",
       "biasScoreSpeedValue", "biasScoreCloserValue", "ocRailValue");
     // Cleared here (not just left to be overwritten) so a stale official
     // read from the PREVIOUS track can't flash onto the new one for the
