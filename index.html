@@ -3988,6 +3988,7 @@
     results.forEach(r => { byRace[r.raceNumber] = r; });
     lastResultsByRace = byRace;
     if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+    saveRaceDaySnapshot();
   }
 
   // Pre-shared-storage localStorage copy — read-only now, kept only as a
@@ -4679,6 +4680,32 @@
     renderEntriesPage(date, races);
     refreshRaceResults();
     refreshRaceChanges();
+    saveRaceDaySnapshot();
+  }
+
+  // Race Day Archive (worker job #15) — fire-and-forget, best-effort: a
+  // failed save should never block or error out the live view, same posture
+  // as every other secondary write in this app. Called after both the
+  // initial entries render (above) and every results poll (below), so an
+  // early-in-the-day view archives entries-only and a later view (this
+  // session's own live-refresh poll, or the next visitor) overwrites the
+  // same day's snapshot with whatever results have gone final since —
+  // self-updating with no extra scheduling needed. track/date are read
+  // synchronously here (before the fetch, not after awaiting it), so a
+  // track/date switch mid-flight can't corrupt which key this writes to.
+  // Skips tracks/dates with no actual races — nothing worth archiving.
+  function saveRaceDaySnapshot(){
+    if (!lastEntriesDate || !lastEntriesRaces.some(r => r.horses?.length)) return;
+    fetch(stableApiUrl("/raceday"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        track: activeTrack.id,
+        date: lastEntriesDate,
+        entries: lastEntriesRaces,
+        results: Object.values(lastResultsByRace),
+      }),
+    }).catch(err => console.error("Race day archive save failed", err));
   }
 
   // Per-race free-text notes (temp rail distance, gelding reports,
