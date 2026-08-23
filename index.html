@@ -1916,6 +1916,25 @@
   .stable-trainer-remove:hover{ color: var(--silk-red); }
   .stable-trainer-body{ padding: 0 14px 14px; border-top: 1px solid var(--panel-border); }
   .stable-trainer-body[hidden]{ display:none; }
+  /* Race Day Archive cards reuse .stable-trainer/-header/-toggle/-body
+     wholesale (same open/close card the Stable Tour tab already uses) —
+     these are just the archive-specific inner sections. */
+  .archive-summary{ color: var(--parchment-dim); font-weight: 400; font-size: 12.5px; margin-left: 2px; }
+  .archive-section{ margin-top: 14px; }
+  .archive-section:first-child{ margin-top: 14px; }
+  .archive-section-title{
+    font-family:'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 1px;
+    font-size: 12px; color: var(--tote-amber); margin-bottom: 8px;
+  }
+  .archive-weather-grid{ display:flex; flex-wrap:wrap; gap: 14px 24px; font-size: 13px; }
+  .archive-weather-grid div span{ color: var(--parchment-dim); margin-right: 4px; }
+  .archive-bias-line{ font-size: 13px; margin-bottom: 4px; }
+  .archive-race{ margin-bottom: 16px; }
+  .archive-race:last-child{ margin-bottom: 0; }
+  .archive-race-header{ font-size: 12.5px; color: var(--parchment-dim); margin-bottom: 6px; }
+  .archive-race-header strong{ color: var(--parchment); }
+  .archive-finish-line{ font-size: 12.5px; color: var(--rail-green); margin-top: 6px; }
+  .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
   .stable-save-btn{
     background: var(--tote-amber);
     color: var(--ink);
@@ -2616,6 +2635,7 @@
       <div class="log-tabs">
         <button type="button" class="log-tab active" id="logTabBtnDaily">Daily Log</button>
         <button type="button" class="log-tab" id="logTabBtnHistory">Historical Lookup</button>
+        <button type="button" class="log-tab" id="logTabBtnArchive">Race Day Archive</button>
       </div>
 
       <div class="log-tab-panel" id="logTabDaily">
@@ -2659,12 +2679,23 @@
         </div>
       </div>
 
+      <div class="log-tab-panel" id="logTabArchive" hidden>
+        <div class="log-controls">
+          <span class="log-note" id="archiveStatus">Loading saved race days…</span>
+        </div>
+        <div class="stable-trainer-list" id="archiveList"></div>
+      </div>
+
       <div class="info-disclosure" id="dailyLogInfo">
         Automatically logs the most recently completed day once it's over.
         <br><br>
         Daily Log is shared — every visitor sees the same entries for this track, auto-logged once a day completes.
         Track condition columns use the same dirt/turf heuristics as the live badges on the Dashboard, adapted to a
         full day rather than a rolling window.
+        <br><br>
+        Race Day Archive saves a snapshot of that day's entries + results as they're viewed live — an early-in-the-day
+        visit archives entries only, a later visit (or the next visitor) fills in results as races go final. Weather
+        and Bias rows shown alongside a saved day come straight from the Daily Log / Bias Tracker for that same date.
       </div>
     </div>
   </div>
@@ -5215,6 +5246,223 @@
         btn.textContent = expanded ? "Show less" : "Show more";
       });
     });
+  }
+
+  // ---------- Race Day Archive ----------
+  // Browses saved snapshots from the worker's job #15 (see
+  // saveRaceDaySnapshot() above for how a day gets saved — an early-in-the-
+  // day view archives entries only, a later poll fills in results as races
+  // go final). A genuinely different concern from the Daily Log/Historical
+  // Lookup tabs above (weather numbers only): this is entries+results,
+  // cross-referenced against the already-in-memory weatherLog/biasLog for
+  // the same date rather than duplicating either. Cards reuse the exact
+  // .stable-trainer open/close/chevron pattern the Stable Tour tab already
+  // has (see renderStableTour()) rather than inventing a new one.
+  //
+  // /raceday/dates deliberately returns bare date strings, not per-day
+  // race counts (see the worker's own comment on why) — so the collapsed
+  // card's one-line summary is built from weatherLog/biasLog instead, which
+  // cost nothing extra since both are already loaded for this track. The
+  // full entries+results payload is only fetched lazily, on first expand,
+  // and cached after that.
+  let archiveDates = [];
+  let archiveDatesLoaded = false;
+  let archiveOpenDates = new Set();
+  let archiveDayCache = {}; // date -> full /raceday response, lazy-loaded on first expand
+
+  async function loadRaceDayArchive(){
+    const trackId = activeTrack.id;
+    archiveDatesLoaded = false;
+    archiveOpenDates = new Set();
+    archiveDayCache = {};
+    renderRaceDayArchive();
+    let dates = [];
+    try{
+      const res = await fetch(stableApiUrl(`/raceday/dates?track=${encodeURIComponent(trackId)}`), { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      dates = Array.isArray(data.dates) ? data.dates : [];
+    } catch(err){
+      console.error("Race Day Archive dates fetch failed", err);
+    }
+    if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+    archiveDates = dates;
+    archiveDatesLoaded = true;
+    renderRaceDayArchive();
+  }
+
+  // One-line collapsed-card summary — today's high + dirt condition + dirt
+  // bias lean, whichever of those three actually have a value for this
+  // date. Deliberately terse (this is a scanning list of many days, not a
+  // single day's own detail view).
+  function archiveCardSummary(date){
+    const w = weatherLog.find(e => e.date === date);
+    const b = biasLog.find(e => e.date === date);
+    const bits = [];
+    if (w?.tempHigh != null) bits.push(`High ${Math.round(w.tempHigh)}°F`);
+    if (w?.dirtConditionLabel) bits.push(w.dirtConditionLabel);
+    const dirtBias = b ? entryDirtBias(b) : null;
+    if (dirtBias) bits.push(dirtBias);
+    return bits.join(" · ");
+  }
+
+  function archiveWeatherSection(date){
+    const entry = weatherLog.find(e => e.date === date);
+    if (!entry){
+      return `<div class="archive-section"><div class="archive-section-title">Weather</div><div class="archive-empty">No Daily Log entry for this date.</div></div>`;
+    }
+    const bits = [
+      entry.tempHigh != null ? `<div><span>High</span>${Math.round(entry.tempHigh)}°F</div>` : "",
+      entry.tempLow != null ? `<div><span>Low</span>${Math.round(entry.tempLow)}°F</div>` : "",
+      entry.windAvg != null ? `<div><span>Wind avg</span>${Math.round(entry.windAvg)} mph</div>` : "",
+      entry.windGustPeak != null ? `<div><span>Peak gust</span>${Math.round(entry.windGustPeak)} mph</div>` : "",
+      entry.rainTotal != null ? `<div><span>Rain</span>${Number(entry.rainTotal).toFixed(2)} in</div>` : "",
+      entry.dirtConditionLabel ? `<div><span>Dirt</span>${escapeHtml(entry.dirtConditionLabel)}</div>` : "",
+      entry.turfConditionLabel ? `<div><span>Turf</span>${escapeHtml(entry.turfConditionLabel)}</div>` : "",
+    ].filter(Boolean).join("");
+    return `
+      <div class="archive-section">
+        <div class="archive-section-title">Weather</div>
+        <div class="archive-weather-grid">${bits}</div>
+        ${entry.conditionsDesc ? `<div class="archive-bias-line">${escapeHtml(entry.conditionsDesc)}</div>` : ""}
+      </div>`;
+  }
+
+  function archiveBiasSection(date){
+    const entry = biasLog.find(e => e.date === date);
+    if (!entry){
+      return `<div class="archive-section"><div class="archive-section-title">Bias</div><div class="archive-empty">No Bias Tracker entry for this date.</div></div>`;
+    }
+    const dirtBias = entryDirtBias(entry);
+    const turfBias = entryTurfBias(entry);
+    const dirtStyleClass = BIAS_STYLE_CLASS[dirtBias] ?? "bias-neutral";
+    const turfStyleClass = BIAS_STYLE_CLASS[turfBias] ?? "bias-neutral";
+    return `
+      <div class="archive-section">
+        <div class="archive-section-title">Bias</div>
+        <div class="archive-bias-line">
+          ${dirtBias ? `Dirt: <span class="bias-tag ${dirtStyleClass}">${escapeHtml(dirtBias)}</span>` : ""}
+          ${turfBias ? ` &nbsp; Turf: <span class="bias-tag ${turfStyleClass}">${escapeHtml(turfBias)}</span>` : ""}
+        </div>
+        ${entry.railNote ? `<div class="archive-bias-line">Rail: ${escapeHtml(entry.railNote)}</div>` : ""}
+        ${entry.notes ? `<div class="archive-bias-line">${escapeHtml(entry.notes)}</div>` : ""}
+      </div>`;
+  }
+
+  // One race's compact read-only card: PP/horse/jockey/ML for the field,
+  // plus a one-line top-3 finish (with win payout) folded in underneath if
+  // that race's saved results were final — deliberately not the live
+  // Entries page's full multi-table results card (current odds, full
+  // payouts table), since this view is scanning a whole day's races at
+  // once, not focused on one.
+  function archiveRaceHtml(entryRace, result){
+    const metaBits = [entryRace.purse, entryRace.raceType].filter(Boolean).join(" ");
+    const distBits = [entryRace.distanceLabel, entryRace.surface].filter(Boolean).join(" · ");
+    const timeLabel = formatPostTimeLabel(entryRace.postTimeIso);
+    const rows = (entryRace.horses || []).map(h => `
+      <tr class="${h.scratched ? "entries-scratched" : ""}">
+        <td>${escapeHtml(h.postPosition || "—")}</td>
+        <td>${escapeHtml(h.name || "—")}</td>
+        <td>${escapeHtml(h.jockey || "—")}</td>
+        <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.mlOdds || h.currentOdds || "—")}</td>
+      </tr>
+    `).join("");
+    let finishHtml = "";
+    if (result?.isFinal && result.finishOrder?.length){
+      const top = result.finishOrder.slice(0, 3)
+        .map(f => `${f.finishPosition}) ${escapeHtml(f.horseName || "—")}${f.winPayout ? ` (${escapeHtml(f.winPayout)})` : ""}`)
+        .join("  ");
+      finishHtml = `<div class="archive-finish-line">Finish: ${top}</div>`;
+    }
+    return `
+      <div class="archive-race">
+        <div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong> — ${escapeHtml(timeLabel || "—")}${metaBits ? " — " + escapeHtml(metaBits) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>
+        <div class="log-table-wrap">
+          <table class="log-table entries-horse-table">
+            <thead><tr><th>PP</th><th>Horse</th><th>Jockey</th><th>ML</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${finishHtml}
+      </div>`;
+  }
+
+  function renderRaceDayArchive(){
+    const status = $("archiveStatus");
+    const list = $("archiveList");
+    if (!status || !list) return;
+    if (!archiveDatesLoaded){
+      status.textContent = "Loading saved race days…";
+      list.innerHTML = "";
+      return;
+    }
+    if (!archiveDates.length){
+      status.textContent = `No saved race days yet for ${activeTrack.shortName} — they're archived automatically as you view Entries.`;
+      list.innerHTML = "";
+      return;
+    }
+    status.textContent = `${archiveDates.length} saved day${archiveDates.length === 1 ? "" : "s"} for ${activeTrack.shortName}.`;
+    list.innerHTML = archiveDates.map(date => {
+      const isOpen = archiveOpenDates.has(date);
+      const cached = archiveDayCache[date];
+      let bodyHtml = "";
+      if (isOpen){
+        if (!cached){
+          bodyHtml = `<div class="archive-empty">Loading…</div>`;
+        } else {
+          const resultsByRace = {};
+          (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
+          const racesHtml = (cached.entries || []).length
+            ? cached.entries.map(r => archiveRaceHtml(r, resultsByRace[r.raceNumber])).join("")
+            : `<div class="archive-empty">No entries saved for this date.</div>`;
+          bodyHtml = `
+            ${archiveWeatherSection(date)}
+            ${archiveBiasSection(date)}
+            <div class="archive-section">
+              <div class="archive-section-title">Entries &amp; Results</div>
+              ${racesHtml}
+            </div>`;
+        }
+      }
+      const summary = archiveCardSummary(date);
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}" data-archive-date="${date}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-archive-date="${date}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${date}</span>
+              ${summary ? `<span class="archive-summary">${escapeHtml(summary)}</span>` : ""}
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>${bodyHtml}</div>
+        </div>`;
+    }).join("");
+
+    list.querySelectorAll(".stable-trainer-toggle").forEach(btn => {
+      btn.addEventListener("click", () => toggleArchiveDay(btn.dataset.archiveDate));
+    });
+  }
+
+  async function toggleArchiveDay(date){
+    if (archiveOpenDates.has(date)){
+      archiveOpenDates.delete(date);
+      renderRaceDayArchive();
+      return;
+    }
+    archiveOpenDates.add(date);
+    renderRaceDayArchive(); // shows "Loading…" immediately
+    if (archiveDayCache[date]) return; // already cached from a previous expand
+    const trackId = activeTrack.id;
+    try{
+      const res = await fetch(stableApiUrl(`/raceday?track=${encodeURIComponent(trackId)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      archiveDayCache[date] = await res.json();
+    } catch(err){
+      console.error("Race Day Archive day fetch failed", err);
+      archiveDayCache[date] = { entries: [], results: [] }; // avoid retry-looping forever on a real failure
+    }
+    if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+    renderRaceDayArchive();
   }
 
   // ---------- Bias Tracker trends ----------
@@ -9119,6 +9367,7 @@
       renderBiasTable();
       renderBiasTrends();
     });
+    loadRaceDayArchive(); // always reload, same "regardless of which tab is visible" rule as weatherLog/biasLog above
     alertState = loadAlertState();
 
     // Cheap re-flag of already-fetched news items under the new track name —
@@ -9210,6 +9459,7 @@
   const LOG_TABS = [
     { btn: "logTabBtnDaily", panel: "logTabDaily" },
     { btn: "logTabBtnHistory", panel: "logTabHistory" },
+    { btn: "logTabBtnArchive", panel: "logTabArchive" },
   ];
   function setActiveLogTab(activeBtnId){
     LOG_TABS.forEach(({ btn, panel }) => {
@@ -9219,6 +9469,13 @@
     });
   }
   LOG_TABS.forEach(({ btn }) => $(btn).addEventListener("click", () => setActiveLogTab(btn)));
+  // Lazy-load on first visit to this sub-tab rather than on every page
+  // load — switchTrack() below also reloads it unconditionally on a track
+  // switch, same "always refresh regardless of which tab is visible" rule
+  // weatherLog/biasLog already follow there.
+  $("logTabBtnArchive").addEventListener("click", () => {
+    if (!archiveDatesLoaded) loadRaceDayArchive();
+  });
 
   $("logNowBtn").addEventListener("click", logSnapshotNow);
   $("logMonthSelect").addEventListener("change", (e) => {
@@ -9321,6 +9578,8 @@
     renderBiasTable();
     renderBiasTrends();
   });
+
+  loadRaceDayArchive();
 
   stableSeenArticles = loadStableSeenArticles();
   $("stableFeedUrlInput").value = loadStableFeedUrl();
