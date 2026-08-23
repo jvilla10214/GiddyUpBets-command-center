@@ -5368,12 +5368,14 @@
   let archiveDatesLoaded = false;
   let archiveOpenDates = new Set();
   let archiveDayCache = {}; // date -> full /raceday response, lazy-loaded on first expand
+  let archiveSelectedRaceByDate = {}; // date -> raceNumber, so each open day card remembers its own tab
 
   async function loadRaceDayArchive(){
     const trackId = activeTrack.id;
     archiveDatesLoaded = false;
     archiveOpenDates = new Set();
     archiveDayCache = {};
+    archiveSelectedRaceByDate = {};
     renderRaceDayArchive();
     let dates = [];
     try{
@@ -5511,9 +5513,31 @@
         } else {
           const resultsByRace = {};
           (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
-          const racesHtml = (cached.entries || []).length
-            ? cached.entries.map(r => archiveRaceHtml(r, resultsByRace[r.raceNumber])).join("")
-            : `<div class="archive-empty">No entries saved for this date.</div>`;
+          const races = cached.entries || [];
+          let racesHtml;
+          if (!races.length){
+            racesHtml = `<div class="archive-empty">No entries saved for this date.</div>`;
+          } else {
+            if (archiveSelectedRaceByDate[date] == null || !races.some(r => r.raceNumber === archiveSelectedRaceByDate[date])){
+              archiveSelectedRaceByDate[date] = races[0].raceNumber;
+            }
+            const selectedRace = archiveSelectedRaceByDate[date];
+            const tabsHtml = races.map(r => {
+              const timeLabel = formatPostTimeLabel(r.postTimeIso);
+              const isFinal = !!resultsByRace[r.raceNumber]?.isFinal;
+              return `
+                <button type="button" class="entries-race-tab archive-race-tab${r.raceNumber === selectedRace ? " active" : ""}" data-archive-date="${date}" data-race="${r.raceNumber}">
+                  <span class="entries-race-tab-num">R${r.raceNumber}${isFinal ? ` <span class="entries-race-tab-final">FINAL</span>` : ""}</span>
+                  <span class="entries-race-tab-time">${escapeHtml(timeLabel || "—")}</span>
+                </button>
+              `;
+            }).join("");
+            const race = races.find(r => r.raceNumber === selectedRace);
+            racesHtml = `
+              <div class="entries-race-tabs">${tabsHtml}</div>
+              ${archiveRaceHtml(race, resultsByRace[race.raceNumber])}
+            `;
+          }
           bodyHtml = `
             ${archiveWeatherSection(date)}
             ${archiveBiasSection(date)}
@@ -5539,6 +5563,12 @@
 
     list.querySelectorAll(".stable-trainer-toggle").forEach(btn => {
       btn.addEventListener("click", () => toggleArchiveDay(btn.dataset.archiveDate));
+    });
+    list.querySelectorAll(".archive-race-tab").forEach(btn => {
+      btn.addEventListener("click", () => {
+        archiveSelectedRaceByDate[btn.dataset.archiveDate] = Number(btn.dataset.race);
+        renderRaceDayArchive();
+      });
     });
   }
 
