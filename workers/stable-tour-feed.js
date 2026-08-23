@@ -235,7 +235,12 @@
 //    comes back as a flat alsoRan name list, which NYRA's shape has no
 //    equivalent for — carried as its own field rather than forced into fake
 //    finishOrder rows. Read-only, no storage, short cache (a race can go
-//    final mid-poll-interval).
+//    final mid-poll-interval). Now also covers all 9 Sporting Life tracks
+//    via fetchSportingLifeResultsDay() — a separate two-step lookup through
+//    Sporting Life's /racing/results/ endpoints (not /racing/racecards/,
+//    which only ever serves "today" — see that function's own comment).
+//    isFinal there is race_stage being RESULT or WEIGHEDIN, this source's
+//    own equivalent of "does a finish table exist."
 //
 // 14. Del Mar changes/scratches notes (GET /changes?track=delmar&date=
 //    YYYY-MM-DD) — DMTC's own page for Equibase's "Changes & Scratches"
@@ -269,13 +274,41 @@
 //    can build a browsable date list without fetching every day's full
 //    payload just to populate it.
 //
+// 16. Tracked-horse entry alert emails (Cron Trigger -> scheduled(), plus a
+//    manual GET /debug-run-scheduled for on-demand testing without waiting
+//    for the schedule) — scans the next 7 days (today included) of Saratoga
+//    and Belmont entries via the same fetchNyraEntriesDay() job #6 already
+//    uses. For every non-scratched horse whose trainer's last name matches
+//    a tracked Stable Tour trainer (readState(), same list job #1 manages)
+//    AND that already has at least one matching stable note
+//    (notesForHorse(), a direct port of the client's findHorseStableNotes()
+//    matching rules, reusing this file's own lastNameKey() for the same
+//    forgiving last-name-only trainer match) — a tracked horse with zero
+//    notes on file doesn't email at all, deliberately, since the whole
+//    point is surfacing notes at entry time — it emails NOTIFY_EMAILS the
+//    race's when/where/conditions plus every one of those notes via
+//    Resend's API. raceNotifyKvKey() dedupes so the same horse+race only
+//    ever emails once, TTL'd at 30 days so the keys don't accumulate
+//    forever; a no-notes horse is deliberately left un-dedup'd so a note
+//    added later in the entry's life (before its date passes) still
+//    triggers the email once it exists. Belmont is wired into
+//    NYRA_ENTRIES_BASE/ENTRIES_SOURCE_BY_TRACK for this even though its own
+//    markup isn't verified yet (its meet is dark until Sept 18, 2026) —
+//    safe no-op until then, since parseNyraRaceFragment() already returns
+//    null cleanly when there's no race to parse.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, #9, and #15 to work — jobs #2, #4, #6, #7, #8, #10,
-// #11, #12, #13, and #14 (fetch-and-parse only, no storage) work without it.
-// Job #8 additionally requires a PIRATE_WEATHER_API_KEY secret (Worker
-// settings -> Variables and Secrets -> Add, type "Secret") — get a free key
-// at pirateweather.net.
+// for jobs #1, #3, #5, #9, #15, and #16 to work — jobs #2, #4, #6, #7, #8,
+// #10, #11, #12, #13, and #14 (fetch-and-parse only, no storage) work
+// without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY secret
+// (Worker settings -> Variables and Secrets -> Add, type "Secret") — get a
+// free key at pirateweather.net. Job #16 additionally requires a
+// RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
+// at resend.com) and a Cron Trigger (Worker settings -> Triggers -> Cron
+// Triggers -> Add Cron Trigger, e.g. "0 */3 * * *" for every 3 hours) —
+// there's no wrangler.toml in this repo to declare one in code, so this one
+// has to be added by hand in the dashboard.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -337,6 +370,16 @@ const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 // this Worker at all, not just convention.
 const NWS_USER_AGENT = "GiddyUpBetsCommandCenter/1.0 (https://jvilla10214.github.io/GiddyUpBets-command-center/; contact: jvilla10214@gmail.com)";
 const WRITE_PASSPHRASE = "giddyup";
+// Job #16 — entry-alert email recipients/sender. Not secrets (an email
+// address isn't sensitive the way an API key is), so these are plain
+// constants here rather than env bindings — edit and redeploy to change
+// them. An array (Resend's API accepts `to` as one) even though there's
+// currently one recipient, so adding another later is a one-line edit.
+// RESEND_FROM_EMAIL defaults to Resend's own onboarding sender, which only
+// works for low-volume/testing use — swap it for a verified sending
+// domain's address once one exists (see the Deploy note above).
+const NOTIFY_EMAILS = ["jvilla10214@gmail.com"];
+const RESEND_FROM_EMAIL = "GiddyUpBets Alerts <onboarding@resend.dev>";
 
 // Job #12 — the visualiser page itself fetches this same URL client-side on
 // a timer; the Referer is what its "Unlicensed Direct Access" check is
@@ -355,6 +398,14 @@ export default {
       // "error code: 1101" page, which gives no clue what actually broke.
       return json({ error: `Unhandled: ${err.message}`, stack: String(err.stack || "").slice(0, 500) }, 500);
     }
+  },
+  // Job #16's actual Cron Trigger entry point — see /debug-run-scheduled for
+  // the on-demand equivalent used to test this without waiting on the
+  // schedule.
+  async scheduled(event, env, ctx) {
+    event.waitUntil(
+      runEntryAlerts(env).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
+    );
   },
 };
 
@@ -741,7 +792,9 @@ async function handleRequest(request, env) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
       let result;
       try {
-        result = resultsSource === "dmtc" ? await fetchDmtcResultsDay(date) : await fetchNyraResultsDay(track, date);
+        result = resultsSource === "dmtc" ? await fetchDmtcResultsDay(date)
+          : resultsSource === "sportinglife" ? await fetchSportingLifeResultsDay(track, date)
+          : await fetchNyraResultsDay(track, date);
       } catch (err) {
         return json({ error: `Results fetch failed: ${err.message}` }, 502);
       }
@@ -814,6 +867,44 @@ async function handleRequest(request, env) {
         .reverse()
         .slice(0, 60);
       return json({ track, dates }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual trigger for job #16's runEntryAlerts(), gated the same way as
+    // every other write route — this sends real email, so it isn't left
+    // open. Exists because there's no way to fire a real Cron Trigger
+    // on-demand for testing, and doubles as a permanent "run it right now"
+    // convenience afterward (same idea as the Daily Log's own "+ Log
+    // Today's Snapshot Now" manual-trigger button).
+    if (url.pathname === "/debug-run-scheduled" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      let result;
+      try {
+        result = await runEntryAlerts(env);
+      } catch (err) {
+        return json({ error: `Entry alerts run failed: ${err.message}` }, 500);
+      }
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Wipes every job #16 dedup record (see raceNotifyKvKey()) — a reset
+    // button for when the matching/gating rules change underneath already-
+    // set keys (e.g. the note-gating change: horses emailed under the old
+    // "send regardless of notes" rule already have a dedup key, which would
+    // otherwise block a legitimate future email once a note actually gets
+    // added for them). Paginated since STABLE_KV.list() caps at 1000 keys
+    // per call. Same passphrase gate as every other route that mutates
+    // shared state.
+    if (url.pathname === "/debug-clear-race-notify" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      let cursor;
+      let cleared = 0;
+      do {
+        const listed = await env.STABLE_KV.list({ prefix: "racenotify:", cursor });
+        await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
+        cleared += listed.keys.length;
+        cursor = listed.list_complete ? undefined : listed.cursor;
+      } while (cursor);
+      return json({ cleared }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/pp-stats" && request.method === "GET") {
@@ -989,6 +1080,18 @@ function racedayKvKey(track, date) {
   const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
   const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
   return `raceday:${safeTrack}:${safeDate}`;
+}
+
+// Job #16's dedup record — one KV entry per horse per race, so a horse that
+// stays entered across several cron runs (or gets rechecked on a later date
+// as its card firms up) only ever triggers one email. TTL'd (see
+// runEntryAlerts()) rather than kept forever, since once a date is long
+// past there's no reason to keep remembering it was already notified.
+function raceNotifyKvKey(track, date, raceNumber, horseName) {
+  const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
+  const safeHorse = (horseName || "").trim().toLowerCase().replace(/[^a-z0-9]/gi, "").slice(0, 60);
+  return `racenotify:${safeTrack}:${safeDate}:${raceNumber}:${safeHorse}`;
 }
 
 async function readBiasLog(env, track) {
@@ -1459,17 +1562,23 @@ function parseTurftraxGoingReport(payload, courseLabel) {
 // scratches. There's no single "whole day" fragment: each response embeds a
 // nav strip listing every race number carded that day (1..N), so the client
 // here fetches race=1 first, reads N off that nav, then fetches the rest in
-// parallel. Saratoga only — the only NYRA entries URL this app has verified
-// end-to-end (Belmont/Aqueduct likely share this same rdl/race/ shape but
-// that hasn't actually been checked).
-const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
+// parallel. Saratoga is fully verified end-to-end. Belmont is wired in on
+// the same URL shape (nyra.com/belmont/rdl/race/...) for job #16's entry
+// alerts — confirmed live (200, real HTML) but NOT verified against an
+// actual race card, since Belmont's meet is dark until Sept 18, 2026;
+// parseNyraRaceFragment() returns null cleanly on a card-less day, so this
+// is a safe no-op until then, not a guess that could misfire. Re-verify
+// against a real card once that meet reopens, same rule as every other
+// track source in this file.
+const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga", belmont: "https://www.nyra.com/belmont" };
 
 // Maps a track id to which entries scraper handles it — checked before
 // either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
 // here only once its source has actually been fetched and its markup
-// verified (same rule as every other scrape in this file).
+// verified (same rule as every other scrape in this file) — belmont is the
+// one deliberate exception, see NYRA_ENTRIES_BASE's own comment above.
 const ENTRIES_SOURCE_BY_TRACK = {
-  saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth",
+  saratoga: "nyra", belmont: "nyra", delmar: "dmtc", monmouth: "monmouth",
   york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
   curragh: "sportinglife", longchamp: "sportinglife",
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
@@ -1479,7 +1588,12 @@ const ENTRIES_SOURCE_BY_TRACK = {
 // map (not reused from ENTRIES_SOURCE_BY_TRACK) because a track can have
 // entries wired up before its results page has actually been verified, or
 // vice versa; the two shouldn't silently move in lockstep.
-const RESULTS_SOURCE_BY_TRACK = { saratoga: "nyra", delmar: "dmtc" };
+const RESULTS_SOURCE_BY_TRACK = {
+  saratoga: "nyra", delmar: "dmtc",
+  york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
+  curragh: "sportinglife", longchamp: "sportinglife",
+  shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
+};
 
 // Same idea again, for the /changes route (DMTC's free-text race-notes
 // feed — see parseDmtcChanges()'s own file-level comment). No NYRA
@@ -2280,6 +2394,114 @@ async function fetchSportingLifeEntriesDay(track, date) {
   return { date, races: mapped };
 }
 
+// ---------- Sporting Life results parser ----------
+// Same 9 tracks as fetchSportingLifeEntriesDay() above, verified directly
+// against real completed cards (York, 2026-08-22). Two-step lookup again,
+// but through the *results* endpoints, not racecards — /racing/racecards/
+// <date> silently redirects to today's card for any other date (verified:
+// a past-date request 307s to the bare /racing/racecards path), so past
+// dates need /racing/results/<date> instead, which serves real historical
+// listings. That listing gives each race's id/time/race_stage but no
+// finish order or payouts — those need one more fetch per race, at
+// /racing/results/<date>/<any-course-slug>/<raceId>/<any-name-slug> (both
+// slugs are decorative, exactly like fast-cards' course-slug — verified
+// directly: a request with deliberately wrong slugs for both still 200s).
+// Only fetched for races that have actually run (see
+// SPORTINGLIFE_FINAL_STAGES) — no point spending a request per race on a
+// card that hasn't run yet, since it'd come back with an empty result
+// anyway.
+//
+// race_stage values seen on a real live day's meetings (Deauville/Woodbine,
+// 2026-08-23): DORMANT and GOINGDOWN before a race runs, then RESULT
+// (result posted) and WEIGHEDIN (formally official) once it has — both of
+// those last two are treated as final here, same as how NYRA's own
+// isFinal is "does a finish table exist" rather than a guess off scheduled
+// post time.
+const SPORTINGLIFE_FINAL_STAGES = new Set(["RESULT", "WEIGHEDIN"]);
+
+// UK tote payouts come back as bare "10.5 GBP"/"2.9 GBP,3.0 GBP,2.1 GBP"
+// strings, not pre-formatted currency — this both parses and formats them
+// to match the £-prefixed style used everywhere else results are shown.
+function sportingLifePoundAmount(raw) {
+  if (!raw) return null;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? `£${n.toFixed(2)}` : null;
+}
+
+// UK racing has no US-style separate win/place/show tiers — a tote place
+// dividend applies to however many places actually paid (number_of_placed_
+// rides, usually 2-4 depending on field size), not a fixed top-3. Mapped
+// onto this app's existing finishOrder shape as best fits: the winner's own
+// tote_win becomes winPayout, and each placed finisher (by position, not
+// just top 3) gets its own placePayout off the comma-separated place_win
+// list — showPayout is left null throughout since that specific three-way
+// US split has no real UK equivalent.
+function sportingLifeMapResultRace(raceDetail, raceNumber){
+  const placeValues = (raceDetail.place_win || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const finishOrder = (raceDetail.rides || [])
+    // A non-runner carries finish_position: 0, not null — checking
+    // ride_status (same "RUNNER" check fetchSportingLifeEntriesDay's own
+    // isRunner uses) is what actually excludes them; a bare != null check
+    // let them sort to the front of the field as fake "0th place" finishers.
+    .filter((r) => r.ride_status === "RUNNER" && r.finish_position != null)
+    .sort((a, b) => a.finish_position - b.finish_position)
+    .map((r) => ({
+      finishPosition: r.finish_position,
+      postPosition: r.draw_number != null ? String(r.draw_number) : null,
+      horseName: r.horse?.name || null,
+      winPayout: r.finish_position === 1 ? sportingLifePoundAmount(raceDetail.tote_win) : null,
+      placePayout: sportingLifePoundAmount(placeValues[r.finish_position - 1]),
+      showPayout: null,
+    }));
+  const payouts = [];
+  const addPayout = (wagerType, raw) => {
+    const amount = sportingLifePoundAmount(raw);
+    if (amount) payouts.push({ wagerAmount: null, wagerType, winningCombo: null, payout: amount });
+  };
+  addPayout("Exacta", raceDetail.exacta_win);
+  addPayout("Trifecta", raceDetail.trifecta);
+  addPayout("Tricast", raceDetail.tricast);
+  addPayout("Straight Forecast", raceDetail.straight_forecast);
+  return { raceNumber, isFinal: finishOrder.length > 0, finishOrder, payouts };
+}
+
+async function fetchSportingLifeResultsDay(track, date) {
+  const courseName = SPORTINGLIFE_COURSE_NAME_BY_TRACK[track];
+  if (!courseName) throw new Error("Not supported for this track");
+
+  const listing = await sportingLifeFetchJson(`/racing/results/${date}`);
+  const meetings = listing?.props?.pageProps?.meetings || [];
+  const meeting = meetings.find((m) => m.meeting_summary?.course?.name === courseName);
+  if (!meeting || meeting.meeting_summary.date !== date) {
+    return { date, races: [] }; // course didn't run this day — a real "nothing to show", not an error
+  }
+
+  // Same post-time sort + 1-based renumbering as fetchSportingLifeEntriesDay
+  // — the two are fetched from different Sporting Life endpoints but cover
+  // the identical physical card, so numbering them the same way is what
+  // lets the client match an entries race to its result by raceNumber.
+  const races = (meeting.races || [])
+    .slice()
+    .sort((a, b) => (a.time || "").localeCompare(b.time || ""))
+    .map((r, i) => ({ ...r, raceNumber: i + 1 }));
+
+  const results = await Promise.all(races.map(async (r) => {
+    const notYetRun = { raceNumber: r.raceNumber, isFinal: false, finishOrder: [], payouts: [] };
+    if (!SPORTINGLIFE_FINAL_STAGES.has(r.race_stage)) return notYetRun;
+    const raceId = r.race_summary_reference?.id;
+    if (!raceId) return notYetRun;
+    try {
+      const detail = await sportingLifeFetchJson(`/racing/results/${date}/x/${raceId}/x`);
+      const raceDetail = detail?.props?.pageProps?.race;
+      return raceDetail ? sportingLifeMapResultRace(raceDetail, r.raceNumber) : notYetRun;
+    } catch (err) {
+      return notYetRun; // one race's detail fetch failing shouldn't fail the whole day
+    }
+  }));
+
+  return { date, races: results };
+}
+
 // ---------- TDN Saratoga Notebook parser ----------
 // Source verified directly: unlike thisishorseracing.com's Stable Tour
 // pieces (job #2 above — one trainer per article, clean per-horse markers),
@@ -2431,4 +2653,140 @@ async function fetchTdnNotebook() {
   }
 
   return { source: TDN_NOTEBOOK_FEED_URL, fetchedAt: new Date().toISOString(), articles };
+}
+
+// ---------- Job #16: tracked-horse entry alert emails ----------
+
+// America/New_York "today," same Intl.DateTimeFormat-parts approach as
+// londonNowParts() above (job #12) — Saratoga and Belmont are both this one
+// timezone, so no per-track lookup is needed the way the client's
+// activeTrack.timezone is.
+function nyNowParts() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+
+function shiftDateStrServer(dateStr, deltaDays) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + deltaDays);
+  return dt.toISOString().slice(0, 10);
+}
+
+// Today + the next 6 days — same 7-day window as the client's own Entries
+// date picker (entriesDateOptions() in index.html), since that's the range
+// NYRA entries realistically post/firm up within.
+function entryAlertDateWindow() {
+  const { year, month, day } = nyNowParts();
+  const todayStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return Array.from({ length: 7 }, (_, i) => shiftDateStrServer(todayStr, i));
+}
+
+// Direct port of index.html's findHorseStableNotes() — trainer match reuses
+// this file's own lastNameKey() (same forgiving last-name-only comparison,
+// for the same reason: Entries' trainer field comes from NYRA's own scraped
+// text, not guaranteed to string-match a tracked trainer's free-typed name
+// exactly). Horse name match stays exact (case/whitespace-insensitive only).
+function notesForHorse(notes, trainer, horseName) {
+  if (!trainer || !horseName) return [];
+  const wantTrainer = lastNameKey(trainer);
+  const wantHorse = horseName.trim().toLowerCase();
+  return notes
+    .filter((n) => n.horse && n.trainer && lastNameKey(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse)
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+}
+
+// "1:51 PM" from NYRA's raw post-time string — same logic as
+// formatPostTimeLabel() in index.html, ported here since the worker has no
+// access to client-side functions.
+function formatPostTimeLabelServer(iso) {
+  const m = iso && iso.match(/T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${m[2]} ${ampm}`;
+}
+
+function escapeHtmlForEmail(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+const NYRA_TRACK_LABEL = { saratoga: "Saratoga", belmont: "Belmont" };
+
+async function sendEntryAlertEmail(env, track, date, race, horse, notes) {
+  const trackLabel = NYRA_TRACK_LABEL[track] || track;
+  const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
+  const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
+  const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
+  // runEntryAlerts() only calls this once notes.length is already confirmed
+  // non-empty — see its own comment on why a note-less entry doesn't email.
+  const notesHtml = notes.map((n) => `<li><strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}): ${escapeHtmlForEmail(n.note)}</li>`).join("");
+  const subject = `${horse.name || "Horse"} entered — ${trackLabel} R${race.raceNumber}, ${date}`;
+  const html = `
+    <h2>${escapeHtmlForEmail(horse.name || "Horse")} entered — ${escapeHtmlForEmail(trackLabel)} R${race.raceNumber}, ${date}</h2>
+    <p><strong>When/where:</strong> ${escapeHtmlForEmail(trackLabel)}, ${date}, Race ${race.raceNumber}, post time ${escapeHtmlForEmail(postTime)}</p>
+    <p><strong>Conditions:</strong> ${escapeHtmlForEmail(conditionsBits || "—")}${distBits ? ` — ${escapeHtmlForEmail(distBits)}` : ""}</p>
+    <p><strong>Trainer:</strong> ${escapeHtmlForEmail(horse.trainer || "—")} &nbsp; <strong>Jockey:</strong> ${escapeHtmlForEmail(horse.jockey || "—")}</p>
+    <p><strong>Stable Notes:</strong></p>
+    <ul>${notesHtml}</ul>
+  `;
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: NOTIFY_EMAILS, subject, html }),
+  });
+  if (!res.ok) throw new Error(`Resend HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
+}
+
+// The actual job: scans NYRA_ENTRIES_BASE's tracks (Saratoga + Belmont) over
+// entryAlertDateWindow(), and for every non-scratched horse whose trainer is
+// tracked, sends (at most once — see raceNotifyKvKey()) an email with that
+// race's info plus any matching stable notes. Called from both the real
+// Cron Trigger (scheduled(), below) and the manual /debug-run-scheduled
+// route, so this is the one place the actual logic lives.
+async function runEntryAlerts(env) {
+  const state = await readState(env);
+  if (!state.trainers.length) return { checked: 0, sent: 0 }; // nothing to match against
+  const trackedLastNames = new Set(state.trainers.map(lastNameKey));
+  const dates = entryAlertDateWindow();
+  let checked = 0;
+  let sent = 0;
+  for (const track of Object.keys(NYRA_ENTRIES_BASE)) {
+    for (const date of dates) {
+      let result;
+      try {
+        result = await fetchNyraEntriesDay(track, date);
+      } catch (err) {
+        console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
+        continue;
+      }
+      for (const race of result.races || []) {
+        for (const horse of race.horses || []) {
+          checked++;
+          if (horse.scratched) continue;
+          if (!horse.trainer || !trackedLastNames.has(lastNameKey(horse.trainer))) continue;
+          // Only worth an email if there's actually a note to show — and
+          // deliberately NOT dedup-marked when skipped for this reason (see
+          // below), so a note added later in the entry's life still emails.
+          const notes = notesForHorse(state.notes, horse.trainer, horse.name);
+          if (!notes.length) continue;
+          const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
+          const already = await env.STABLE_KV.get(key);
+          if (already) continue;
+          try {
+            await sendEntryAlertEmail(env, track, date, race, horse, notes);
+            await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
+            sent++;
+          } catch (err) {
+            console.error(`Entry alerts: send failed for ${horse.name} (${track} ${date} R${race.raceNumber})`, err.message);
+          }
+        }
+      }
+    }
+  }
+  return { checked, sent };
 }

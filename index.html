@@ -5459,6 +5459,37 @@
     const metaBits = [entryRace.purse, entryRace.raceType].filter(Boolean).join(" ");
     const distBits = [entryRace.distanceLabel, entryRace.surface].filter(Boolean).join(" · ");
     const timeLabel = formatPostTimeLabel(entryRace.postTimeIso);
+    const headerHtml = `<div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong>${timeLabel ? " — " + escapeHtml(timeLabel) : ""}${metaBits ? " — " + escapeHtml(metaBits) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>`;
+
+    // entries.horses is null (not just an empty array) specifically when
+    // this date's entries source can't serve historical dates at all
+    // (DMTC-sourced tracks like Del Mar — see fetchDmtcEntriesDay()'s own
+    // comment) — a results-only race, not a card that genuinely had zero
+    // entries. Shows the full finish list instead of an empty
+    // PP/Horse/Jockey/ML table nobody asked to see.
+    if (entryRace.horses == null){
+      if (!result?.isFinal || !result.finishOrder?.length){
+        return `<div class="archive-race">${headerHtml}<div class="archive-empty">No entries or results saved for this race.</div></div>`;
+      }
+      const finishRows = result.finishOrder.map(f => `
+        <tr>
+          <td>${f.finishPosition}</td>
+          <td>${escapeHtml(f.postPosition || "—")}</td>
+          <td>${escapeHtml(f.horseName || "—")}</td>
+          <td>${escapeHtml(f.winPayout || f.placePayout || f.showPayout || "—")}</td>
+        </tr>
+      `).join("");
+      return `
+        <div class="archive-race">
+          ${headerHtml}
+          <div class="log-table-wrap">
+            <table class="log-table entries-horse-table">
+              <thead><tr><th>Pos</th><th>PP</th><th>Horse</th><th>Payout</th></tr></thead>
+              <tbody>${finishRows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
     const rows = (entryRace.horses || []).map(h => `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
@@ -5476,7 +5507,7 @@
     }
     return `
       <div class="archive-race">
-        <div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong> — ${escapeHtml(timeLabel || "—")}${metaBits ? " — " + escapeHtml(metaBits) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>
+        ${headerHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
             <thead><tr><th>PP</th><th>Horse</th><th>Jockey</th><th>ML</th></tr></thead>
@@ -5528,10 +5559,18 @@
         } else {
           const resultsByRace = {};
           (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
-          const races = cached.entries || [];
+          // Falls back to a results-only race list when entries weren't
+          // saved for this date — DMTC-sourced tracks (Del Mar) can't serve
+          // historical entries at all (fetchDmtcEntriesDay() only ever
+          // returns "today's" card), so a backfilled past day only ever has
+          // results. horses: null (not []) marks these as "no entries
+          // data" rather than "zero entries" — see archiveRaceHtml().
+          const races = (cached.entries && cached.entries.length)
+            ? cached.entries
+            : (cached.results || []).map(r => ({ raceNumber: r.raceNumber, horses: null }));
           let racesHtml;
           if (!races.length){
-            racesHtml = `<div class="archive-empty">No entries saved for this date.</div>`;
+            racesHtml = `<div class="archive-empty">No entries or results saved for this date.</div>`;
           } else {
             if (archiveSelectedRaceByDate[date] == null || !races.some(r => r.raceNumber === archiveSelectedRaceByDate[date])){
               archiveSelectedRaceByDate[date] = races[0].raceNumber;
