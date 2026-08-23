@@ -5463,7 +5463,7 @@
     const rows = (entryRace.horses || []).map(h => `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
-        <td>${escapeHtml(h.name || "—")}</td>
+        <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${escapeHtml(h.jockey || "—")}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.mlOdds || h.currentOdds || "—")}</td>
       </tr>
@@ -5568,6 +5568,60 @@
       btn.addEventListener("click", () => {
         archiveSelectedRaceByDate[btn.dataset.archiveDate] = Number(btn.dataset.race);
         renderRaceDayArchive();
+      });
+    });
+    // Same note-view/add-note wiring as renderEntriesPage()'s delegated
+    // handler — duplicated rather than shared because this container
+    // rebinds fresh listeners on every render instead of delegating once.
+    list.querySelectorAll(".entries-note-toggle").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.noteKey;
+        if (entriesOpenNoteKeys.has(key)) entriesOpenNoteKeys.delete(key);
+        else entriesOpenNoteKeys.add(key);
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".entries-note-viewall").forEach(btn => {
+      btn.addEventListener("click", () => {
+        stableOpenTrainers.add(btn.dataset.trainer);
+        stableSearchQuery = btn.dataset.horse;
+        $("stableSearchInput").value = btn.dataset.horse;
+        setActivePage("stable");
+        renderStableTour();
+      });
+    });
+    list.querySelectorAll(".entries-addnote-toggle").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.addnoteKey;
+        if (entriesAddNoteOpenKeys.has(key)) entriesAddNoteOpenKeys.delete(key);
+        else entriesAddNoteOpenKeys.add(key);
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".entries-addnote-cancel").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.closest(".entries-addnote-form").dataset.addnoteKey;
+        entriesAddNoteOpenKeys.delete(key);
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".entries-addnote-save").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const form = btn.closest(".entries-addnote-form");
+        const key = form.dataset.addnoteKey;
+        const trainer = btn.dataset.trainer;
+        const horse = btn.dataset.horse;
+        const textarea = form.querySelector(".entries-addnote-input");
+        const text = textarea.value.trim();
+        if (!text){ textarea.focus(); return; }
+        btn.disabled = true;
+        (async () => {
+          if (!stableTrainers.includes(trainer)) await addStableTrainer(trainer);
+          const ok = await addStableNote(trainer, { horse, note: text, date: nowInTrackTZ().date, autoImported: false });
+          entriesAddNoteOpenKeys.delete(key);
+          if (ok) entriesOpenNoteKeys.add(key);
+          renderRaceDayArchive();
+        })();
       });
     });
   }
