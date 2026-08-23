@@ -733,14 +733,6 @@
     margin-top: 6px;
     line-height: 1.5;
   }
-  /* Separates the current-rate line from the forward outlook above it —
-     same top-border treatment already used to separate a stacked section
-     elsewhere (.stable-trainer-body), not a new pattern. */
-  .rain-nowcast-section{
-    margin-top: 10px;
-    padding-top: 8px;
-    border-top: 1px solid var(--panel-border);
-  }
   .rain-intensity-light{ background: rgba(111,168,201,0.15); color: var(--sky); }
   .rain-intensity-moderate{ background: rgba(240,180,41,0.12); color: var(--tote-amber); }
   .rain-intensity-heavy{ background: rgba(224,82,82,0.12); color: #e05252; }
@@ -7657,34 +7649,6 @@
     return null;
   }
 
-  // "Estimated total today" — moved here from the Past Rainfall tile
-  // (which is purely historical now): the SINCE-MIDNIGHT elapsed total
-  // (Part 1's own "today" window, archive-corrected) plus the forecast
-  // endpoint's own remaining-hours-of-today precipitation, already summed
-  // together by computeTodayRainOutlook(). Explicitly labeled "Estimated"
-  // rather than just "total", same "don't overclaim" framing as this
-  // panel's own info-disclosure text and the "not a guarantee" language on
-  // the forward outlook above it.
-  function describeTodayRainOutlook(outlook, longer){
-    const totalStr = `Estimated total today ~${outlook.total.toFixed(2)} in`;
-    if (outlook.startTime){
-      return outlook.alreadyStarted
-        ? `${totalStr} — started ~${fmtTime(outlook.startTime)}`
-        : `${totalStr} — starting ~${fmtTime(outlook.startTime)}`;
-    }
-    // No hour crosses the "meaningful rain" threshold, but trace amounts
-    // (drizzle under 0.05in/hr) can still add up to a nonzero total.
-    if (outlook.total > 0) return `${totalStr} — light/trace rain only`;
-    // The hourly model (this line) sees nothing crossing the "meaningful
-    // rain" bar for the rest of today, but the finer-grained minutely_15
-    // hint above (if shown) is a real, lower-confidence read on the same
-    // window from a different model — echo it instead of flatly
-    // contradicting it with "no rain expected".
-    return longer
-      ? `${totalStr} — hourly forecast is dry, but see the longer-range hint above`
-      : `${totalStr} — no rain expected`;
-  }
-
   // Cached across this panel's two independent render triggers (its own
   // Pirate Weather poll below, and render()'s own call right after
   // todayRainOutlookData updates) so either one can repaint the full panel
@@ -7706,10 +7670,6 @@
   function renderRainNowcastPanel(){
     const body = $("rainNowcastBody");
     const result = lastRainNowcastResult;
-    // Computed here (not inside the branch below) so the "Estimated total
-    // today" line built further down can reference it too — otherwise that
-    // line has no way to know a longer-range hint was already shown above
-    // it, and can end up flatly contradicting it (see describeTodayRainOutlook).
     const longer = result.detected ? null : analyzeLongerRangeOutlook();
 
     let forwardHtml;
@@ -7734,23 +7694,7 @@
       `;
     }
 
-    const current = result.current;
-    const currentHtml = current?.active
-      ? `<div class="rain-nowcast-detail">
-          <span class="tag rain-intensity-${current.intensity}">${current.intensity.toUpperCase()}</span>
-          <span>Currently ${current.rate.toFixed(2)} in/hr</span>
-        </div>`
-      : `<div class="rain-nowcast-detail-dim">Not currently raining</div>`;
-
-    const totalHtml = todayRainOutlookData
-      ? `<div class="rain-nowcast-detail-dim">${escapeHtml(describeTodayRainOutlook(todayRainOutlookData, longer))}</div>`
-      : "";
-
-    body.innerHTML = `
-      ${forwardHtml}
-      <div class="rain-nowcast-section">${currentHtml}</div>
-      ${totalHtml}
-    `;
+    body.innerHTML = forwardHtml;
   }
 
   async function loadRainNowcast(){
