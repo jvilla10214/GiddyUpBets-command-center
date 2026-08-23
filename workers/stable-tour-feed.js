@@ -276,31 +276,35 @@
 //
 // 16. Tracked-horse entry alert emails (Cron Trigger -> scheduled(), plus a
 //    manual GET /debug-run-scheduled for on-demand testing without waiting
-//    for the schedule) — scans the next 7 days (today included) of Saratoga
-//    and Belmont entries via the same fetchNyraEntriesDay() job #6 already
-//    uses. For every non-scratched horse whose trainer's last name matches
-//    a tracked Stable Tour trainer (readState(), same list job #1 manages)
-//    AND that already has at least one matching stable note
-//    (notesForHorse(), a direct port of the client's findHorseStableNotes()
-//    matching rules, reusing this file's own lastNameKey() for the same
-//    forgiving last-name-only trainer match) — a tracked horse with zero
-//    notes on file doesn't email at all, deliberately, since the whole
-//    point is surfacing notes at entry time — it emails NOTIFY_EMAILS the
-//    race's when/where/conditions plus every one of those notes via
-//    Resend's API. raceNotifyKvKey() dedupes so the same horse+race only
-//    ever emails once, TTL'd at 30 days so the keys don't accumulate
-//    forever; a no-notes horse is deliberately left un-dedup'd so a note
-//    added later in the entry's life (before its date passes) still
-//    triggers the email once it exists. Belmont is wired into
-//    NYRA_ENTRIES_BASE/ENTRIES_SOURCE_BY_TRACK for this even though its own
-//    markup isn't verified yet (its meet is dark until Sept 18, 2026) —
-//    safe no-op until then, since parseNyraRaceFragment() already returns
-//    null cleanly when there's no race to parse. Every run (real cron or
+//    for the schedule) — a once-daily, race-day-only digest, not a
+//    continuous "email the moment I notice you" watcher: the Cron Trigger
+//    itself fires once a day around 8am Eastern (see the Deploy note below
+//    for the exact UTC expression and its DST caveat), and each run only
+//    checks TODAY's Saratoga card (entryAlertTodayDate(), America/New_York)
+//    via the same fetchNyraEntriesDay() job #6 already uses — a horse
+//    entered five days out for a Saturday stakes race
+//    doesn't email until Saturday morning. For every non-scratched horse
+//    whose trainer's last name matches a tracked Stable Tour trainer
+//    (readState(), same list job #1 manages) AND that already has at least
+//    one matching stable note (notesForHorse(), a direct port of the
+//    client's findHorseStableNotes() matching rules, reusing this file's
+//    own lastNameKey() for the same forgiving last-name-only trainer match)
+//    — a tracked horse with zero notes on file doesn't email at all,
+//    deliberately, since the whole point is surfacing notes at entry time —
+//    it emails NOTIFY_EMAILS the race's when/where/conditions plus every
+//    one of those notes via Resend's API. raceNotifyKvKey() dedupes so the
+//    same horse+race only ever emails once, TTL'd at 30 days so the keys
+//    don't accumulate forever; a no-notes horse is deliberately left
+//    un-dedup'd so a note added earlier that same race day, before the
+//    day's cron run, still gets caught. Saratoga only for now — Belmont was
+//    tried and reverted (see NYRA_ENTRIES_BASE's own comment on why its
+//    dark-meet response isn't the safe no-op it looked like); re-add once
+//    that meet reopens and its markup is actually verified. Every run (real cron or
 //    manual) records its own outcome via recordEntryAlertsRun(), readable
 //    at GET /debug-last-run — the way to confirm the Cron Trigger is
 //    actually firing on its own, since "0 emails" alone is ambiguous (it's
-//    the expected result once nothing new has entered since the last run,
-//    not evidence the schedule itself ran).
+//    the expected result on most days once nothing new needs sending, not
+//    evidence the schedule itself ran).
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
@@ -311,9 +315,13 @@
 // free key at pirateweather.net. Job #16 additionally requires a
 // RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
 // at resend.com) and a Cron Trigger (Worker settings -> Triggers -> Cron
-// Triggers -> Add Cron Trigger, e.g. "0 */3 * * *" for every 3 hours) —
-// there's no wrangler.toml in this repo to declare one in code, so this one
-// has to be added by hand in the dashboard.
+// Triggers -> Add Cron Trigger, "0 12 * * *" — once daily, 8am Eastern
+// while EDT/daylight time is in effect (roughly mid-March to early
+// November). Eastern falls back to EST (UTC-5) the rest of the year, which
+// shifts that same "0 12 * * *" tick to 7am local — change it to "0 13 * *
+// *" then, and back again in spring, since there's no wrangler.toml here to
+// express DST-aware scheduling in code) — this has to be added/changed by
+// hand in the dashboard.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -1579,23 +1587,28 @@ function parseTurftraxGoingReport(payload, courseLabel) {
 // scratches. There's no single "whole day" fragment: each response embeds a
 // nav strip listing every race number carded that day (1..N), so the client
 // here fetches race=1 first, reads N off that nav, then fetches the rest in
-// parallel. Saratoga is fully verified end-to-end. Belmont is wired in on
-// the same URL shape (nyra.com/belmont/rdl/race/...) for job #16's entry
-// alerts — confirmed live (200, real HTML) but NOT verified against an
-// actual race card, since Belmont's meet is dark until Sept 18, 2026;
-// parseNyraRaceFragment() returns null cleanly on a card-less day, so this
-// is a safe no-op until then, not a guess that could misfire. Re-verify
-// against a real card once that meet reopens, same rule as every other
-// track source in this file.
-const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga", belmont: "https://www.nyra.com/belmont" };
+// parallel. Saratoga is fully verified end-to-end. Belmont was briefly
+// wired in on the same URL shape (nyra.com/belmont/rdl/race/...) for job
+// #16's entry alerts on the theory that a dark meet would just 200 with no
+// parseable race — WRONG, confirmed directly: while Belmont's meet is dark,
+// nyra.com/belmont/rdl/race/ doesn't 200-with-nothing, it silently serves
+// SARATOGA's actual live card (same race names, same horses, verified
+// side-by-side) instead of an empty/no-meet response. That's not a safe
+// no-op, it's duplicate processing under the wrong track's name — job #16
+// was double-counting every Saratoga horse as if it were also entered at
+// Belmont. Reverted; re-add only after fetching and verifying a REAL
+// Belmont race card once that meet reopens (Sept 18, 2026), same rule as
+// every other track source in this file, no exceptions this time.
+const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
 
 // Maps a track id to which entries scraper handles it — checked before
 // either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
 // here only once its source has actually been fetched and its markup
-// verified (same rule as every other scrape in this file) — belmont is the
-// one deliberate exception, see NYRA_ENTRIES_BASE's own comment above.
+// verified (same rule as every other scrape in this file) — see
+// NYRA_ENTRIES_BASE's own comment on why belmont briefly being a declared
+// exception to that rule was a real bug, not a harmless shortcut.
 const ENTRIES_SOURCE_BY_TRACK = {
-  saratoga: "nyra", belmont: "nyra", delmar: "dmtc", monmouth: "monmouth",
+  saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth",
   york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
   curragh: "sportinglife", longchamp: "sportinglife",
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
@@ -2694,20 +2707,11 @@ function nyNowParts() {
   return { year: get("year"), month: get("month"), day: get("day") };
 }
 
-function shiftDateStrServer(dateStr, deltaDays) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + deltaDays);
-  return dt.toISOString().slice(0, 10);
-}
-
-// Today + the next 6 days — same 7-day window as the client's own Entries
-// date picker (entriesDateOptions() in index.html), since that's the range
-// NYRA entries realistically post/firm up within.
-function entryAlertDateWindow() {
+// Only today's card — race-day alerts, not a lookahead. See
+// runEntryAlerts()'s own comment for why this replaced a 7-day window.
+function entryAlertTodayDate() {
   const { year, month, day } = nyNowParts();
-  const todayStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  return Array.from({ length: 7 }, (_, i) => shiftDateStrServer(todayStr, i));
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 // Direct port of index.html's findHorseStableNotes() — trainer match reuses
@@ -2776,6 +2780,15 @@ async function sendEntryAlertEmail(env, track, date, race, horse, notes) {
 // "scheduled" vs "manual" (the real Cron Trigger vs /debug-run-scheduled)
 // is only for telling the two apart in /debug-last-run's own record — it
 // doesn't change what this actually does.
+// Race-day-only digest — NOT "email the moment a tracked horse with a note
+// gets entered." A horse entered five days out for a Saturday stakes race
+// doesn't email until Saturday morning; the whole point is one email per
+// horse on the day it actually runs, not a batch the moment it's first
+// discovered somewhere in a lookahead window. That timing comes entirely
+// from the Cron Trigger firing once daily around 8am Eastern (see the
+// Deploy note's DST caveat) — this function itself doesn't gate on the
+// hour, it just checks whatever "today" is whenever it's called, real cron
+// or manual alike.
 async function runEntryAlerts(env, source = "manual") {
   const state = await readState(env);
   if (!state.trainers.length) {
@@ -2784,38 +2797,37 @@ async function runEntryAlerts(env, source = "manual") {
     return empty; // nothing to match against
   }
   const trackedLastNames = new Set(state.trainers.map(lastNameKey));
-  const dates = entryAlertDateWindow();
+  const date = entryAlertTodayDate();
   let checked = 0;
   let sent = 0;
   for (const track of Object.keys(NYRA_ENTRIES_BASE)) {
-    for (const date of dates) {
-      let result;
-      try {
-        result = await fetchNyraEntriesDay(track, date);
-      } catch (err) {
-        console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
-        continue;
-      }
-      for (const race of result.races || []) {
-        for (const horse of race.horses || []) {
-          checked++;
-          if (horse.scratched) continue;
-          if (!horse.trainer || !trackedLastNames.has(lastNameKey(horse.trainer))) continue;
-          // Only worth an email if there's actually a note to show — and
-          // deliberately NOT dedup-marked when skipped for this reason (see
-          // below), so a note added later in the entry's life still emails.
-          const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-          if (!notes.length) continue;
-          const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
-          const already = await env.STABLE_KV.get(key);
-          if (already) continue;
-          try {
-            await sendEntryAlertEmail(env, track, date, race, horse, notes);
-            await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
-            sent++;
-          } catch (err) {
-            console.error(`Entry alerts: send failed for ${horse.name} (${track} ${date} R${race.raceNumber})`, err.message);
-          }
+    let result;
+    try {
+      result = await fetchNyraEntriesDay(track, date);
+    } catch (err) {
+      console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
+      continue;
+    }
+    for (const race of result.races || []) {
+      for (const horse of race.horses || []) {
+        checked++;
+        if (horse.scratched) continue;
+        if (!horse.trainer || !trackedLastNames.has(lastNameKey(horse.trainer))) continue;
+        // Only worth an email if there's actually a note to show — not
+        // dedup-marked when skipped for this reason (see below), so a
+        // note added earlier that same race day before the 8am window
+        // still gets caught at the next scheduled run.
+        const notes = notesForHorse(state.notes, horse.trainer, horse.name);
+        if (!notes.length) continue;
+        const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
+        const already = await env.STABLE_KV.get(key);
+        if (already) continue;
+        try {
+          await sendEntryAlertEmail(env, track, date, race, horse, notes);
+          await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
+          sent++;
+        } catch (err) {
+          console.error(`Entry alerts: send failed for ${horse.name} (${track} ${date} R${race.raceNumber})`, err.message);
         }
       }
     }
