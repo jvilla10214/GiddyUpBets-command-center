@@ -1657,6 +1657,14 @@ function parseNyraRaceFragment(html, date) {
     raceType = lines.slice(1).join(" ") || null;
   }
 
+  // A named race (stakes, and only stakes — verified directly: a Maiden
+  // Special Weight/Allowance/Claiming race has this exact same header
+  // element present but empty) gets its proper name here, e.g. "Mahony
+  // Stakes (G3)" — otherwise raceType above is stuck at the bare category
+  // word "Stakes" with no way to tell one from another.
+  const nameMatch = html.match(/<header class="font-semibold text-lg lg:text-xl text-black dark:text-white mb-2">\s*([^<]*?)\s*<\/header>/);
+  const raceName = nameMatch ? (decodeEntities(nameMatch[1]).trim() || null) : null;
+
   const distMatch = html.match(/title="([^"]+)">([^<]+)<\/div>\s*<div class="text-zinc-800 dark:text-white">\s*([\s\S]*?)\s*<\/div>/);
   const distanceLabel = distMatch ? decodeEntities(distMatch[2]).trim() : null;
   const surface = distMatch ? decodeEntities(distMatch[3]).trim() : null;
@@ -1684,7 +1692,7 @@ function parseNyraRaceFragment(html, date) {
     });
   }
 
-  return { raceNumber, postTimeIso, mtpLabel, purse, raceType, distanceLabel, surface, horses };
+  return { raceNumber, postTimeIso, mtpLabel, purse, raceType, raceName, distanceLabel, surface, horses };
 }
 
 async function fetchNyraEntriesDay(track, date) {

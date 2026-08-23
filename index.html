@@ -5021,6 +5021,7 @@
 
     const race = races.find(r => r.raceNumber === selectedEntriesRace);
     const metaBits = [
+      race.raceName || null,
       [race.purse, race.raceType].filter(Boolean).join(" "),
       [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
     ].filter(Boolean);
@@ -5437,9 +5438,10 @@
   // once, not focused on one.
   function archiveRaceHtml(entryRace, result){
     const metaBits = [entryRace.purse, entryRace.raceType].filter(Boolean).join(" ");
+    const nameAndMeta = [entryRace.raceName, metaBits].filter(Boolean).join(" — ");
     const distBits = [entryRace.distanceLabel, entryRace.surface].filter(Boolean).join(" · ");
     const timeLabel = formatPostTimeLabel(entryRace.postTimeIso);
-    const headerHtml = `<div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong>${timeLabel ? " — " + escapeHtml(timeLabel) : ""}${metaBits ? " — " + escapeHtml(metaBits) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>`;
+    const headerHtml = `<div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong>${timeLabel ? " — " + escapeHtml(timeLabel) : ""}${nameAndMeta ? " — " + escapeHtml(nameAndMeta) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>`;
 
     // entries.horses is null (not just an empty array) specifically when
     // this date's entries source can't serve historical dates at all
