@@ -295,7 +295,12 @@
 //    NYRA_ENTRIES_BASE/ENTRIES_SOURCE_BY_TRACK for this even though its own
 //    markup isn't verified yet (its meet is dark until Sept 18, 2026) —
 //    safe no-op until then, since parseNyraRaceFragment() already returns
-//    null cleanly when there's no race to parse.
+//    null cleanly when there's no race to parse. Every run (real cron or
+//    manual) records its own outcome via recordEntryAlertsRun(), readable
+//    at GET /debug-last-run — the way to confirm the Cron Trigger is
+//    actually firing on its own, since "0 emails" alone is ambiguous (it's
+//    the expected result once nothing new has entered since the last run,
+//    not evidence the schedule itself ran).
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
@@ -404,7 +409,7 @@ export default {
   // schedule.
   async scheduled(event, env, ctx) {
     event.waitUntil(
-      runEntryAlerts(env).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
+      runEntryAlerts(env, "scheduled").catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
     );
   },
 };
@@ -884,6 +889,18 @@ async function handleRequest(request, env) {
         return json({ error: `Entry alerts run failed: ${err.message}` }, 500);
       }
       return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Read-only — reports the last runEntryAlerts() run (real cron or
+    // manual, see recordEntryAlertsRun()) without triggering a new one.
+    // The actual way to confirm the Cron Trigger is firing on its own: 0
+    // emails sent is expected once nothing new has entered since the last
+    // run, but a "source": "scheduled" entry with a recent "ranAt" is real
+    // proof the schedule itself is invoking the worker.
+    if (url.pathname === "/debug-last-run" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const raw = await env.STABLE_KV.get("entryalerts:lastrun");
+      return json(raw ? JSON.parse(raw) : { ranAt: null }, 200, { "Cache-Control": "no-store" });
     }
 
     // Wipes every job #16 dedup record (see raceNotifyKvKey()) — a reset
@@ -2748,9 +2765,16 @@ async function sendEntryAlertEmail(env, track, date, race, horse, notes) {
 // race's info plus any matching stable notes. Called from both the real
 // Cron Trigger (scheduled(), below) and the manual /debug-run-scheduled
 // route, so this is the one place the actual logic lives.
-async function runEntryAlerts(env) {
+// "scheduled" vs "manual" (the real Cron Trigger vs /debug-run-scheduled)
+// is only for telling the two apart in /debug-last-run's own record — it
+// doesn't change what this actually does.
+async function runEntryAlerts(env, source = "manual") {
   const state = await readState(env);
-  if (!state.trainers.length) return { checked: 0, sent: 0 }; // nothing to match against
+  if (!state.trainers.length) {
+    const empty = { checked: 0, sent: 0 };
+    await recordEntryAlertsRun(env, source, empty);
+    return empty; // nothing to match against
+  }
   const trackedLastNames = new Set(state.trainers.map(lastNameKey));
   const dates = entryAlertDateWindow();
   let checked = 0;
@@ -2788,5 +2812,20 @@ async function runEntryAlerts(env) {
       }
     }
   }
-  return { checked, sent };
+  const summary = { checked, sent };
+  await recordEntryAlertsRun(env, source, summary);
+  return summary;
+}
+
+// Written on every run (real cron or manual alike) so /debug-last-run can
+// answer "is the Cron Trigger actually firing on its own" with real
+// evidence instead of guessing from "did I get an email" — 0 emails sent is
+// completely expected once nothing new has entered since the last run, so
+// silence alone doesn't tell you whether the schedule itself is working.
+async function recordEntryAlertsRun(env, source, summary) {
+  try {
+    await env.STABLE_KV.put("entryalerts:lastrun", JSON.stringify({ ranAt: new Date().toISOString(), source, ...summary }));
+  } catch (err) {
+    // best-effort — don't fail the actual run over a bookkeeping write
+  }
 }
