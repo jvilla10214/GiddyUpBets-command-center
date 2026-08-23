@@ -3345,7 +3345,7 @@
       // Sourced from Sporting Life — see York's own comment on this field
       // for why (verified directly, exact course-name match against real
       // Sporting Life meeting data, not assumed just because York works).
-      entriesSource: "sportinglife",
+      entriesSource: "sportinglife", resultsSource: "sportinglife",
     },
     epsomdowns: {
       id: "epsomdowns", name: "Epsom Downs Racecourse", shortName: "Epsom Downs",
@@ -3365,7 +3365,7 @@
       nyraCode: null, scratchesUrl: null,
       photo: null, photoAlt: "Aerial view of Epsom Downs Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
-      entriesSource: "sportinglife", // see Ascot's own comment on this field
+      entriesSource: "sportinglife", resultsSource: "sportinglife", // see Ascot's own comment on this field
     },
     newmarket: {
       id: "newmarket", name: "Newmarket Racecourse", shortName: "Newmarket",
@@ -3384,7 +3384,7 @@
       nyraCode: null, scratchesUrl: null,
       photo: null, photoAlt: "Aerial view of Newmarket Racecourse", // no source yet — see Ascot's comment
       tideStationId: null, tideRangeFt: null,
-      entriesSource: "sportinglife", // see Ascot's own comment on this field
+      entriesSource: "sportinglife", resultsSource: "sportinglife", // see Ascot's own comment on this field
     },
     york: {
       id: "york", name: "York Racecourse", shortName: "York",
@@ -3416,7 +3416,7 @@
       // Next.js pages, verified directly — see the worker's
       // fetchSportingLifeEntriesDay() comment for why this source and not
       // a betting-affiliate site like Racing Post/At The Races).
-      entriesSource: "sportinglife",
+      entriesSource: "sportinglife", resultsSource: "sportinglife",
     },
     shatin: {
       id: "shatin", name: "Sha Tin Racecourse", shortName: "Sha Tin",
@@ -3438,7 +3438,7 @@
       // see Ascot's own comment on this field. Off-season as of this
       // writing (2025/26 season ended, 2026/27 opens ~Sept) — reads as "no
       // races" until then, same as any other dark day.
-      entriesSource: "sportinglife",
+      entriesSource: "sportinglife", resultsSource: "sportinglife",
     },
     happyvalley: {
       id: "happyvalley", name: "Happy Valley Racecourse", shortName: "Happy Valley",
@@ -3456,7 +3456,7 @@
       // Hong Kong Lands Department imagery API — see Sha Tin's comment above.
       photo: "assets/track-happyvalley.png", photoAlt: "Aerial view of Happy Valley Racecourse",
       tideStationId: null, tideRangeFt: null,
-      entriesSource: "sportinglife", // see Sha Tin's own comment — same season, same off-season caveat
+      entriesSource: "sportinglife", resultsSource: "sportinglife", // see Sha Tin's own comment — same season, same off-season caveat
     },
     longchamp: {
       id: "longchamp", name: "Longchamp Racecourse", shortName: "Longchamp",
@@ -3482,7 +3482,7 @@
       // see Ascot's own comment on this field. Sporting Life's course name
       // here is "ParisLongchamp" (one word) — verified directly, not the
       // two-word "Paris Longchamp" the venue's own branding sometimes uses.
-      entriesSource: "sportinglife",
+      entriesSource: "sportinglife", resultsSource: "sportinglife",
     },
     curragh: {
       id: "curragh", name: "The Curragh", shortName: "Curragh",
@@ -3504,7 +3504,7 @@
       // worth shipping. Revisit with a proper source later.
       photo: null, photoAlt: "Aerial view of The Curragh racecourse",
       tideStationId: null, tideRangeFt: null,
-      entriesSource: "sportinglife", // see Ascot's own comment on this field
+      entriesSource: "sportinglife", resultsSource: "sportinglife", // see Ascot's own comment on this field
     },
     meydan: {
       id: "meydan", name: "Meydan Racecourse", shortName: "Meydan",
@@ -3530,7 +3530,7 @@
       // see Ascot's own comment on this field. Off-season as of this
       // writing — the Dubai Racing Carnival doesn't open until Nov 6 —
       // reads as "no races" until then, same as any other dark day.
-      entriesSource: "sportinglife",
+      entriesSource: "sportinglife", resultsSource: "sportinglife",
     },
   };
 
@@ -4061,7 +4061,7 @@
   // the worker's job #13 comment for how it dispatches NYRA vs. DMTC).
   // Gated by activeTrack.resultsSource, same pattern as entriesSource:
   // only tracks with a verified results source are wired up here.
-  const RESULTS_SOURCE_LABEL = { nyra: "Official — NYRA Results", dmtc: "Official — DMTC/Equibase Results" };
+  const RESULTS_SOURCE_LABEL = { nyra: "Official — NYRA Results", dmtc: "Official — DMTC/Equibase Results", sportinglife: "Official — Sporting Life Results" };
   let lastResultsByRace = {}; // { [raceNumber]: {isFinal, finishOrder, payouts, alsoRan?, scratched?} } for lastEntriesDate — reset on track/date switch
   async function resultsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/results?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
