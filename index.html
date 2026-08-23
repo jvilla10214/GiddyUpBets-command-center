@@ -1705,6 +1705,7 @@
   .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
   .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
   .log-remove{ font-size: 14px; padding: 2px 4px; }
+  .log-edit{ font-size: 13px; padding: 2px 5px; margin-right: 4px; }
   .log-remove:hover{ color: var(--silk-red); }
   #historyAddBtn{
     font-size: 11px;
@@ -5164,9 +5165,18 @@
         <td>${dirtBias ? `<span class="bias-tag ${dirtStyleClass}">${dirtBias}</span>` : "—"}</td>
         <td>${turfBias ? `<span class="bias-tag ${turfStyleClass}">${turfBias}</span>` : "—"}</td>
         ${renderClampedCell("biasRail", entry.date, entry.railNote)}
-        <td><button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button></td>
+        <td>
+          <button class="log-edit" data-date="${entry.date}" title="Edit this entry">✎</button>
+          <button class="log-remove" data-date="${entry.date}" title="Remove entry">×</button>
+        </td>
       `;
       tbody.appendChild(tr);
+    });
+    tbody.querySelectorAll(".log-edit").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const entry = biasLog.find(e => e.date === btn.dataset.date);
+        if (entry) openBiasForm(entry);
+      });
     });
     tbody.querySelectorAll(".log-remove").forEach(btn => {
       btn.addEventListener("click", () => removeBiasEntry(btn.dataset.date));
@@ -9203,17 +9213,27 @@
     $("biasDateInput").max = todayStr;
   })();
 
-  $("addBiasBtn").addEventListener("click", () => {
+  // Shared by the "+ Add Bias Note" button (entry === null, blank form
+  // defaulting to yesterday) and each row's own Edit button (entry === that
+  // row's real data, pre-filled) — both funnel into the same upsertBiasEntry()
+  // on Save, so editing an existing day is just "open pre-filled, change
+  // something, Save" rather than a separate code path. The date field is
+  // locked while editing: upsertBiasEntry() upserts by whatever date is in
+  // that field when Save fires, so leaving it editable here would let a
+  // changed date silently create a second entry instead of updating this one.
+  function openBiasForm(entry){
     const { date: todayStr } = nowInTrackTZ();
-    $("biasDateInput").value = shiftDateStr(todayStr, -1); // default to yesterday's completed card
-    $("biasDirtStyleInput").value = "Neutral / No Bias";
-    $("biasTurfStyleInput").value = ""; // blank by default — a human might only have a read on one surface
-    $("biasRailInput").value = "";
-    $("biasNotesInput").value = "";
+    $("biasDateInput").value = entry?.date || shiftDateStr(todayStr, -1); // default to yesterday's completed card
+    $("biasDateInput").disabled = !!entry;
+    $("biasDirtStyleInput").value = entry?.dirtBias ?? "Neutral / No Bias";
+    $("biasTurfStyleInput").value = entry?.turfBias ?? ""; // blank by default — a human might only have a read on one surface
+    $("biasRailInput").value = entry?.railNote ?? "";
+    $("biasNotesInput").value = entry?.notes ?? "";
     $("biasPasteInput").value = "";
     $("biasAnalyzeResult").hidden = true;
     $("biasForm").classList.add("open");
-  });
+  }
+  $("addBiasBtn").addEventListener("click", () => openBiasForm(null));
   $("biasCancelBtn").addEventListener("click", () => {
     $("biasForm").classList.remove("open");
   });
