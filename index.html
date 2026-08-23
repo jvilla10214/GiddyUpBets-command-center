@@ -2294,6 +2294,14 @@
       </svg>
       Entries
     </button>
+    <button type="button" class="sidebar-btn" data-page="archive">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="5" rx="1"/>
+        <path d="M4 8v11a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8"/>
+        <path d="M10 13h4"/>
+      </svg>
+      Race Day Archive
+    </button>
     <button type="button" class="sidebar-btn" data-page="news">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M4 4h13a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4"/>
@@ -2689,7 +2697,6 @@
       <div class="log-tabs">
         <button type="button" class="log-tab active" id="logTabBtnDaily">Daily Log</button>
         <button type="button" class="log-tab" id="logTabBtnHistory">Historical Lookup</button>
-        <button type="button" class="log-tab" id="logTabBtnArchive">Race Day Archive</button>
       </div>
 
       <div class="log-tab-panel" id="logTabDaily">
@@ -2733,20 +2740,27 @@
         </div>
       </div>
 
-      <div class="log-tab-panel" id="logTabArchive" hidden>
-        <div class="log-controls">
-          <span class="log-note" id="archiveStatus">Loading saved race days…</span>
-        </div>
-        <div class="stable-trainer-list" id="archiveList"></div>
-      </div>
-
       <div class="info-disclosure" id="dailyLogInfo">
         Automatically logs the most recently completed day once it's over.
         <br><br>
         Daily Log is shared — every visitor sees the same entries for this track, auto-logged once a day completes.
         Track condition columns use the same dirt/turf heuristics as the live badges on the Dashboard, adapted to a
         full day rather than a rolling window.
-        <br><br>
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="page-archive">
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Race Day Archive
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="archiveInfo" title="Why this works this way">ⓘ</button>
+      </div>
+      <div class="log-controls">
+        <span class="log-note" id="archiveStatus">Loading saved race days…</span>
+      </div>
+      <div class="stable-trainer-list" id="archiveList"></div>
+      <div class="info-disclosure" id="archiveInfo">
         Race Day Archive saves a snapshot of that day's entries + results as they're viewed live — an early-in-the-day
         visit archives entries only, a later visit (or the next visitor) fills in results as races go final. Weather
         and Bias rows shown alongside a saved day come straight from the Daily Log / Bias Tracker for that same date.
@@ -9467,10 +9481,9 @@
   }
 
   // ---------- Sidebar page navigation ----------
-  // Config-driven like LOG_TABS below — adding another sidebar page later
-  // (e.g. the Calendar/archive page floated for future work) is just another
-  // button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "entries", "news", "historical", "bias", "stable"];
+  // Config-driven like LOG_TABS below — adding another sidebar page is just
+  // another button in the sidebar HTML plus one more entry here, no restructuring.
+  const SIDEBAR_PAGES = ["dashboard", "entries", "archive", "news", "historical", "bias", "stable"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
@@ -9588,7 +9601,6 @@
   const LOG_TABS = [
     { btn: "logTabBtnDaily", panel: "logTabDaily" },
     { btn: "logTabBtnHistory", panel: "logTabHistory" },
-    { btn: "logTabBtnArchive", panel: "logTabArchive" },
   ];
   function setActiveLogTab(activeBtnId){
     LOG_TABS.forEach(({ btn, panel }) => {
@@ -9598,13 +9610,6 @@
     });
   }
   LOG_TABS.forEach(({ btn }) => $(btn).addEventListener("click", () => setActiveLogTab(btn)));
-  // Lazy-load on first visit to this sub-tab rather than on every page
-  // load — switchTrack() below also reloads it unconditionally on a track
-  // switch, same "always refresh regardless of which tab is visible" rule
-  // weatherLog/biasLog already follow there.
-  $("logTabBtnArchive").addEventListener("click", () => {
-    if (!archiveDatesLoaded) loadRaceDayArchive();
-  });
 
   $("logNowBtn").addEventListener("click", logSnapshotNow);
   $("logMonthSelect").addEventListener("change", (e) => {
