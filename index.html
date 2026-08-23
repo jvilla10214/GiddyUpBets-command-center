@@ -1701,6 +1701,60 @@
     text-align: left;
   }
   .entries-note-viewall:hover{ text-decoration: underline; }
+  /* Manual "+ Note" add form — amber accent (matches .stable-save-btn's
+     "save" color) to read as distinct from the sky-blue "view existing
+     note" toggle above, even though both live in the same table cell. */
+  .entries-addnote-toggle{
+    display: inline-block;
+    margin-left: 6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.12);
+    border: 1px solid rgba(240,180,41,0.3);
+    padding: 1px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .entries-addnote-toggle:hover{ background: rgba(240,180,41,0.2); }
+  .entries-addnote-form{
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--tote-amber);
+    border-radius: 6px;
+    max-width: 420px;
+  }
+  .entries-addnote-input{
+    width: 100%;
+    min-height: 54px;
+    resize: vertical;
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 12.5px;
+    background: var(--panel);
+    color: var(--parchment);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    box-sizing: border-box;
+  }
+  .entries-addnote-input:focus{ border-color: var(--tote-amber); }
+  .entries-addnote-actions{ display:flex; gap: 8px; margin-top: 6px; }
+  .entries-addnote-save, .entries-addnote-cancel{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+  }
+  .entries-addnote-save{ background: var(--tote-amber); color: var(--ink); }
+  .entries-addnote-save:disabled{ opacity: 0.6; cursor: default; }
+  .entries-addnote-cancel{ background: none; border: 1px solid var(--panel-border); color: var(--parchment-dim); }
   .odds-arrow{ margin-left: 4px; font-size: 10px; font-weight: 700; }
   .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
   .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
@@ -3975,6 +4029,10 @@
   // stable across re-renders of this same race card, not to match anything
   // elsewhere). UI state only, not persisted, same as stableOpenTrainers.
   let entriesOpenNoteKeys = new Set();
+  // Same idea, for which horses' manual "+ Note" inline forms are open —
+  // separate Set from entriesOpenNoteKeys above since viewing an existing
+  // note and adding a new one are independent UI states.
+  let entriesAddNoteOpenKeys = new Set();
 
   // Only tracks whose entries source is verified to accept an arbitrary
   // future date and return that day's real card (NYRA's own site does this
@@ -4923,6 +4981,33 @@
     return html;
   }
 
+  // Manual note entry, right from a horse's own Entries row — saves into
+  // the same shared Stable Tour notes store job #1's /notes endpoint
+  // already backs (addStableNote(), same as every other note in this app),
+  // so it needs no new storage. Resurfacing "next time this horse enters"
+  // is already free: entriesNoteIndicatorHtml() above matches ANY stored
+  // note to a horse row by trainer-lastname + horse-name on every future
+  // render, manual or auto-imported alike. No trainer, no button — a note
+  // has to attach to a real trainer name to be findable again later.
+  function entriesAddNoteHtml(trainer, horseName){
+    if (!trainer || !horseName) return "";
+    const key = `${trainer}|${horseName}`;
+    const isOpen = entriesAddNoteOpenKeys.has(key);
+    const safeKey = escapeHtml(key);
+    let html = `<button type="button" class="entries-addnote-toggle" data-addnote-key="${safeKey}" aria-expanded="${isOpen}" title="Add a note for ${escapeHtml(horseName)}">+ Note</button>`;
+    if (isOpen){
+      html += `
+        <div class="entries-addnote-form" data-addnote-key="${safeKey}">
+          <textarea class="entries-addnote-input" placeholder="Note about ${escapeHtml(horseName)}…"></textarea>
+          <div class="entries-addnote-actions">
+            <button type="button" class="entries-addnote-save" data-trainer="${escapeHtml(trainer)}" data-horse="${escapeHtml(horseName)}">Save</button>
+            <button type="button" class="entries-addnote-cancel">Cancel</button>
+          </div>
+        </div>`;
+    }
+    return html;
+  }
+
   function renderEntriesPage(date, races){
     lastEntriesDate = date;
     lastEntriesRaces = races;
@@ -5003,7 +5088,7 @@
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
-        <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}</td>
+        <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
@@ -9431,6 +9516,50 @@
       $("stableSearchInput").value = horse;
       setActivePage("stable");
       renderStableTour();
+      return;
+    }
+    const addNoteToggle = e.target.closest(".entries-addnote-toggle");
+    if (addNoteToggle){
+      const key = addNoteToggle.dataset.addnoteKey;
+      if (entriesAddNoteOpenKeys.has(key)) entriesAddNoteOpenKeys.delete(key);
+      else entriesAddNoteOpenKeys.add(key);
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      return;
+    }
+    const addNoteCancel = e.target.closest(".entries-addnote-cancel");
+    if (addNoteCancel){
+      const key = addNoteCancel.closest(".entries-addnote-form").dataset.addnoteKey;
+      entriesAddNoteOpenKeys.delete(key);
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      return;
+    }
+    const addNoteSave = e.target.closest(".entries-addnote-save");
+    if (addNoteSave){
+      const form = addNoteSave.closest(".entries-addnote-form");
+      const key = form.dataset.addnoteKey;
+      const trainer = addNoteSave.dataset.trainer;
+      const horse = addNoteSave.dataset.horse;
+      const textarea = form.querySelector(".entries-addnote-input");
+      const text = textarea.value.trim();
+      if (!text){ textarea.focus(); return; }
+      // Disabled while the write is in flight — avoids a double-submit on a
+      // slow connection, same "one write, then re-render" shape as every
+      // other async save in this app.
+      addNoteSave.disabled = true;
+      (async () => {
+        // A manual add for a trainer not yet tracked would otherwise save
+        // fine but never show up in the main Stable Tour tab (see
+        // renderStableTour(), which only lists tracked trainers) — the
+        // user is expressing explicit intent right now by saving a note,
+        // unlike the passive TDN auto-import matcher, so this adds the
+        // trainer rather than silently limiting the note to just the
+        // Entries indicator.
+        if (!stableTrainers.includes(trainer)) await addStableTrainer(trainer);
+        const ok = await addStableNote(trainer, { horse, note: text, date: nowInTrackTZ().date, autoImported: false });
+        entriesAddNoteOpenKeys.delete(key);
+        if (ok) entriesOpenNoteKeys.add(key); // auto-open the viewer so the just-saved note is immediately visible
+        renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      })();
     }
   });
 
