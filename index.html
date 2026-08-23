@@ -2757,6 +2757,7 @@
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="archiveInfo" title="Why this works this way">ⓘ</button>
       </div>
       <div class="log-controls">
+        <select id="archiveMonthSelect" aria-label="Month"></select>
         <span class="log-note" id="archiveStatus">Loading saved race days…</span>
       </div>
       <div class="stable-trainer-list" id="archiveList"></div>
@@ -5369,6 +5370,11 @@
   let archiveOpenDates = new Set();
   let archiveDayCache = {}; // date -> full /raceday response, lazy-loaded on first expand
   let archiveSelectedRaceByDate = {}; // date -> raceNumber, so each open day card remembers its own tab
+  // null means "not yet initialized," same convention as selectedLogMonth —
+  // renderRaceDayArchive() resolves it to the most recent month that
+  // actually has a saved day, so a long-running meet doesn't dump every
+  // week of the season into one scrolling list.
+  let selectedArchiveMonth = null;
 
   async function loadRaceDayArchive(){
     const trackId = activeTrack.id;
@@ -5376,6 +5382,7 @@
     archiveOpenDates = new Set();
     archiveDayCache = {};
     archiveSelectedRaceByDate = {};
+    selectedArchiveMonth = null; // default back to this track's own most recent month, not whatever was being browsed before
     renderRaceDayArchive();
     let dates = [];
     try{
@@ -5491,19 +5498,35 @@
   function renderRaceDayArchive(){
     const status = $("archiveStatus");
     const list = $("archiveList");
+    const monthSelect = $("archiveMonthSelect");
     if (!status || !list) return;
     if (!archiveDatesLoaded){
       status.textContent = "Loading saved race days…";
       list.innerHTML = "";
+      if (monthSelect) monthSelect.hidden = true;
       return;
     }
     if (!archiveDates.length){
       status.textContent = `No saved race days yet for ${activeTrack.shortName} — they're archived automatically as you view Entries.`;
       list.innerHTML = "";
+      if (monthSelect) monthSelect.hidden = true;
       return;
     }
-    status.textContent = `${archiveDates.length} saved day${archiveDates.length === 1 ? "" : "s"} for ${activeTrack.shortName}.`;
-    list.innerHTML = archiveDates.map(date => {
+
+    // Newest-first months, same grouping convention as the Daily Log's own
+    // month selector — a full meet (Saratoga runs mid-July to Labor Day) is
+    // 30-40 saved days, too many to scroll through as one flat list.
+    const monthKeys = [...new Set(archiveDates.map(monthKeyOf))].sort((a, b) => b.localeCompare(a));
+    if (!selectedArchiveMonth || !monthKeys.includes(selectedArchiveMonth)) selectedArchiveMonth = monthKeys[0];
+    if (monthSelect){
+      monthSelect.hidden = monthKeys.length < 2;
+      monthSelect.innerHTML = monthKeys.map(key => `<option value="${key}">${escapeHtml(monthLabelOf(key))}</option>`).join("");
+      monthSelect.value = selectedArchiveMonth;
+    }
+    const datesInMonth = archiveDates.filter(d => monthKeyOf(d) === selectedArchiveMonth);
+
+    status.textContent = `${datesInMonth.length} saved day${datesInMonth.length === 1 ? "" : "s"} for ${activeTrack.shortName} in ${monthLabelOf(selectedArchiveMonth)} (${archiveDates.length} total).`;
+    list.innerHTML = datesInMonth.map(date => {
       const isOpen = archiveOpenDates.has(date);
       const cached = archiveDayCache[date];
       let bodyHtml = "";
@@ -9699,6 +9722,10 @@
   $("logMonthSelect").addEventListener("change", (e) => {
     selectedLogMonth = e.target.value;
     renderLogTable();
+  });
+  $("archiveMonthSelect").addEventListener("change", (e) => {
+    selectedArchiveMonth = e.target.value;
+    renderRaceDayArchive();
   });
   $("historyLookupBtn").addEventListener("click", () => {
     const val = $("historyDateInput").value;
