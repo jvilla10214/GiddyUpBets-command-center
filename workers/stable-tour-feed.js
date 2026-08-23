@@ -253,13 +253,29 @@
 //    CHANGES_SOURCE_BY_TRACK, same verify-before-adding rule as every other
 //    track map in this file.
 //
+// 15. Race Day Archive (GET/POST /raceday, GET /raceday/dates) — persists
+//    each day's entries+results (jobs #6/#13, whichever the client already
+//    fetched live) so the client can show a past date without needing that
+//    day's source page to still exist/still answer for it. One KV entry per
+//    track+date (racedayKvKey(), same single-blob-per-day scheme as job #9's
+//    trackConditionsKvKey — a whole race card is a much bigger payload than
+//    a weatherlog/biaslog row, so this deliberately isn't a growing array
+//    the way those two are). The client upserts opportunistically (fire-
+//    and-forget, after its own normal entries/results poll) — POST here is
+//    open, no passphrase, same reasoning as /weatherlog: every field is
+//    scraped data already fetched, not free text a visitor could vandalize.
+//    /raceday/dates lists which dates a track actually has a saved snapshot
+//    for (via STABLE_KV.list(), newest first, capped at 60) so the client
+//    can build a browsable date list without fetching every day's full
+//    payload just to populate it.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, and #9 to work — jobs #2, #4, #6, #7, #8, #10, #11,
-// #12, #13, and #14 (fetch-and-parse only, no storage) work without it. Job
-// #8 additionally requires a PIRATE_WEATHER_API_KEY secret (Worker settings
-// -> Variables and Secrets -> Add, type "Secret") — get a free key at
-// pirateweather.net.
+// for jobs #1, #3, #5, #9, and #15 to work — jobs #2, #4, #6, #7, #8, #10,
+// #11, #12, #13, and #14 (fetch-and-parse only, no storage) work without it.
+// Job #8 additionally requires a PIRATE_WEATHER_API_KEY secret (Worker
+// settings -> Variables and Secrets -> Add, type "Secret") — get a free key
+// at pirateweather.net.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -748,6 +764,58 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "public, max-age=120" });
     }
 
+    if (url.pathname === "/raceday" && request.method === "GET") {
+      const track = (url.searchParams.get("track") || "").trim();
+      const date = url.searchParams.get("date") || "";
+      if (!track) return json({ error: "Missing track" }, 400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
+      const raw = await env.STABLE_KV.get(racedayKvKey(track, date));
+      if (!raw) return json({ available: false, track, date }, 200, { "Cache-Control": "no-store" });
+      return json({ available: true, ...JSON.parse(raw) }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Open write, no passphrase — same reasoning as /weatherlog: every field
+    // here is scraped entries/results data the client already fetched and
+    // is just archiving, not free text a visitor could vandalize with junk.
+    // Upserts (overwrites) the one KV entry for that track+date — see
+    // racedayKvKey()'s own comment on why this is a single-blob-per-day
+    // scheme, not a growing array like weatherlog/biaslog.
+    if (url.pathname === "/raceday" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date || "";
+      if (!track || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing track or invalid date" }, 400);
+      const record = {
+        track, date,
+        entries: Array.isArray(body.entries) ? body.entries : [],
+        results: Array.isArray(body.results) ? body.results : [],
+        capturedAt: new Date().toISOString(),
+      };
+      await env.STABLE_KV.put(racedayKvKey(track, date), JSON.stringify(record));
+      return json({ available: true, ...record }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Lists which dates actually have a saved snapshot for this track, newest
+    // first, without fetching every day's full entries+results payload just
+    // to build a date picker. list() returns keys in lexicographic order,
+    // which is also chronological here since the date suffix is fixed-width
+    // YYYY-MM-DD — reversed below for newest-first. Capped at 60 (the same
+    // ballpark as a typical track's meet length) since this is meant to
+    // populate a browsable list, not serve as a full-history export.
+    if (url.pathname === "/raceday/dates" && request.method === "GET") {
+      const track = (url.searchParams.get("track") || "").trim();
+      if (!track) return json({ error: "Missing track" }, 400);
+      const prefix = racedayKvKey(track, "0000-00-00").replace("0000-00-00", "");
+      const listed = await env.STABLE_KV.list({ prefix });
+      const dates = listed.keys
+        .map((k) => k.name.slice(prefix.length))
+        .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+        .sort()
+        .reverse()
+        .slice(0, 60);
+      return json({ track, dates }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/pp-stats" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const pageUrl = DMTC_PP_STATS_URL_BY_TRACK[track];
@@ -910,6 +978,17 @@ function trackConditionsKvKey(track, date) {
   const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
   const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
   return `trackconditions:${safeTrack}:${safeDate}`;
+}
+
+// One KV entry per track per exact day (same shape/reasoning as
+// trackConditionsKvKey above, not weatherlog/biaslog's whole-array-per-
+// track scheme) — a day's entries+results is a much bigger payload than a
+// weather-log row, and there's no reason to read-modify-write an entire
+// history array just to update today's snapshot.
+function racedayKvKey(track, date) {
+  const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
+  return `raceday:${safeTrack}:${safeDate}`;
 }
 
 async function readBiasLog(env, track) {
