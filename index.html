@@ -1629,6 +1629,7 @@
     border-radius: 4px;
   }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
+  .entries-owner{ display: block; margin-top: 2px; font-size: 11.5px; color: var(--parchment-dim); }
   .entries-note-toggle{
     display: inline-block;
     margin-left: 6px;
@@ -5077,7 +5078,7 @@
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
         <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
-        <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}</td>
+        <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${h.owner ? `<span class="entries-owner">${escapeHtml(h.owner)}</span>` : ""}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>

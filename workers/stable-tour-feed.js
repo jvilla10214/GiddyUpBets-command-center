@@ -1745,6 +1745,25 @@ function parseNyraRaceFragment(html, date) {
   const distanceLabel = distMatch ? decodeEntities(distMatch[2]).trim() : null;
   const surface = distMatch ? decodeEntities(distMatch[3]).trim() : null;
 
+  // The "Owners" strip at the bottom of the fragment keys owner names by
+  // post position (the same number shown on each horse's saddle-N block),
+  // not by horse name — verified directly against a real 7-horse race
+  // where the 7 numbered owners lined up 1:1 with the 7 saddle numbers in
+  // the same document order. Scoped between the "Owners" and "Breeders"
+  // labels since both sections share the identical "<strong>N</strong> -
+  // Name" shape and would otherwise collide.
+  const owners = {};
+  const ownersStart = html.indexOf(">Owners<");
+  if (ownersStart !== -1) {
+    const ownersEnd = html.indexOf(">Breeders<", ownersStart);
+    const ownersSection = ownersEnd === -1 ? html.slice(ownersStart) : html.slice(ownersStart, ownersEnd);
+    for (const om of ownersSection.matchAll(/<strong>([^<]+)<\/strong>\s*-\s*([\s\S]*?)<\/div>/g)) {
+      const pp = decodeEntities(om[1]).trim();
+      const name = decodeEntities(om[2]).replace(/\s+/g, " ").trim();
+      if (pp && name) owners[pp] = name;
+    }
+  }
+
   const horses = [];
   const horseRe = /<div class="order-3 flex-1 leading-none"><div class="font-semibold text-lg lg:text-2xl -mt-1 mb-1 leading-tight blend-links"><a href="[^"]*"[^>]*>\s*([^<]+?)\s*<\/a><\/div><div class="text-zinc-800 dark:text-white">([^<]*)<\/div><div class="text-zinc-800 dark:text-white mt-1 text-xs lg:text-sm">([^<]*)<\/div><\/div><div class="order-1[^"]*"><div class="[^"]*">\s*([^<]*?)\s*<\/div><\/div><div class="order-5[^"]*"><div class="[^"]*" title="Current Odds">([^<]*)<\/div><div class="[^"]*" title="Morning Line Odds">\s*ML\s*([^<]*)<\/div>/g;
   let m;
@@ -1754,11 +1773,13 @@ function parseNyraRaceFragment(html, date) {
     const [weightRawPart, medicationRaw, ageSexRaw] = weightRaw.split("&bull;");
     const currentOdds = decodeEntities(currentOddsRaw).trim();
     const scratched = currentOdds.toUpperCase() === "SCR";
+    const postPosition = decodeEntities(postRaw).trim() || null;
     horses.push({
-      postPosition: decodeEntities(postRaw).trim() || null,
+      postPosition,
       name: decodeEntities(nameRaw).trim(),
       jockey: jockeyRaw ? decodeEntities(jockeyRaw).trim() : null,
       trainer: trainerRaw ? decodeEntities(trainerRaw).trim() : null,
+      owner: postPosition ? (owners[postPosition] || null) : null,
       weight: weightRawPart ? decodeEntities(weightRawPart).trim() : null,
       medication: medicationRaw ? decodeEntities(medicationRaw).trim() : null,
       ageSex: ageSexRaw ? decodeEntities(ageSexRaw).trim() : null,
