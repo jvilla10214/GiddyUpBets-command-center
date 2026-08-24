@@ -1093,6 +1093,49 @@ function lastNameKey(fullName) {
   return parts[parts.length - 1].toLowerCase();
 }
 
+// Direct port of index.html's TRAINER_FIRST_NAME_ALIASES / resolveTrackedTrainer().
+// Needed here for the same reason: lastNameKey() alone can't tell apart two
+// tracked trainers sharing a surname (confirmed real case: TDN's Saratoga
+// Notebook calls him "Bill Mott", the tracked list has "William Mott", and
+// a different tracked "Riley Mott" also exists).
+const TRAINER_FIRST_NAME_ALIASES = {
+  bill: "william", billy: "william", will: "william",
+  bob: "robert", bobby: "robert", rob: "robert", robbie: "robert",
+  dick: "richard", rich: "richard", richie: "richard",
+  jim: "james", jimmy: "james",
+  mike: "michael", mickey: "michael",
+  tom: "thomas", tommy: "thomas",
+  joe: "joseph", joey: "joseph",
+  dan: "daniel", danny: "daniel",
+  chris: "christopher",
+  steve: "steven", stevie: "steven",
+  ken: "kenneth", kenny: "kenneth",
+  ted: "edward", eddie: "edward", ed: "edward",
+  al: "albert", alex: "alexander",
+  pat: "patrick",
+  ron: "ronald", ronnie: "ronald",
+  tony: "anthony",
+  frank: "francis",
+  larry: "lawrence",
+  gene: "eugene",
+  whit: "whitworth",
+};
+function firstNameKey(fullName) {
+  const first = fullName.trim().split(/\s+/)[0].toLowerCase();
+  return TRAINER_FIRST_NAME_ALIASES[first] || first;
+}
+function resolveTrackedTrainer(sourceName, trackedList) {
+  if (!sourceName) return null;
+  const wantLast = lastNameKey(sourceName);
+  const candidates = trackedList.filter((t) => lastNameKey(t) === wantLast);
+  if (candidates.length <= 1) return candidates[0] || null;
+  const parts = sourceName.trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const wantFirst = firstNameKey(sourceName);
+  const firstNameMatches = candidates.filter((t) => firstNameKey(t) === wantFirst);
+  return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
+}
+
 // Track IDs come straight from the client's fixed TRACKS registry (7 known
 // values today) but this strips anything unexpected anyway before it ever
 // touches a KV key, just in case that registry grows in an unexpected way.
@@ -2743,9 +2786,19 @@ function notesForHorse(notes, trainer, horseName) {
   if (!trainer || !horseName) return [];
   const wantTrainer = lastNameKey(trainer);
   const wantHorse = horseName.trim().toLowerCase();
-  return notes
-    .filter((n) => n.horse && n.trainer && lastNameKey(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse)
-    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+  const candidates = notes
+    .filter((n) => n.horse && n.trainer && lastNameKey(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse);
+  const distinctTrainers = [...new Set(candidates.map((n) => n.trainer))];
+  let matched = candidates;
+  if (distinctTrainers.length > 1) {
+    // This exact horse name has notes filed under more than one
+    // same-surname trainer — narrow to whichever one the day's entry row
+    // actually agrees with (see resolveTrackedTrainer() above) instead of
+    // emailing another trainer's notes for this horse.
+    const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
+    matched = resolved ? candidates.filter((n) => n.trainer === resolved) : [];
+  }
+  return matched.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
 }
 
 // "1:51 PM" from NYRA's raw post-time string — same logic as
@@ -2936,7 +2989,7 @@ function extractHrnArticleBody(html) {
 }
 
 function extractHrnEntriesTable(tableHtml) {
-  const map = {}; // trainerLastName -> [horseNames]
+  const map = {}; // trainerLastName -> { fullName, horses: [horseNames] }
   for (const rowMatch of tableHtml.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
     const row = rowMatch[1];
     const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
@@ -2957,9 +3010,13 @@ function extractHrnEntriesTable(tableHtml) {
     // "McGaughey said") — stripped the same way normalizeTrainerName()
     // already does client-side, otherwise the last CSV token is "III", not
     // the surname, and the whole lookup silently misses.
-    const lastName = hrnStripSuffix(decodeEntities(personLinks[0][1]).trim()).split(/\s+/).pop();
-    if (!map[lastName]) map[lastName] = [];
-    if (!map[lastName].includes(horseName)) map[lastName].push(horseName);
+    const fullName = hrnStripSuffix(decodeEntities(personLinks[0][1]).trim());
+    const lastName = fullName.split(/\s+/).pop();
+    // Keep the full registered name too, not just the surname — needed
+    // client-side to tell apart two tracked trainers who share a surname
+    // (e.g. "Riley Mott" vs "William Mott"), which a bare last name can't.
+    if (!map[lastName]) map[lastName] = { fullName, horses: [] };
+    if (!map[lastName].horses.includes(horseName)) map[lastName].horses.push(horseName);
   }
   return map;
 }
@@ -3012,7 +3069,7 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
 
   return [...quotedLastNames]
     .map((lastName) => {
-      const horseNames = entriesMap[lastName]?.length ? entriesMap[lastName] : (horsesByTrainerFromProse[lastName] || []);
+      const horseNames = entriesMap[lastName]?.horses?.length ? entriesMap[lastName].horses : (horsesByTrainerFromProse[lastName] || []);
       if (!horseNames.length) return null; // no identifiable horse — no guessing which one
       // Every paragraph within range of ANY mention of this trainer (not
       // gated on that paragraph itself naming a horse) — HRN's actual quote
@@ -3029,7 +3086,11 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
       }
       const sortedIdx = [...paraIdxSet].sort((a, b) => a - b);
       return {
-        trainerName: lastName,
+        // Prefer the entries table's full registered name ("William Mott")
+        // over the bare quote-attribution surname ("Mott") when we have it
+        // — the client needs this to disambiguate same-surname tracked
+        // trainers (see resolveTrackedTrainer() in index.html).
+        trainerName: entriesMap[lastName]?.fullName || lastName,
         horseNames,
         text: sortedIdx.map((i) => paras[i].plain).join(" ").slice(0, 1500),
       };

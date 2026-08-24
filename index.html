@@ -7005,6 +7005,60 @@
     return parts[parts.length - 1].toLowerCase();
   }
 
+  // Common English first-name nicknames seen in real trainer bylines/quotes
+  // (press and NYRA/DMTC copy routinely use the nickname, tracked entries
+  // use the formal name, or vice versa) — e.g. TDN's Saratoga Notebook
+  // calls him "Bill Mott" while this app's own tracked list has "William
+  // Mott". Not exhaustive, just what's come up in practice.
+  const TRAINER_FIRST_NAME_ALIASES = {
+    bill: "william", billy: "william", will: "william",
+    bob: "robert", bobby: "robert", rob: "robert", robbie: "robert",
+    dick: "richard", rich: "richard", richie: "richard",
+    jim: "james", jimmy: "james",
+    mike: "michael", mickey: "michael",
+    tom: "thomas", tommy: "thomas",
+    joe: "joseph", joey: "joseph",
+    dan: "daniel", danny: "daniel",
+    chris: "christopher",
+    steve: "steven", stevie: "steven",
+    ken: "kenneth", kenny: "kenneth",
+    ted: "edward", eddie: "edward", ed: "edward",
+    al: "albert", alex: "alexander",
+    pat: "patrick",
+    ron: "ronald", ronnie: "ronald",
+    tony: "anthony",
+    frank: "francis",
+    larry: "lawrence",
+    gene: "eugene",
+    whit: "whitworth",
+  };
+  function trainerFirstNameKey(name){
+    const first = name.trim().split(/\s+/)[0].toLowerCase();
+    return TRAINER_FIRST_NAME_ALIASES[first] || first;
+  }
+
+  // Resolves a scraped/quoted trainer name to exactly one tracked trainer.
+  // Last-name-only matching stays the default (deliberately forgiving —
+  // see trainerLastName()'s own comment above), but when MORE THAN ONE
+  // tracked trainer shares that surname, this now also requires
+  // nickname-aware first-name agreement before picking one. Confirmed for
+  // real that the old "match last name, take whichever candidate comes
+  // first" behavior filed Bill Mott's own Sovereignty quotes under Riley
+  // Mott, a different tracked trainer with the same surname. No first name
+  // to disambiguate with, or still tied after checking -> no guess, same
+  // as this file's other "don't assert what isn't confirmed" matching.
+  function resolveTrackedTrainer(sourceName, trackedList){
+    if (!sourceName) return null;
+    const wantLast = trainerLastName(sourceName);
+    const candidates = trackedList.filter(t => trainerLastName(t) === wantLast);
+    if (candidates.length <= 1) return candidates[0] || null;
+    const parts = sourceName.trim().split(/\s+/);
+    if (parts.length < 2) return null;
+    const wantFirst = trainerFirstNameKey(sourceName);
+    const firstNameMatches = candidates.filter(t => trainerFirstNameKey(t) === wantFirst);
+    return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
+  }
+
   // Cross-links a specific Entries horse to its own Stable Tour notes (see
   // the Entries table's note indicator) — both trainer AND horse have to
   // match, so a note only ever surfaces here when it's genuinely about this
@@ -7019,8 +7073,19 @@
     if (!trainer || !horseName) return [];
     const wantTrainer = trainerLastName(trainer);
     const wantHorse = horseName.trim().toLowerCase();
-    return stableNotes
-      .filter(n => n.horse && n.trainer && trainerLastName(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse)
+    const candidates = stableNotes
+      .filter(n => n.horse && n.trainer && trainerLastName(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse);
+    const distinctTrainers = [...new Set(candidates.map(n => n.trainer))];
+    let matched = candidates;
+    if (distinctTrainers.length > 1){
+      // Notes for this exact horse name are filed under more than one
+      // same-surname trainer — narrow to whichever one this Entries row's
+      // own trainer field actually agrees with (see resolveTrackedTrainer()
+      // above), rather than surfacing another trainer's notes here.
+      const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
+      matched = resolved ? candidates.filter(n => n.trainer === resolved) : [];
+    }
+    return matched
       .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
   }
 
@@ -7043,7 +7108,7 @@
     const noteItems = [];
     for (const article of data.articles || []){
       for (const section of article.sections || []){
-        const matchedTrainer = stableTrainers.find(t => trainerLastName(t) === trainerLastName(section.trainerName));
+        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
         if (!matchedTrainer) continue;
         for (const horseName of section.horseNames || []){
           const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
@@ -7089,7 +7154,7 @@
     const noteItems = [];
     for (const article of data.articles || []){
       for (const section of article.sections || []){
-        const matchedTrainer = stableTrainers.find(t => trainerLastName(t) === trainerLastName(section.trainerName));
+        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
         if (!matchedTrainer) continue;
         for (const horseName of section.horseNames || []){
           const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
@@ -8015,11 +8080,20 @@
       // distinction matters here specifically).
       const quotes = [...bodyText.matchAll(/"[^"]{8,400}"\s+([A-Z][A-Za-z'’-]+)\s+said\b/g)];
       if (!quotes.length) continue;
-      for (const trainer of stableTrainers){
-        const seenKey = `${item.link}|${trainer}`;
+      // A fuller name for disambiguation, when the article happens to
+      // introduce one this way (the same "trainer [Name]" trigger TDN's
+      // own worker-side parser uses) — the quote attribution itself only
+      // ever yields a bare last name ("Mott said"), not enough on its own
+      // to tell same-surname tracked trainers apart (see
+      // resolveTrackedTrainer()'s own comment for the confirmed real case).
+      const introMatch = bodyText.match(/\btrainer\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/);
+      for (const match of quotes){
+        const quotedLast = trainerLastName(match[1]);
+        const sourceName = (introMatch && trainerLastName(introMatch[1]) === quotedLast) ? introMatch[1] : match[1];
+        const matchedTrainer = resolveTrackedTrainer(sourceName, stableTrainers);
+        if (!matchedTrainer) continue;
+        const seenKey = `${item.link}|${matchedTrainer}`;
         if (stableNewsSeen.has(seenKey)) continue;
-        const match = quotes.find(qm => trainerLastName(qm[1]) === trainerLastName(trainer));
-        if (!match) continue;
         // A tight window around the actual quote (same idea as job #17's
         // HRN import) instead of the old flat 1200-char slice off the
         // START of the article, which — for a long piece — usually wasn't
@@ -8031,7 +8105,7 @@
         // (the old behavior) meant a failed write (bad passphrase, network
         // blip, a KV quota outage) silently and permanently dropped that
         // mention, since it would never be retried on this device again.
-        const ok = await addStableNote(trainer, {
+        const ok = await addStableNote(matchedTrainer, {
           horse: horseLabel,
           note: bodyText.slice(start, end),
           date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
