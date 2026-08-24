@@ -306,10 +306,20 @@
 //    the expected result on most days once nothing new needs sending, not
 //    evidence the schedule itself ran).
 //
+// 17. Horse Racing Nation news (GET /hrn-news) — same idea as job #7's TDN
+//    parser (per-article, per-trainer sections with the horse names
+//    mentioned), but for real trainer QUOTES specifically, not just any
+//    factual trainer mention — see fetchHrnNews()'s own comment for why
+//    that distinction matters here and how multi-horse articles get
+//    resolved via an embedded field table when one exists. Read-only, no
+//    storage, same reasoning as job #7 — the client checks a detected
+//    trainer against its own tracked list and files notes; this endpoint
+//    never adds a new trainer on its own.
+//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
 // for jobs #1, #3, #5, #9, #15, and #16 to work — jobs #2, #4, #6, #7, #8,
-// #10, #11, #12, #13, and #14 (fetch-and-parse only, no storage) work
+// #10, #11, #12, #13, #14, and #17 (fetch-and-parse only, no storage) work
 // without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY secret
 // (Worker settings -> Variables and Secrets -> Add, type "Secret") — get a
 // free key at pirateweather.net. Job #16 additionally requires a
@@ -680,6 +690,16 @@ async function handleRequest(request, env) {
         result = await fetchTdnNotebook();
       } catch (err) {
         return json({ error: `TDN Notebook fetch failed: ${err.message}` }, 502);
+      }
+      return json(result, 200, { "Cache-Control": "public, max-age=900" });
+    }
+
+    if (url.pathname === "/hrn-news" && request.method === "GET") {
+      let result;
+      try {
+        result = await fetchHrnNews();
+      } catch (err) {
+        return json({ error: `HRN news fetch failed: ${err.message}` }, 502);
       }
       return json(result, 200, { "Cache-Control": "public, max-age=900" });
     }
@@ -2848,4 +2868,216 @@ async function recordEntryAlertsRun(env, source, summary) {
   } catch (err) {
     // best-effort — don't fail the actual run over a bookkeeping write
   }
+}
+
+// ---------- Horse Racing Nation news parser ----------
+// Source verified directly, same diligence as every other scrape in this
+// file. Of three candidate sites checked (BloodHorse, Paulick Report,
+// Horse Racing Nation), only this one is actually reachable — BloodHorse
+// sits behind an Incapsula bot wall (every page, including /feed/, serves a
+// JS challenge shell to a plain fetch) and Paulick Report 403s a plain
+// fetch site-wide; horseracingnation.com returns real HTML. No RSS feed
+// exists here (/feed/ 404s), so "new article" discovery polls the site's
+// own /news listing page instead (HRN_NEWS_LIST_URL), same page a human
+// would browse — same MAX_ARTICLES_PER_RUN cap job #7 already uses.
+//
+// This is deliberately narrower than job #7's TDN parser: the ask was
+// specifically trainer QUOTES about horses, not just any factual "trained
+// by X" mention — verified directly that HRN publishes plenty of the
+// latter with zero quotes (a "Sunday works" breeze-time report names a
+// trainer in almost every paragraph and never quotes anyone). So the
+// trigger here is a real quoted string attributed by name — `"..." Name
+// said` — not a bare mention; a workout-report article correctly yields
+// zero sections.
+//
+// Horse identification prefers a structural source over prose guessing: a
+// stakes-preview article usually embeds its own field table (Horse/Sire +
+// Trainer/Jockey columns) right after the write-up — extractHrnEntriesTable()
+// reads real (trainer -> horse) pairs straight off that table, which is
+// what makes multi-horse articles work (verified against a real 4-trainer
+// Waya Stakes preview: only the article's own lead horse gets an inline
+// <a href=".../horse/...">, so a SECOND trainer's horse deeper in the piece
+// is invisible to prose-only matching — the table has it regardless).
+// extractHrnSections() falls back to the same paragraph-proximity approach
+// job #7 uses (horse link within TDN_PROXIMITY_WINDOW... this file's own
+// HRN_PROXIMITY_WINDOW paragraphs of a trainer mention) only when no table
+// exists or a quoted trainer isn't in it — e.g. a recap/feature article
+// with no field table to lean on.
+const HRN_NEWS_LIST_URL = "https://www.horseracingnation.com/news";
+const HRN_BASE = "https://www.horseracingnation.com";
+const HRN_PROXIMITY_WINDOW = 1;
+
+function hrnStripSuffix(name) {
+  return name.replace(/,?\s*(Jr\.?|Sr\.?|II|III|IV)\s*$/i, "").trim();
+}
+
+// Splits the article page into its prose (for quote extraction) and its
+// embedded field table if one exists (for reliable trainer->horse pairs).
+// Both boundaries verified directly against a real article: the prose
+// lives in <div class="article-body ...">, and a "race-results" marker
+// reliably introduces the entries table immediately after it, ending at
+// that table's own </table> — confirmed only one such table per article
+// (a stakes preview covers one race). Articles with no table (recaps,
+// workout reports) just get an empty entriesTable, handled by the caller's
+// fallback path.
+function extractHrnArticleBody(html) {
+  const marker = 'class="article-body';
+  const start = html.indexOf(marker);
+  if (start === -1) return { prose: "", entriesTable: "" };
+  const openEnd = html.indexOf(">", start) + 1;
+  const tableIdx = html.indexOf("race-results", openEnd);
+  const prose = html.slice(openEnd, tableIdx === -1 ? openEnd + 20000 : tableIdx);
+  let entriesTable = "";
+  if (tableIdx !== -1) {
+    const tableEnd = html.indexOf("</table>", tableIdx);
+    entriesTable = tableEnd === -1 ? "" : html.slice(tableIdx, tableEnd);
+  }
+  return { prose, entriesTable };
+}
+
+function extractHrnEntriesTable(tableHtml) {
+  const map = {}; // trainerLastName -> [horseNames]
+  for (const rowMatch of tableHtml.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
+    const row = rowMatch[1];
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
+    // The Horse/Sire cell links both the runner AND its sire (also a
+    // /horse/ URL) — class="horse-name" scopes to just the runner, not the
+    // sire link that follows it in the same cell.
+    const horseCell = cells.find((c) => /class="horse-name/.test(c));
+    if (!horseCell) continue;
+    const horseMatch = horseCell.match(/class="horse-name[^"]*"[\s\S]*?<a href="https:\/\/www\.horseracingnation\.com\/horse\/[^"]+">([^<]+)<\/a>/);
+    if (!horseMatch) continue;
+    const horseName = decodeEntities(horseMatch[1]).trim();
+    // Trainer/Jockey cell: two /person/ links, trainer always listed
+    // first — verified against the real column header ("Trainer / Jockey").
+    const personLinks = [...row.matchAll(/<a href="https:\/\/www\.horseracingnation\.com\/person\/[^"]+">([^<]+)<\/a>/g)];
+    if (!personLinks.length) continue;
+    // A trainer's formal registered name here can carry a suffix ("Claude
+    // McGaughey III") the prose never uses (it says "Shug McGaughey" /
+    // "McGaughey said") — stripped the same way normalizeTrainerName()
+    // already does client-side, otherwise the last CSV token is "III", not
+    // the surname, and the whole lookup silently misses.
+    const lastName = hrnStripSuffix(decodeEntities(personLinks[0][1]).trim()).split(/\s+/).pop();
+    if (!map[lastName]) map[lastName] = [];
+    if (!map[lastName].includes(horseName)) map[lastName].push(horseName);
+  }
+  return map;
+}
+
+function extractHrnSections(bodyHtml, entriesTableHtml) {
+  const paras = [];
+  for (const m of bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)) {
+    const inner = m[1];
+    const plain = decodeEntities(inner.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    if (!plain) continue;
+    const horseNames = [];
+    for (const sm of inner.matchAll(/<a href="https:\/\/www\.horseracingnation\.com\/horse\/[^"]+">(?:<strong>)?([^<]{2,50}?)(?:<\/strong>)?<\/a>/g)) {
+      const name = decodeEntities(sm[1]).trim();
+      if (name && !horseNames.includes(name)) horseNames.push(name);
+    }
+    paras.push({ plain, horseNames });
+  }
+
+  // The actual "this is a real quote" signal — verified this is what tells
+  // a quote-bearing preview apart from a pure workout-report article (which
+  // has plenty of "trained by X" and zero of this).
+  const quotedLastNames = new Set();
+  for (const p of paras) {
+    for (const qm of p.plain.matchAll(/"[^"]{8,400}"\s+([A-Z][A-Za-z'’-]+)\s+said\b/g)) quotedLastNames.add(qm[1]);
+  }
+  if (!quotedLastNames.size) return [];
+
+  const entriesMap = entriesTableHtml ? extractHrnEntriesTable(entriesTableHtml) : {};
+
+  const mentionsByTrainer = {};
+  for (const lastName of quotedLastNames) {
+    mentionsByTrainer[lastName] = paras.map((_, i) => i).filter((i) => new RegExp(`\\b${escapeRegExpTdn(lastName)}\\b`).test(paras[i].plain));
+  }
+  // Prose-only fallback horse lookup, same shape as job #7's own algorithm
+  // — used only for a quoted trainer the entries table doesn't cover.
+  const horsesByTrainerFromProse = {};
+  for (let i = 0; i < paras.length; i++) {
+    if (!paras[i].horseNames.length) continue;
+    let best = null, bestDist = Infinity, tie = false;
+    for (const lastName of quotedLastNames) {
+      const dist = Math.min(...mentionsByTrainer[lastName].map((mi) => Math.abs(mi - i)), Infinity);
+      if (dist > HRN_PROXIMITY_WINDOW) continue;
+      if (dist < bestDist) { bestDist = dist; best = lastName; tie = false; }
+      else if (dist === bestDist && lastName !== best) { tie = true; }
+    }
+    if (!best || tie) continue;
+    if (!horsesByTrainerFromProse[best]) horsesByTrainerFromProse[best] = [];
+    for (const h of paras[i].horseNames) if (!horsesByTrainerFromProse[best].includes(h)) horsesByTrainerFromProse[best].push(h);
+  }
+
+  return [...quotedLastNames]
+    .map((lastName) => {
+      const horseNames = entriesMap[lastName]?.length ? entriesMap[lastName] : (horsesByTrainerFromProse[lastName] || []);
+      if (!horseNames.length) return null; // no identifiable horse — no guessing which one
+      // Every paragraph within range of ANY mention of this trainer (not
+      // gated on that paragraph itself naming a horse) — HRN's actual quote
+      // paragraphs almost never re-link the horse by name (they use "she"/
+      // "her" instead, verified against a real example), so gating the TEXT
+      // on horseNames presence the way job #7 does would silently drop the
+      // quote itself even once the horse is correctly identified above.
+      const paraIdxSet = new Set();
+      for (const mi of mentionsByTrainer[lastName]) {
+        for (let d = -HRN_PROXIMITY_WINDOW; d <= HRN_PROXIMITY_WINDOW; d++) {
+          const idx = mi + d;
+          if (idx >= 0 && idx < paras.length) paraIdxSet.add(idx);
+        }
+      }
+      const sortedIdx = [...paraIdxSet].sort((a, b) => a - b);
+      return {
+        trainerName: lastName,
+        horseNames,
+        text: sortedIdx.map((i) => paras[i].plain).join(" ").slice(0, 1500),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchHrnNews() {
+  const listRes = await fetch(HRN_NEWS_LIST_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
+  if (!listRes.ok) throw new Error(`HRN news list returned HTTP ${listRes.status}`);
+  const listHtml = await listRes.text();
+
+  const items = [];
+  const seenLinks = new Set();
+  for (const m of listHtml.matchAll(/<article class="row news-story[^"]*"[\s\S]*?<h3[^>]*>\s*<a href="([^"]+)">\s*([\s\S]*?)\s*<\/a>/g)) {
+    const link = HRN_BASE + m[1];
+    if (seenLinks.has(link)) continue;
+    seenLinks.add(link);
+    const title = decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    items.push({ link, title });
+  }
+
+  const articles = [];
+  for (const item of items.slice(0, MAX_ARTICLES_PER_RUN)) {
+    let articleRes;
+    try {
+      articleRes = await fetch(item.link, {
+        headers: { "User-Agent": BROWSER_UA },
+        cf: { cacheTtl: 3600, cacheEverything: true },
+      });
+    } catch (err) {
+      continue; // skip this one article, don't fail the whole batch
+    }
+    if (!articleRes.ok) continue;
+    const html = await articleRes.text();
+    const { prose, entriesTable } = extractHrnArticleBody(html);
+    const sections = extractHrnSections(prose, entriesTable);
+    if (!sections.length) continue;
+    const pubDateMatch = html.match(/<time[^>]*datetime="([^"]+)"/);
+    articles.push({
+      guid: item.link, title: item.title, link: item.link,
+      pubDate: pubDateMatch ? pubDateMatch[1] : null,
+      sections,
+    });
+  }
+
+  return { source: HRN_NEWS_LIST_URL, fetchedAt: new Date().toISOString(), articles };
 }

@@ -6982,6 +6982,19 @@
   }
   let stableTdnSeen = loadStableTdnSeen();
 
+  // Same per-device "seen" convention as stableTdnSeen above, for job #17's
+  // Horse Racing Nation source.
+  const STABLE_HRN_SEEN_KEY = "giddyupbets_stable_hrn_seen_v1";
+  function loadStableHrnSeen(){
+    try { return new Set(JSON.parse(localStorage.getItem(STABLE_HRN_SEEN_KEY)) ?? []); }
+    catch { return new Set(); }
+  }
+  function saveStableHrnSeen(){
+    try { localStorage.setItem(STABLE_HRN_SEEN_KEY, JSON.stringify([...stableHrnSeen])); }
+    catch(err){ console.error("Stable HRN-seen failed to save", err); }
+  }
+  let stableHrnSeen = loadStableHrnSeen();
+
   // A detected section's trainerName ("Chad Brown") is matched against each
   // tracked trainer by last name only — tracked entries are free-text
   // ("Chad C. Brown", "W. Bret Calhoun") and normalizeTrainerName() only
@@ -7062,6 +7075,52 @@
     }
   }
 
+  // Job #17 — same shape as autoImportTdnNotebook() above (deliberately not
+  // shared as one generic function — see that function's own reasoning
+  // this session for why duplicating a short, working, already-shipped
+  // import loop beats risking it via a refactor), pointed at the worker's
+  // /hrn-news route instead.
+  async function autoImportHrnNews(){
+    if (!stableTrainers.length) return; // nothing to match against
+    let data;
+    try{ data = await stableApiGet("/hrn-news"); }
+    catch(err){ console.error("Horse Racing Nation fetch failed", err); return; }
+
+    const noteItems = [];
+    for (const article of data.articles || []){
+      for (const section of article.sections || []){
+        const matchedTrainer = stableTrainers.find(t => trainerLastName(t) === trainerLastName(section.trainerName));
+        if (!matchedTrainer) continue;
+        for (const horseName of section.horseNames || []){
+          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
+          if (stableHrnSeen.has(seenKey)) continue;
+          noteItems.push({
+            trainer: matchedTrainer,
+            horse: horseName,
+            note: section.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+          });
+          stableHrnSeen.add(seenKey);
+        }
+      }
+    }
+    if (!noteItems.length) return;
+
+    try{
+      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
+      saveStableHrnSeen();
+      const fresh = await loadStableData();
+      stableTrainers = fresh.trainers;
+      stableNotes = fresh.notes;
+      renderStableTour();
+    } catch(err){
+      console.error("Horse Racing Nation import failed to save", err);
+    }
+  }
+
   $("stableFeedSaveBtn").addEventListener("click", () => {
     const url = $("stableFeedUrlInput").value.trim();
     const key = $("stableApiKeyInput").value;
@@ -7070,17 +7129,19 @@
     $("stableFeedStatus").textContent = "Saved — click Check Now to fetch.";
     fetchStableTourFeed();
     autoImportTdnNotebook();
+    autoImportHrnNews();
   });
   $("stableFeedCheckBtn").addEventListener("click", () => {
     fetchStableTourFeed();
     autoImportTdnNotebook();
+    autoImportHrnNews();
   });
   // Auto-import "seen" tracking lives in THIS browser's localStorage (per
   // device, deliberately not moved to the shared backend) so it survives
   // switching Worker URLs — but that means moving Stable Tour to a fresh
   // shared store (or pointing at a different Worker) leaves this device
   // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs all three auto-import checks.
+  // This clears that local memory and re-runs all four auto-import checks.
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
     stableSeenArticles = [];
     saveStableSeenArticles();
@@ -7088,9 +7149,12 @@
     saveStableNewsSeen();
     stableTdnSeen = new Set();
     saveStableTdnSeen();
+    stableHrnSeen = new Set();
+    saveStableHrnSeen();
     $("stableFeedStatus").textContent = "Import history cleared — checking now…";
     fetchStableTourFeed();
     autoImportTdnNotebook();
+    autoImportHrnNews();
     fetchNewsWire();
   });
 
@@ -9798,9 +9862,11 @@
     renderStableTour();
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
+    autoImportHrnNews(); // same reasoning
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
   setInterval(autoImportTdnNotebook, 60 * 60 * 1000); // same cadence, separate interval so one source's hiccup can't block the other
+  setInterval(autoImportHrnNews, 60 * 60 * 1000); // same cadence, separate interval too
 
   // Refresh from the shared source periodically and whenever the tab
   // regains focus, so a friend's changes on another device show up without
