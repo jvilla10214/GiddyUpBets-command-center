@@ -1630,6 +1630,43 @@
   }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
   .entries-owner{ display: block; margin-top: 2px; font-size: 11.5px; color: var(--parchment-dim); }
+  /* When rendered as a button (owner has other runners today), reset the
+     default button chrome so it still reads as the same plain owner label
+     — only the count badge and hover state signal it's interactive. */
+  button.entries-owner{
+    font-family: inherit;
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  button.entries-owner:hover{ color: var(--parchment); }
+  .entries-owner-count{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+  }
+  .entries-owner-list{
+    margin-top: 4px;
+    padding: 6px 9px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--tote-amber);
+    border-radius: 6px;
+    max-width: 420px;
+  }
+  .entries-owner-list-item{
+    font-size: 12px;
+    color: var(--parchment);
+    padding: 2px 0;
+  }
+  .entries-owner-scratched{ color: var(--parchment-dim); text-decoration: line-through; }
+  .entries-owner-list-trainer{ color: var(--parchment-dim); text-decoration: none; }
   .entries-note-toggle{
     display: inline-block;
     margin-left: 6px;
@@ -4021,6 +4058,9 @@
   // separate Set from entriesOpenNoteKeys above since viewing an existing
   // note and adding a new one are independent UI states.
   let entriesAddNoteOpenKeys = new Set();
+  // Same idea again, for which horses' "owner also runs elsewhere today"
+  // lists are expanded — keyed "raceNumber|horse|owner".
+  let entriesOpenOwnerKeys = new Set();
 
   // Only tracks whose entries source is verified to accept an arbitrary
   // future date and return that day's real card (NYRA's own site does this
@@ -4996,6 +5036,46 @@
     return html;
   }
 
+  // Every OTHER horse on this same race day sharing this exact owner
+  // string, across every race — not just the one this horse happens to be
+  // in. Exact (case/whitespace-insensitive) match only, same reasoning as
+  // findHorseStableNotes()'s own horse-name match: owner names as scraped
+  // are free text with no canonical ID behind them, so a fuzzy match here
+  // risks merging two different owners who just phrase their name
+  // similarly — worse than missing a real connection.
+  function findOtherEntriesForOwner(owner, raceNumber, horseName){
+    if (!owner || !lastEntriesRaces) return [];
+    const wantOwner = owner.trim().toLowerCase();
+    const matches = [];
+    for (const race of lastEntriesRaces){
+      for (const h of race.horses || []){
+        if (!h.owner || h.owner.trim().toLowerCase() !== wantOwner) continue;
+        if (race.raceNumber === raceNumber && h.name === horseName) continue; // skip itself
+        matches.push({ raceNumber: race.raceNumber, horseName: h.name, trainer: h.trainer, scratched: h.scratched });
+      }
+    }
+    return matches.sort((a, b) => a.raceNumber - b.raceNumber);
+  }
+
+  // Owner cell for an Entries row — a plain label when this owner has no
+  // other runners today (the common case), or a toggle button revealing
+  // where else they're running when they do. Mirrors
+  // entriesNoteIndicatorHtml()'s toggle/expand shape above.
+  function entriesOwnerHtml(owner, raceNumber, horseName){
+    if (!owner) return "";
+    const others = findOtherEntriesForOwner(owner, raceNumber, horseName);
+    if (!others.length) return `<span class="entries-owner">${escapeHtml(owner)}</span>`;
+    const key = `${raceNumber}|${horseName}|${owner}`;
+    const isOpen = entriesOpenOwnerKeys.has(key);
+    const safeKey = escapeHtml(key);
+    let html = `<button type="button" class="entries-owner entries-owner-toggle" data-owner-key="${safeKey}" aria-expanded="${isOpen}" title="${escapeHtml(owner)} has ${others.length} other runner${others.length > 1 ? "s" : ""} today">${escapeHtml(owner)} <span class="entries-owner-count">+${others.length} today</span></button>`;
+    if (isOpen){
+      html += `<div class="entries-owner-list">${others.map(o => `
+        <div class="entries-owner-list-item${o.scratched ? " entries-owner-scratched" : ""}">R${o.raceNumber} — ${escapeHtml(o.horseName)}${o.scratched ? ` <span class="tag entries-scr-tag">SCR</span>` : ""}${o.trainer ? ` <span class="entries-owner-list-trainer">(${escapeHtml(o.trainer)})</span>` : ""}</div>`).join("")}</div>`;
+    }
+    return html;
+  }
+
   function renderEntriesPage(date, races){
     lastEntriesDate = date;
     lastEntriesRaces = races;
@@ -5078,7 +5158,7 @@
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
         <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
-        <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${h.owner ? `<span class="entries-owner">${escapeHtml(h.owner)}</span>` : ""}</td>
+        <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${entriesOwnerHtml(h.owner, race.raceNumber, h.name)}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
@@ -9788,6 +9868,14 @@
     const raceTab = e.target.closest(".entries-race-tab");
     if (raceTab){
       selectedEntriesRace = Number(raceTab.dataset.race);
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      return;
+    }
+    const ownerToggle = e.target.closest(".entries-owner-toggle");
+    if (ownerToggle){
+      const key = ownerToggle.dataset.ownerKey;
+      if (entriesOpenOwnerKeys.has(key)) entriesOpenOwnerKeys.delete(key);
+      else entriesOpenOwnerKeys.add(key);
       renderEntriesPage(lastEntriesDate, lastEntriesRaces);
       return;
     }
