@@ -397,13 +397,16 @@ feedback that large features should be verified incrementally, not shipped as on
 given the architecture; the open questions were about *where alerts render* (see the bell/dropdown
 entry above), not how they're generated.
 
-## Firebase Firestore chosen as the future shared-storage backend
-**Date:** 2026-07-04
+## Firebase Firestore chosen as the future shared-storage backend — superseded, never built
+**Date:** 2026-07-04 (decided); superseded 2026-07-26 — see the Cloudflare Worker + KV entry below
 **Decision:** When asked to make the Weather Log "go live on the site" (visible to all visitors, not
 just the browser that logged it), the user chose Firebase Firestore over Supabase or a simpler
 JSON-blob store (e.g. JSONBin.io) as the eventual shared database. Setup (installing Node/npm,
 then `firebase-tools`) was started but interrupted before a project was actually created or wired
-into the app — **this is not implemented yet**, only decided.
+into the app. **This was never built** — a Cloudflare Worker + KV backend was stood up three weeks
+later for an unrelated feature (Stable Tour) and later reused for the Weather Log's own shared-data
+need too, making a separate Firestore project unnecessary. Kept here for the historical reasoning,
+not as a live plan.
 **Why:** Firestore has a public-safe "client config" model (access controlled by server-side
 security rules, not by keeping the config secret) that fits a static-site-with-shared-data use case
 well, same general shape as Supabase's anon-key model. The user's call between the two was
@@ -413,18 +416,41 @@ the recommended option but not what was chosen); JSONBin.io-style flat JSON stor
 up, but cruder — no real querying, easier to accidentally overwrite data, less room to grow into a
 future bias tracker).
 
-## Track Condition & Weather Log stored in `localStorage`, not a real database
-**Date:** 2026-07-04
-**Decision:** The Daily Log (and, later, the Alert Feed) persist via `localStorage` rather than any
-server-side storage.
-**Why:** The app has no backend by design (see "single-file HTML/JS" below), and `localStorage` is
-the only persistence mechanism available to a pure static page. It's genuinely durable across
-reloads and browser restarts — the gap is only that it's per-browser/per-device, not shared across
-visitors. That gap is exactly what the Firestore decision above is meant to eventually close.
+## Track Condition & Weather Log stored in `localStorage`, not a real database — since resolved
+**Date:** 2026-07-04 (decided); resolved 2026-08-15 — see the Cloudflare Worker + KV entry below
+**Decision:** The Daily Log (and, later, the Alert Feed) persisted via `localStorage` rather than any
+server-side storage, until the Daily Log moved to the shared Cloudflare Worker + KV backend on
+2026-08-15 (`Make the Daily Weather Log shared across all visitors, not per-browser`) — every
+visitor now reads and writes the same shared copy, with the old localStorage copy kept read-only as
+a one-time migration source (`loadLocalWeatherLogLegacy()` / `WEATHERLOG_MIGRATED_KEY` in
+`index.html`). The Alert Feed itself is still per-browser localStorage, since alerts are inherently
+personal to whoever's watching, not something that should be shared across visitors.
+**Why:** The app has no backend by design (see "single-file HTML/JS" below), and `localStorage` was
+the only persistence mechanism available to a pure static page at the time. It was genuinely durable
+across reloads and browser restarts — the gap was only that it was per-browser/per-device, not
+shared across visitors.
 **Alternatives considered:** No persistence at all (rejected — defeats the purpose of a "data
 foundation for a bias tracker" that needs to accumulate over days); a real backend database
-(rejected *for now* since it's a real scope/cost/infrastructure change from "single static file,
-no server" — revisit once Firestore is actually wired in).
+(rejected at the time as a real scope/cost/infrastructure change from "single static file, no
+server" — later done anyway once the Worker already existed for Stable Tour, making the marginal
+cost of one more KV-backed endpoint small).
+
+## Cloudflare Worker + KV as the actual shared-storage backend
+**Date:** 2026-07-26 (Stable Tour); extended to the Weather Log 2026-08-15
+**Decision:** `workers/stable-tour-feed.js`, a Cloudflare Worker backed by Workers KV
+(`STABLE_KV`), was built for Stable Tour's tracked-trainer notes — the first real shared,
+server-side data store this app ever had. Once it existed, the Daily Log's own long-standing
+"go shared" need (see the Firestore entries above) was solved by adding endpoints to this same
+worker instead of standing up the separately-planned Firestore project.
+**Why:** A single already-running, already-authenticated Worker is less to build and operate than
+a second backend, and Workers KV's read-heavy/eventually-consistent model fits both use cases fine
+(neither needs strong consistency or complex queries). Write routes are gated by a shared passphrase
+(`WRITE_PASSPHRASE`, header `X-Stable-Key`) for Stable Tour's mutations; the Weather Log's own
+endpoint is deliberately left open (no passphrase) since anyone logging a real-world weather
+observation is the intended, low-stakes use case, not something worth gating.
+**Alternatives considered:** Firebase Firestore (the original 2026-07-04 plan — abandoned once this
+existed, see above); a second, separate Worker just for the Weather Log (rejected as needless
+duplication once one was already deployed and proven out).
 
 ## NYRA scratches/rail/turf-condition data: embed live, don't scrape
 **Date:** 2026-07-04
