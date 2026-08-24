@@ -7222,13 +7222,24 @@
   }
   let stableSmartPonySeen = loadStableSmartPonySeen();
 
+  // Strips combining diacritical marks ("é" -> "e", "ñ" -> "n", ...) before
+  // any name comparison in this file — confirmed for real that a SmartPony
+  // quote for "Miguel Clément" silently failed to match tracked "Miguel
+  // Clement" otherwise (different Unicode code points, not just a case
+  // difference), dropping a genuine match instead of guessing wrong. Purely
+  // widening (an accented and unaccented spelling of the same name now
+  // compare equal), never a source of a new false match.
+  function stripDiacritics(str){
+    return str.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  }
+
   // A detected section's trainerName ("Chad Brown") is matched against each
   // tracked trainer by last name only — tracked entries are free-text
   // ("Chad C. Brown", "W. Bret Calhoun") and normalizeTrainerName() only
   // strips suffixes/initials, not guaranteed to produce an exact string
   // match, so last-name comparison is the more forgiving, reliable check.
   function trainerLastName(name){
-    const parts = name.trim().split(/\s+/);
+    const parts = stripDiacritics(name.trim()).split(/\s+/);
     return parts[parts.length - 1].toLowerCase();
   }
 
@@ -7259,30 +7270,49 @@
     gene: "eugene",
     whit: "whitworth",
   };
+  // Normalizes ONE name token (not a full name) — strips a trailing
+  // initial's period ("W." -> "w"), diacritics, case, and known nicknames.
+  // Used both to read the source's own first name and to check it against
+  // EVERY token of a tracked name, not just that tracked name's own first
+  // token — necessary for cases like tracked "W. Bret Calhoun" (formal
+  // initial first, common name second), where a real source calling him
+  // "Bret Calhoun" needs "bret" found among the tracked name's tokens, not
+  // just compared against its literal first one.
+  function normalizeNameToken(token){
+    const t = stripDiacritics(token).toLowerCase().replace(/\.$/, "");
+    return TRAINER_FIRST_NAME_ALIASES[t] || t;
+  }
   function trainerFirstNameKey(name){
-    const first = name.trim().split(/\s+/)[0].toLowerCase();
-    return TRAINER_FIRST_NAME_ALIASES[first] || first;
+    return normalizeNameToken(name.trim().split(/\s+/)[0]);
   }
 
   // Resolves a scraped/quoted trainer name to exactly one tracked trainer.
   // Last-name-only matching stays the default (deliberately forgiving —
-  // see trainerLastName()'s own comment above), but when MORE THAN ONE
-  // tracked trainer shares that surname, this now also requires
-  // nickname-aware first-name agreement before picking one. Confirmed for
-  // real that the old "match last name, take whichever candidate comes
-  // first" behavior filed Bill Mott's own Sovereignty quotes under Riley
-  // Mott, a different tracked trainer with the same surname. No first name
-  // to disambiguate with, or still tied after checking -> no guess, same
-  // as this file's other "don't assert what isn't confirmed" matching.
+  // see trainerLastName()'s own comment above) whenever the source gives no
+  // first name to check (a bare "Mott said" style quote). Whenever the
+  // source DOES supply a first name, though, it now has to appear somewhere
+  // among the matching tracked trainer's own name tokens — not just when
+  // there's more than one same-surname tracked trainer to pick between.
+  // Confirmed two real failures this was missing: (1) a bare-surname-only
+  // shortcut let Bill Mott's own Sovereignty quotes get filed under Riley
+  // Mott, a different tracked trainer with the same surname — fixed by the
+  // "more than one candidate" case below; (2) with only ONE tracked
+  // trainer sharing a surname, a completely unrelated same-surname person
+  // was accepted with no check at all — confirmed for real when a SmartPony
+  // quote for British trainer "Clive Cox" (untracked) got silently filed
+  // under tracked US trainer "Brad Cox" purely because "Cox" was otherwise
+  // unambiguous. No qualifying candidate, or more than one -> no guess,
+  // same as this file's other "don't assert what isn't confirmed" matching.
   function resolveTrackedTrainer(sourceName, trackedList){
     if (!sourceName) return null;
     const wantLast = trainerLastName(sourceName);
     const candidates = trackedList.filter(t => trainerLastName(t) === wantLast);
-    if (candidates.length <= 1) return candidates[0] || null;
+    if (!candidates.length) return null;
     const parts = sourceName.trim().split(/\s+/);
-    if (parts.length < 2) return null;
+    if (parts.length < 2) return candidates.length === 1 ? candidates[0] : null;
     const wantFirst = trainerFirstNameKey(sourceName);
-    const firstNameMatches = candidates.filter(t => trainerFirstNameKey(t) === wantFirst);
+    const firstNameMatches = candidates.filter(t =>
+      stripDiacritics(t).trim().split(/\s+/).some(tok => normalizeNameToken(tok) === wantFirst));
     return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
   }
 

@@ -1109,12 +1109,21 @@ function isAuthorized(request) {
   return request.headers.get("X-Stable-Key") === WRITE_PASSPHRASE;
 }
 
+// Strips combining diacritical marks ("é" -> "e", "ñ" -> "n", ...) before
+// any name comparison in this file — see index.html's own copy of this
+// function for the confirmed real failure (a SmartPony quote for "Miguel
+// Clément" silently missing tracked "Miguel Clement") this fixes. Purely
+// widening, never a source of a new false match.
+function stripDiacritics(str) {
+  return str.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
 // Trainers sort by last name — the last whitespace-separated token, which
 // holds even for hyphenated last names ("Ramirez-Rodriguez" stays one
 // token) and names with an unstripped leading initial ("W. Bret Calhoun"
 // -> "Calhoun").
 function lastNameKey(fullName) {
-  const parts = fullName.trim().split(/\s+/);
+  const parts = stripDiacritics(fullName.trim()).split(/\s+/);
   return parts[parts.length - 1].toLowerCase();
 }
 
@@ -1145,19 +1154,31 @@ const TRAINER_FIRST_NAME_ALIASES = {
   gene: "eugene",
   whit: "whitworth",
 };
-function firstNameKey(fullName) {
-  const first = fullName.trim().split(/\s+/)[0].toLowerCase();
-  return TRAINER_FIRST_NAME_ALIASES[first] || first;
+// Normalizes ONE name token — see index.html's normalizeNameToken() for why
+// this checks every token of a tracked name, not just its own first token
+// (handles "W. Bret Calhoun" tracked, source says "Bret Calhoun").
+function normalizeNameToken(token) {
+  const t = stripDiacritics(token).toLowerCase().replace(/\.$/, "");
+  return TRAINER_FIRST_NAME_ALIASES[t] || t;
 }
+function firstNameKey(fullName) {
+  return normalizeNameToken(fullName.trim().split(/\s+/)[0]);
+}
+// See index.html's resolveTrackedTrainer() for the full reasoning,
+// including the confirmed real case (untracked British trainer "Clive Cox"
+// silently matched to tracked US trainer "Brad Cox") that motivated
+// checking first-name compatibility even when only one tracked trainer
+// shares the surname, not just when there's more than one to pick between.
 function resolveTrackedTrainer(sourceName, trackedList) {
   if (!sourceName) return null;
   const wantLast = lastNameKey(sourceName);
   const candidates = trackedList.filter((t) => lastNameKey(t) === wantLast);
-  if (candidates.length <= 1) return candidates[0] || null;
+  if (!candidates.length) return null;
   const parts = sourceName.trim().split(/\s+/);
-  if (parts.length < 2) return null;
+  if (parts.length < 2) return candidates.length === 1 ? candidates[0] : null;
   const wantFirst = firstNameKey(sourceName);
-  const firstNameMatches = candidates.filter((t) => firstNameKey(t) === wantFirst);
+  const firstNameMatches = candidates.filter((t) =>
+    stripDiacritics(t).trim().split(/\s+/).some((tok) => normalizeNameToken(tok) === wantFirst));
   return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
 }
 
