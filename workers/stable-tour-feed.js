@@ -315,14 +315,27 @@
 //    storage, same reasoning as job #7 — the client checks a detected
 //    trainer against its own tracked list and files notes; this endpoint
 //    never adds a new trainer on its own.
+// 18. SmartPony partner quotes (GET /smartpony-quotes) — pulls trainer
+//    quotes from a partner site's own Supabase-backed trainer_quotes table
+//    (not scraped HTML — a real authenticated API read), already split into
+//    one quote per horse/trainer, so there's no proximity-matching to do
+//    the way jobs #7/#17 need. Authenticates fresh on every call via
+//    Supabase's standard email/password grant (see fetchSmartPonyQuotes()'s
+//    own comment for why re-authenticating beats persisting a session
+//    token) using SMARTPONY_EMAIL/SMARTPONY_PASSWORD secrets — a real
+//    partner login, not a scraped-content credential, so treat those two
+//    secrets with the same care as any other account password. Only pulls
+//    status: "verified" quotes — SmartPony's own review queue, not
+//    unreviewed ones. Same "client resolves against its own tracked list"
+//    reasoning as every other auto-import job here.
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
 // for jobs #1, #3, #5, #9, #15, and #16 to work — jobs #2, #4, #6, #7, #8,
-// #10, #11, #12, #13, #14, and #17 (fetch-and-parse only, no storage) work
-// without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY secret
-// (Worker settings -> Variables and Secrets -> Add, type "Secret") — get a
-// free key at pirateweather.net. Job #16 additionally requires a
+// #10, #11, #12, #13, #14, #17, and #18 (fetch-and-parse only, no storage)
+// work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
+// secret (Worker settings -> Variables and Secrets -> Add, type "Secret") —
+// get a free key at pirateweather.net. Job #16 additionally requires a
 // RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
 // at resend.com) and a Cron Trigger (Worker settings -> Triggers -> Cron
 // Triggers -> Add Cron Trigger, "0 12 * * *" — once daily, 8am Eastern
@@ -331,7 +344,9 @@
 // shifts that same "0 12 * * *" tick to 7am local — change it to "0 13 * *
 // *" then, and back again in spring, since there's no wrangler.toml here to
 // express DST-aware scheduling in code) — this has to be added/changed by
-// hand in the dashboard.
+// hand in the dashboard. Job #18 additionally requires SMARTPONY_EMAIL and
+// SMARTPONY_PASSWORD secrets (same Variables and Secrets screen) — the
+// partner login credentials for smartpony.ai.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -702,6 +717,16 @@ async function handleRequest(request, env) {
         return json({ error: `HRN news fetch failed: ${err.message}` }, 502);
       }
       return json(result, 200, { "Cache-Control": "public, max-age=900" });
+    }
+
+    if (url.pathname === "/smartpony-quotes" && request.method === "GET") {
+      let quotes;
+      try {
+        quotes = await fetchSmartPonyQuotes(env);
+      } catch (err) {
+        return json({ error: `SmartPony fetch failed: ${err.message}` }, 502);
+      }
+      return json({ quotes }, 200, { "Cache-Control": "public, max-age=900" });
     }
 
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
@@ -3176,4 +3201,86 @@ async function fetchHrnNews() {
   }
 
   return { source: HRN_NEWS_LIST_URL, fetchedAt: new Date().toISOString(), articles };
+}
+
+// ---------- SmartPony partner quotes (job #18) ----------
+// SmartPony (smartpony.ai) is a partner site — a friend's AI handicapping
+// project, separately also building its own trainer-quote pipeline from
+// news articles. Rather than duplicate that scraping work, this reads
+// their already-extracted quotes straight from their database via a real
+// authenticated API call (Supabase's standard REST interface), not by
+// scraping their HTML. Confirmed directly (their site's own public JS
+// bundle, not anything behind the login — reading a site's own client-side
+// code is not the same as accessing gated data) that this is a stock
+// Supabase app: project ref jtyraplxburkdacqialz, a `trainer_quotes` table
+// with columns including trainer_name_raw/trainer_name, mentioned_horse_name,
+// quote_text, status, created_at, and raw_article_id (joined to
+// raw_articles for url/title/source/published_at). The anon key below is
+// SmartPony's own public client key (meant to be public — Supabase's actual
+// access control is row-level security enforced server-side, not secrecy
+// of this key), not a credential of ours.
+const SMARTPONY_SUPABASE_URL = "https://jtyraplxburkdacqialz.supabase.co";
+const SMARTPONY_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp0eXJhcGx4YnVya2RhY3FpYWx6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg3MTczODMsImV4cCI6MjA2NDI5MzM4M30.Xw88xiCO96cisTGiMYLU8yE8bjAHUvlNtC-YuLPvgWE";
+
+// Logs in fresh on every call rather than persisting/refreshing a session
+// token in KV — a Supabase password-grant login is one lightweight REST
+// call, this job only runs on the same schedule/manual-trigger cadence as
+// every other import in this file (nowhere near a rate-limit concern), and
+// re-authenticating every time avoids the added failure modes of storing a
+// refresh token across runs (expiry, revocation, races between two
+// concurrent runs). Throws with SmartPony's own error detail on failure —
+// most commonly, the SMARTPONY_EMAIL/SMARTPONY_PASSWORD secrets aren't set
+// yet, or the password changed on their end.
+async function smartponyLogin(env) {
+  if (!env.SMARTPONY_EMAIL || !env.SMARTPONY_PASSWORD) {
+    throw new Error("SMARTPONY_EMAIL/SMARTPONY_PASSWORD secrets not set");
+  }
+  const res = await fetch(`${SMARTPONY_SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SMARTPONY_ANON_KEY },
+    body: JSON.stringify({ email: env.SMARTPONY_EMAIL, password: env.SMARTPONY_PASSWORD }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) {
+    throw new Error(body.error_description || body.msg || `SmartPony login returned HTTP ${res.status}`);
+  }
+  return body.access_token;
+}
+
+async function fetchSmartPonyQuotes(env) {
+  const accessToken = await smartponyLogin(env);
+  // Only their own reviewed queue (status=verified) — needs_review and
+  // auto_matched haven't been confirmed accurate on SmartPony's end, and
+  // this file's own standard elsewhere is to only import what's actually
+  // confirmed, not guess at what's still pending review.
+  const query = "select=id,quote_text,trainer_name_raw,trainer_name,mentioned_horse_name,created_at,raw_articles(url,title,source,published_at)"
+    + "&status=eq.verified&order=created_at.desc&limit=500";
+  const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
+    headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+    cf: { cacheTtl: 300, cacheEverything: false }, // per-user auth header — never a shared cache key
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || `SmartPony quotes fetch returned HTTP ${res.status}`);
+  }
+  const rows = await res.json();
+  const quotes = [];
+  for (const row of rows) {
+    const horseName = (row.mentioned_horse_name || "").trim();
+    const text = (row.quote_text || "").trim();
+    if (!horseName || !text) continue; // no identifiable horse — no guessing which one, same rule every other import job here follows
+    const trainerName = (row.trainer_name_raw || row.trainer_name || "").trim();
+    if (!trainerName) continue;
+    const article = row.raw_articles || {};
+    quotes.push({
+      quoteId: row.id,
+      trainerName,
+      horseName,
+      text,
+      date: article.published_at ? article.published_at.slice(0, 10) : (row.created_at ? row.created_at.slice(0, 10) : null),
+      source: article.title || article.source || "SmartPony",
+      link: article.url || null,
+    });
+  }
+  return quotes;
 }

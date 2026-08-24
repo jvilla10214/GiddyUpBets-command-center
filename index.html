@@ -2997,10 +2997,13 @@
         Stable Tour entries are stored centrally on the configured Worker and shared with everyone using this
         site — not private to this browser.
         <br><br>
-        Also auto-imports from two sources, both scoped to trainers you've already added (neither one adds a new
-        trainer on its own): thisishorseracing.com's Stable Tour series, and TDN's Saratoga Notebook — the latter
-        only picks up an article when it both names a tracked trainer and bolds the horse's name, so coverage is
-        partial by design rather than guessed at.
+        Also auto-imports from four sources, all scoped to trainers you've already added (none of them adds a new
+        trainer on its own): thisishorseracing.com's Stable Tour series; TDN's Saratoga Notebook, which only picks
+        up an article when it both names a tracked trainer and bolds the horse's name; Horse Racing Nation, which
+        requires an actual quoted trainer, not just a mention; and SmartPony's own reviewed trainer-quote database
+        (a partner site — real quotes they've already confirmed accurate, not scraped from an article). Coverage is
+        partial by design rather than guessed at wherever a source can't confidently tell which horse a quote is
+        about.
       </div>
     </div>
   </div>
@@ -7204,6 +7207,21 @@
   }
   let stableHrnSeen = loadStableHrnSeen();
 
+  // Same idea again, for job #18's SmartPony source — keyed by SmartPony's
+  // own quote id (a real unique id, unlike TDN/HRN's composite string keys
+  // built out of link+trainer+horse since those sources have no id of
+  // their own to dedupe on).
+  const STABLE_SMARTPONY_SEEN_KEY = "giddyupbets_stable_smartpony_seen_v1";
+  function loadStableSmartPonySeen(){
+    try { return new Set(JSON.parse(localStorage.getItem(STABLE_SMARTPONY_SEEN_KEY)) ?? []); }
+    catch { return new Set(); }
+  }
+  function saveStableSmartPonySeen(){
+    try { localStorage.setItem(STABLE_SMARTPONY_SEEN_KEY, JSON.stringify([...stableSmartPonySeen])); }
+    catch(err){ console.error("Stable SmartPony-seen failed to save", err); }
+  }
+  let stableSmartPonySeen = loadStableSmartPonySeen();
+
   // A detected section's trainerName ("Chad Brown") is matched against each
   // tracked trainer by last name only — tracked entries are free-text
   // ("Chad C. Brown", "W. Bret Calhoun") and normalizeTrainerName() only
@@ -7395,6 +7413,48 @@
     }
   }
 
+  // Job #18 — SmartPony partner quotes, same overall shape as the imports
+  // above but simpler: the worker's /smartpony-quotes route already
+  // returns one quote per horse/trainer (SmartPony did the article
+  // extraction and horse-matching on their own end), so there's no
+  // paragraph-proximity section-building to do here at all — just resolve
+  // each quote's trainer against the tracked list and file it.
+  async function autoImportSmartPonyQuotes(){
+    if (!stableTrainers.length) return; // nothing to match against
+    let data;
+    try{ data = await stableApiGet("/smartpony-quotes"); }
+    catch(err){ console.error("SmartPony fetch failed", err); return; }
+
+    const noteItems = [];
+    for (const q of data.quotes || []){
+      if (stableSmartPonySeen.has(q.quoteId)) continue;
+      const matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
+      if (!matchedTrainer) continue; // not tracked, or ambiguous same-surname — no guess, re-checked next poll
+      noteItems.push({
+        trainer: matchedTrainer,
+        horse: q.horseName,
+        note: q.text,
+        date: q.date || nowInTrackTZ().date,
+        source: q.source || "SmartPony",
+        link: q.link || "",
+        autoImported: true,
+      });
+      stableSmartPonySeen.add(q.quoteId);
+    }
+    if (!noteItems.length) return;
+
+    try{
+      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
+      saveStableSmartPonySeen();
+      const fresh = await loadStableData();
+      stableTrainers = fresh.trainers;
+      stableNotes = fresh.notes;
+      renderStableTour();
+    } catch(err){
+      console.error("SmartPony import failed to save", err);
+    }
+  }
+
   $("stableFeedSaveBtn").addEventListener("click", () => {
     const url = $("stableFeedUrlInput").value.trim();
     const key = $("stableApiKeyInput").value;
@@ -7404,18 +7464,20 @@
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
+    autoImportSmartPonyQuotes();
   });
   $("stableFeedCheckBtn").addEventListener("click", () => {
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
+    autoImportSmartPonyQuotes();
   });
   // Auto-import "seen" tracking lives in THIS browser's localStorage (per
   // device, deliberately not moved to the shared backend) so it survives
   // switching Worker URLs — but that means moving Stable Tour to a fresh
   // shared store (or pointing at a different Worker) leaves this device
   // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs all four auto-import checks.
+  // This clears that local memory and re-runs all five auto-import checks.
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
     stableSeenArticles = [];
     saveStableSeenArticles();
@@ -7425,10 +7487,13 @@
     saveStableTdnSeen();
     stableHrnSeen = new Set();
     saveStableHrnSeen();
+    stableSmartPonySeen = new Set();
+    saveStableSmartPonySeen();
     $("stableFeedStatus").textContent = "Import history cleared — checking now…";
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
+    autoImportSmartPonyQuotes();
     fetchNewsWire();
   });
 
@@ -10237,10 +10302,12 @@
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
     autoImportHrnNews(); // same reasoning
+    autoImportSmartPonyQuotes(); // same reasoning
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
   setInterval(autoImportTdnNotebook, 60 * 60 * 1000); // same cadence, separate interval so one source's hiccup can't block the other
   setInterval(autoImportHrnNews, 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportSmartPonyQuotes, 60 * 60 * 1000); // same cadence, separate interval too
 
   // Refresh from the shared source periodically and whenever the tab
   // regains focus, so a friend's changes on another device show up without
