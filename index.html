@@ -7962,6 +7962,32 @@
     return (doc.body.textContent || "").replace(/\s+/g, " ").trim();
   }
 
+  // Best-effort horse name for the note's label, in place of the article
+  // headline — only when a genuinely close match exists. Some sources
+  // (Horse Racing Nation, TDN) tag horse names as real links in their RSS
+  // body (verified directly: HRN uses <a href=".../horse/Name">, TDN uses
+  // <a class="horse-link">, both sometimes wrapping a nested <strong> too).
+  // Deliberately conservative: verified against a real HRN stakes preview
+  // that the ONE inline horse link sits ~1000+ characters from the actual
+  // trainer quote (the article names the horse once up top, then uses "she"/
+  // "her" for the rest), so a wide search radius would just as often grab
+  // the WRONG horse — a false horse name asserted here is worse than
+  // honestly falling back to the headline, so this only trusts a link
+  // within HORSE_LINK_MAX_DIST characters of the quote.
+  const HORSE_LINK_MAX_DIST = 400;
+  function nearestLinkedHorseName(proseHtml, quoteAnchorText){
+    const anchorIdx = proseHtml.indexOf(quoteAnchorText);
+    if (anchorIdx === -1) return null;
+    const linkRe = /<a[^>]*(?:href="[^"]*horseracingnation\.com\/horse\/[^"]*"|class="[^"]*horse-link[^"]*")[^>]*>(?:<strong>)?([^<]{2,50}?)(?:<\/strong>)?<\/a>/g;
+    let best = null, bestDist = Infinity;
+    let m;
+    while ((m = linkRe.exec(proseHtml))) {
+      const dist = Math.abs(m.index - anchorIdx);
+      if (dist < bestDist) { bestDist = dist; best = m[1].trim(); }
+    }
+    return bestDist <= HORSE_LINK_MAX_DIST ? best : null;
+  }
+
   async function scanNewsForTrainerMentions(items){
     if (!stableTrainers.length) return;
     let added = false;
@@ -7971,7 +7997,18 @@
       // function's "whole headline as the horse name" fallback) — skip them
       // here so a mention doesn't also file a second, cruder note.
       if (/^saratoga notebook/i.test(item.title)) continue;
-      const bodyText = stripHtml(item.body);
+      // Cuts off before any embedded entries/results table — verified
+      // directly this isn't just noise (same reasoning job #17's own
+      // extractHrnArticleBody() already documents) but an actual DOMParser
+      // correctness bug: a real HRN article's malformed table markup made
+      // the browser's HTML5 error-recovery parser silently drop EARLIER
+      // prose paragraphs (including the real trainer quotes) from
+      // .textContent entirely, not just the table itself. Confirmed the
+      // exact same article's quotes parse out fine once the table's never
+      // handed to DOMParser in the first place.
+      const tableIdx = item.body.indexOf("<table");
+      const proseHtml = tableIdx === -1 ? item.body : item.body.slice(0, tableIdx);
+      const bodyText = stripHtml(proseHtml);
       // The actual "this is worth a note" signal — a quoted string
       // attributed by name, not just the trainer's bare name turning up
       // anywhere in the piece (see this function's own comment on why that
@@ -7989,12 +8026,13 @@
         // even the part that mentioned this trainer at all.
         const start = Math.max(0, match.index - 250);
         const end = Math.min(bodyText.length, match.index + match[0].length + 250);
+        const horseLabel = nearestLinkedHorseName(proseHtml, match[1].slice(0, 40)) || item.title;
         // Only mark seen once the save actually succeeds — marking it first
         // (the old behavior) meant a failed write (bad passphrase, network
         // blip, a KV quota outage) silently and permanently dropped that
         // mention, since it would never be retried on this device again.
         const ok = await addStableNote(trainer, {
-          horse: item.title,
+          horse: horseLabel,
           note: bodyText.slice(start, end),
           date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
           source: item.source,
