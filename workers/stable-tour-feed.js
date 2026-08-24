@@ -730,6 +730,25 @@ async function handleRequest(request, env) {
       return json({ quotes }, 200, { "Cache-Control": "public, max-age=900" });
     }
 
+    // Temporary investigation route — full-column dump of trainer_quotes
+    // rows matching a name filter, to see fields fetchSmartPonyQuotes()'s
+    // curated select= list doesn't request. Not meant to stay long-term.
+    if (url.pathname === "/smartpony-debug" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const nameFilter = url.searchParams.get("name") || "";
+      try {
+        const accessToken = await smartponyLogin(env);
+        const query = `select=*&trainer_name_raw=ilike.*${encodeURIComponent(nameFilter)}*&limit=5`;
+        const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
+          headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+        });
+        const body = await res.text();
+        return new Response(body, { status: res.status, headers: { "Content-Type": "application/json" } });
+      } catch (err) {
+        return json({ error: err.message }, 502);
+      }
+    }
+
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
       const lat = url.searchParams.get("lat");
       const lon = url.searchParams.get("lon");
