@@ -7926,15 +7926,23 @@
   // ---------- News Wire -> Stable Tour trainer-mention auto-import ----------
   // General racing news occasionally has a trainer's comment about one of
   // their horses buried in an otherwise unrelated race recap. This scans
-  // each freshly-fetched News Wire item's title+body for a mention of a
-  // trainer already tracked in Stable Tour and files it as a note under
-  // that trainer — scoped to trainers you've already added (there's no
-  // reliable way to guess a *new* trainer's name out of free-form prose
+  // each freshly-fetched News Wire item's body for a real quote attributed
+  // to a trainer already tracked in Stable Tour and files it as a note
+  // under that trainer — scoped to trainers you've already added (there's
+  // no reliable way to guess a *new* trainer's name out of free-form prose
   // the way thisishorseracing.com's structured "Stable Tour: Trainer Name"
-  // titles allow). It also doesn't try to guess which horse is being
-  // discussed — the article's own headline is used as the note's label
-  // instead of inventing a horse name, so nothing false gets asserted; the
-  // linked source and snippet let you confirm what it's actually about.
+  // titles allow). Requiring an actual "..." Name said quote (not just the
+  // trainer's bare name appearing anywhere) matters more here than
+  // anywhere else in this file — News Wire mixes in full-field preview/
+  // analysis pieces that mention a dozen names in passing while quoting
+  // no one; a real example caught during testing pulled in a whole
+  // "why they win, why they lose" field breakdown as one "note" just
+  // because a tracked trainer's name appeared once, comparing rivals, with
+  // no quote from them anywhere in the piece. Still doesn't try to guess
+  // which horse is being discussed — the article's own headline is used as
+  // the note's label instead of inventing a horse name, so nothing false
+  // gets asserted; the linked source and snippet let you confirm what it's
+  // actually about.
   const STABLE_NEWS_SEEN_KEY = "giddyupbets_stable_news_seen_v1";
   function loadStableNewsSeen(){
     try { return new Set(JSON.parse(localStorage.getItem(STABLE_NEWS_SEEN_KEY)) ?? []); }
@@ -7954,10 +7962,6 @@
     return (doc.body.textContent || "").replace(/\s+/g, " ").trim();
   }
 
-  function escapeRegExp(str){
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
   async function scanNewsForTrainerMentions(items){
     if (!stableTrainers.length) return;
     let added = false;
@@ -7968,18 +7972,30 @@
       // here so a mention doesn't also file a second, cruder note.
       if (/^saratoga notebook/i.test(item.title)) continue;
       const bodyText = stripHtml(item.body);
-      const haystack = `${item.title} ${bodyText}`;
+      // The actual "this is worth a note" signal — a quoted string
+      // attributed by name, not just the trainer's bare name turning up
+      // anywhere in the piece (see this function's own comment on why that
+      // distinction matters here specifically).
+      const quotes = [...bodyText.matchAll(/"[^"]{8,400}"\s+([A-Z][A-Za-z'’-]+)\s+said\b/g)];
+      if (!quotes.length) continue;
       for (const trainer of stableTrainers){
         const seenKey = `${item.link}|${trainer}`;
         if (stableNewsSeen.has(seenKey)) continue;
-        if (!new RegExp(`\\b${escapeRegExp(trainer)}\\b`, "i").test(haystack)) continue;
+        const match = quotes.find(qm => trainerLastName(qm[1]) === trainerLastName(trainer));
+        if (!match) continue;
+        // A tight window around the actual quote (same idea as job #17's
+        // HRN import) instead of the old flat 1200-char slice off the
+        // START of the article, which — for a long piece — usually wasn't
+        // even the part that mentioned this trainer at all.
+        const start = Math.max(0, match.index - 250);
+        const end = Math.min(bodyText.length, match.index + match[0].length + 250);
         // Only mark seen once the save actually succeeds — marking it first
         // (the old behavior) meant a failed write (bad passphrase, network
         // blip, a KV quota outage) silently and permanently dropped that
         // mention, since it would never be retried on this device again.
         const ok = await addStableNote(trainer, {
           horse: item.title,
-          note: bodyText.slice(0, 1200),
+          note: bodyText.slice(start, end),
           date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
           source: item.source,
           link: item.link,
