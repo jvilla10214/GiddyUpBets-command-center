@@ -1446,6 +1446,23 @@
     color: var(--parchment);
     white-space: nowrap;
   }
+  /* Conditions is the one free-text column — everything else is a short
+     fixed-format value that's fine getting clipped by nowrap. Truncated
+     with an ellipsis (not just abruptly cut off) by default, and
+     click-to-expand wraps the full text within the cell instead of
+     needing a wider column/more horizontal space all the time. */
+  .log-conditions-cell{
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .log-conditions-cell.expanded{
+    max-width: 420px;
+    white-space: normal;
+    word-break: break-word;
+    cursor: default;
+  }
   .log-table tr:last-child td{ border-bottom: none; }
   .log-table .log-empty{ color: var(--parchment-dim); white-space: normal; }
   .log-partial td{ color: var(--parchment-dim); }
@@ -6475,7 +6492,7 @@
       <td>${entry.rainTotal != null ? entry.rainTotal.toFixed(2) + " in" : "—"}</td>
       <td>${entry.dirtConditionLabel ?? "—"}</td>
       <td>${entry.turfConditionLabel ?? "—"}</td>
-      <td>${entry.conditionsDesc ?? "—"}</td>
+      <td class="log-conditions-cell${logExpandedConditions.has(entry.date) ? " expanded" : ""}" data-date="${entry.date}" title="${escapeHtml(entry.conditionsDesc ?? "")}">${entry.conditionsDesc ?? "—"}</td>
     `;
   }
 
@@ -6485,6 +6502,9 @@
   // track's log defaults back to its own current month rather than carrying
   // over whatever month was being browsed on the previous track.
   let selectedLogMonth = null;
+  // Which dates' Conditions cell is expanded to full text — see
+  // .log-conditions-cell's own CSS comment for why this exists.
+  let logExpandedConditions = new Set();
 
   function monthKeyOf(dateStr){ return dateStr.slice(0, 7); }
   function monthLabelOf(monthKey){
@@ -6554,6 +6574,14 @@
 
     tbody.querySelectorAll(".log-remove").forEach(btn => {
       btn.addEventListener("click", () => removeLogEntry(btn.dataset.date));
+    });
+    tbody.querySelectorAll(".log-conditions-cell").forEach(cell => {
+      cell.addEventListener("click", () => {
+        const date = cell.dataset.date;
+        if (logExpandedConditions.has(date)) logExpandedConditions.delete(date);
+        else logExpandedConditions.add(date);
+        renderLogTable();
+      });
     });
   }
 
