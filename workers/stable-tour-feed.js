@@ -324,10 +324,11 @@
 //    own comment for why re-authenticating beats persisting a session
 //    token) using SMARTPONY_EMAIL/SMARTPONY_PASSWORD secrets — a real
 //    partner login, not a scraped-content credential, so treat those two
-//    secrets with the same care as any other account password. Only pulls
-//    status: "verified" quotes — SmartPony's own review queue, not
-//    unreviewed ones. Same "client resolves against its own tracked list"
-//    reasoning as every other auto-import job here.
+//    secrets with the same care as any other account password. Pulls all
+//    of SmartPony's own review states (needs_review, auto_matched,
+//    verified) — user's explicit call for coverage over only importing
+//    their fully human-reviewed queue. Same "client resolves against its
+//    own tracked list" reasoning as every other auto-import job here.
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
@@ -3270,12 +3271,17 @@ async function smartponyLogin(env) {
 
 async function fetchSmartPonyQuotes(env) {
   const accessToken = await smartponyLogin(env);
-  // Only their own reviewed queue (status=verified) — needs_review and
-  // auto_matched haven't been confirmed accurate on SmartPony's end, and
-  // this file's own standard elsewhere is to only import what's actually
-  // confirmed, not guess at what's still pending review.
+  // All three of SmartPony's own review states (needs_review, auto_matched,
+  // verified) — originally scoped to verified-only, but that missed most
+  // of what's actually on their site (confirmed real: several Chad Brown
+  // quotes visible on smartpony.ai never made it through since they were
+  // still needs_review/auto_matched). User's explicit call: broader
+  // coverage matters more here than only importing SmartPony's own final
+  // human-reviewed queue — this file's usual "don't guess" standard is
+  // about horse/trainer identification, which SmartPony has already done
+  // for us, not about their internal review-workflow status.
   const query = "select=id,quote_text,trainer_name_raw,trainer_name,mentioned_horse_name,created_at,raw_articles(url,title,source,published_at)"
-    + "&status=eq.verified&order=created_at.desc&limit=500";
+    + "&status=in.(needs_review,auto_matched,verified)&order=created_at.desc&limit=500";
   const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
     headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
     cf: { cacheTtl: 300, cacheEverything: false }, // per-user auth header — never a shared cache key
