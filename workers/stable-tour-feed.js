@@ -329,6 +329,14 @@
 //    verified) — user's explicit call for coverage over only importing
 //    their fully human-reviewed queue. Same "client resolves against its
 //    own tracked list" reasoning as every other auto-import job here.
+//    trainer_name_raw isn't always actually the trainer — confirmed real
+//    cases of a horse's jockey or owner being quoted and treated as if
+//    they were the trainer. Cross-references SmartPony's own race_entries
+//    table (their past-performance data, keyed by matched_horse_id) to
+//    find who's actually training that horse; when the quoted person
+//    isn't them, the note files under the real trainer with the actual
+//    speaker's name kept in the note text instead. Also passes through
+//    SmartPony's own sentiment tag per quote for display.
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
@@ -527,6 +535,7 @@ async function handleRequest(request, env) {
         source: body.source || "",
         link: body.link || "",
         autoImported: !!body.autoImported,
+        sentiment: body.sentiment || null, // optional — currently only SmartPony (job #18) supplies this
         capturedAt: new Date().toISOString(),
       };
       state.notes.push(note);
@@ -556,6 +565,7 @@ async function handleRequest(request, env) {
           source: item.source || "",
           link: item.link || "",
           autoImported: !!item.autoImported,
+          sentiment: item.sentiment || null, // optional — currently only SmartPony (job #18) supplies this
           capturedAt: new Date().toISOString(),
         };
         state.notes.push(note);
@@ -728,43 +738,6 @@ async function handleRequest(request, env) {
         return json({ error: `SmartPony fetch failed: ${err.message}` }, 502);
       }
       return json({ quotes }, 200, { "Cache-Control": "public, max-age=900" });
-    }
-
-    // Temporary investigation route — full-column dump of trainer_quotes
-    // rows matching a name filter, to see fields fetchSmartPonyQuotes()'s
-    // curated select= list doesn't request. Not meant to stay long-term.
-    if (url.pathname === "/smartpony-debug" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
-      const nameFilter = url.searchParams.get("name") || "";
-      const mode = url.searchParams.get("mode") || "";
-      try {
-        const accessToken = await smartponyLogin(env);
-        if (mode === "openapi") {
-          const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/`, {
-            headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
-          });
-          const body = await res.text();
-          return new Response(body, { status: res.status, headers: { "Content-Type": "application/json" } });
-        }
-        if (mode === "horse"){
-          const horseId = url.searchParams.get("id") || "";
-          const table = url.searchParams.get("table") || "horses";
-          const col = url.searchParams.get("col") || "id";
-          const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(horseId)}&select=*&limit=10`, {
-            headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
-          });
-          const body = await res.text();
-          return new Response(body, { status: res.status, headers: { "Content-Type": "application/json" } });
-        }
-        const query = `select=*&trainer_name_raw=ilike.*${encodeURIComponent(nameFilter)}*&limit=5`;
-        const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
-          headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
-        });
-        const body = await res.text();
-        return new Response(body, { status: res.status, headers: { "Content-Type": "application/json" } });
-      } catch (err) {
-        return json({ error: err.message }, 502);
-      }
     }
 
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
@@ -3306,6 +3279,21 @@ async function smartponyLogin(env) {
   return body.access_token;
 }
 
+// SmartPony's own race_entries rows store person names "LASTNAME FIRST[
+// MIDDLE]" (all caps) — reformats to "First [Middle] Lastname" so it's
+// comparable against this file's own "First Last" convention (and so
+// resolveTrackedTrainer()'s nickname aliasing, e.g. Steve/Steven, still
+// applies on the client).
+function titleCaseName(s) {
+  return s.toLowerCase().split(/\s+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+function reformatLastFirstName(raw) {
+  const parts = raw.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return titleCaseName(raw);
+  const [last, ...rest] = parts;
+  return titleCaseName([...rest, last].join(" "));
+}
+
 async function fetchSmartPonyQuotes(env) {
   const accessToken = await smartponyLogin(env);
   // All three of SmartPony's own review states (needs_review, auto_matched,
@@ -3317,7 +3305,7 @@ async function fetchSmartPonyQuotes(env) {
   // human-reviewed queue — this file's usual "don't guess" standard is
   // about horse/trainer identification, which SmartPony has already done
   // for us, not about their internal review-workflow status.
-  const query = "select=id,quote_text,trainer_name_raw,trainer_name,mentioned_horse_name,created_at,raw_articles(url,title,source,published_at)"
+  const query = "select=id,quote_text,trainer_name_raw,trainer_name,mentioned_horse_name,sentiment,created_at,matched_horse_id,raw_articles(url,title,source,published_at)"
     + "&status=in.(needs_review,auto_matched,verified)&order=created_at.desc&limit=500";
   const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
     headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
@@ -3328,19 +3316,64 @@ async function fetchSmartPonyQuotes(env) {
     throw new Error(body.message || `SmartPony quotes fetch returned HTTP ${res.status}`);
   }
   const rows = await res.json();
+
+  // Cross-references against SmartPony's own race_entries table (real
+  // trainer/jockey/owner per horse, from their own past-performance data —
+  // not just whoever got quoted) — added after confirming real
+  // mis-attribution: trainer_name_raw sometimes names the JOCKEY or OWNER
+  // instead of the trainer (confirmed real: a "Jose Ortiz" quote — actually
+  // Counting Stars' jockey — and a "Terry Finley" quote — actually
+  // Powerline's owner — both got treated as if they were the trainer's own
+  // name before this fix, adding real people who aren't trainers at all to
+  // the tracked-trainer list). One bulk lookup for every horse referenced
+  // in this batch, not one query per quote — KV/API-call discipline this
+  // file follows everywhere else too.
+  const horseIds = [...new Set(rows.map((r) => r.matched_horse_id).filter(Boolean))];
+  const entryByHorseId = {};
+  if (horseIds.length) {
+    const entriesRes = await fetch(
+      `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?horse_id=in.(${horseIds.join(",")})&select=horse_id,trainer,jockey,owner,created_at&order=created_at.desc`,
+      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
+    );
+    if (entriesRes.ok) {
+      const entryRows = await entriesRes.json();
+      for (const e of entryRows) {
+        if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = e; // newest first — first hit per horse wins
+      }
+    }
+  }
+
   const quotes = [];
   for (const row of rows) {
     const horseName = (row.mentioned_horse_name || "").trim();
     const text = (row.quote_text || "").trim();
     if (!horseName || !text) continue; // no identifiable horse — no guessing which one, same rule every other import job here follows
-    const trainerName = (row.trainer_name_raw || row.trainer_name || "").trim();
+    let trainerName = (row.trainer_name_raw || row.trainer_name || "").trim();
     if (!trainerName) continue;
+    let noteText = text;
+
+    const entry = row.matched_horse_id ? entryByHorseId[row.matched_horse_id] : null;
+    if (entry?.trainer) {
+      const realTrainer = reformatLastFirstName(entry.trainer);
+      if (lastNameKey(trainerName) !== lastNameKey(realTrainer)) {
+        // Whoever's quoted isn't the trainer on record for this horse —
+        // most often the jockey or owner. Files under the real trainer
+        // regardless (that's who this note belongs to), but keeps the
+        // actual speaker's name in the note text so that context isn't
+        // lost — a jockey's read on a horse is different information than
+        // the trainer's own, worth knowing it wasn't the trainer talking.
+        noteText = `${trainerName}: ${text}`;
+        trainerName = realTrainer;
+      }
+    }
+
     const article = row.raw_articles || {};
     quotes.push({
       quoteId: row.id,
       trainerName,
       horseName,
-      text,
+      text: noteText,
+      sentiment: row.sentiment || null,
       date: article.published_at ? article.published_at.slice(0, 10) : (row.created_at ? row.created_at.slice(0, 10) : null),
       source: article.title || article.source || "SmartPony",
       link: article.url || null,
