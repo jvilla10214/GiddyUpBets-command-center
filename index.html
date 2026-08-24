@@ -1233,8 +1233,16 @@
   .bias-neutral{ background: rgba(169,164,150,0.15); color: var(--parchment-dim); }
   .bias-mixed{ background: rgba(192,120,48,0.15); color: var(--clay); }
   /* Shared by both the Rail and Notes columns — long NYRA-sourced text
-     clamps to ~3 lines by default with a per-cell Show more/less toggle. */
-  .bias-clamp-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
+     clamps to ~3 lines by default with a per-cell Show more/less toggle.
+     Selector has to be at least as specific as ".log-table td" (this cell
+     lives in a <table class="log-table">) — a plain ".bias-clamp-cell"
+     alone loses that specificity fight and .log-table td's white-space:
+     nowrap wins instead, silently forcing the whole cell onto one line no
+     matter what .bias-clamp-text's own max-height/overflow below say —
+     confirmed real: this had been broken since the clamp was first built,
+     the "Show more" button rendered but expanding it did nothing visible
+     because there was never more than one line to reveal. */
+  .log-table td.bias-clamp-cell{ white-space: normal; max-width: 260px; color: var(--parchment-dim); }
   .bias-clamp-text{
     max-height: 4.8em; /* ~3 lines at this cell's line-height */
     overflow: hidden;
@@ -5387,18 +5395,35 @@
   // text (Rail notes run up to 350+ characters some days, pulled verbatim
   // from Andy Serling's write-up) that used to render on the table's default
   // single-line nowrap and visually cut off. Clamps to ~3 lines by default
-  // with a Show more/less toggle; only bothers with the toggle when there's
-  // actually enough text to clamp.
+  // with a Show more/less toggle. The button always renders (hidden by
+  // default) rather than deciding up front from text length — a
+  // character-count guess doesn't track actual 3-line overflow at this
+  // cell's fixed width (confirmed real: a 118-character note still
+  // overflowed but fell under the old 150-char threshold, so it rendered
+  // clipped with no way to expand it at all). showClampButtonsIfNeeded()
+  // below does the real measurement once these are in the DOM.
   function renderClampedCell(idPrefix, date, text){
     const id = `${idPrefix}-${date}`;
     const safeText = text || "—";
-    const showExpand = safeText.length > 150;
     return `
       <td class="bias-clamp-cell" id="${id}">
         <div class="bias-clamp-text">${safeText}</div>
-        ${showExpand ? `<button type="button" class="bias-clamp-expand" data-target="${id}">Show more</button>` : ""}
+        <button type="button" class="bias-clamp-expand" data-target="${id}" hidden>Show more</button>
       </td>
     `;
+  }
+
+  // Real post-layout overflow check (scrollHeight vs clientHeight), not a
+  // text-length guess — has to run after the cells are actually in the DOM
+  // to measure anything. The +1 absorbs float-rounding in some browsers'
+  // layout math that would otherwise flag an exactly-3-line cell (no real
+  // overflow) as needing a button.
+  function showClampButtonsIfNeeded(container){
+    container.querySelectorAll(".bias-clamp-cell").forEach(cell => {
+      const textEl = cell.querySelector(".bias-clamp-text");
+      const btn = cell.querySelector(".bias-clamp-expand");
+      if (textEl && btn && textEl.scrollHeight > textEl.clientHeight + 1) btn.hidden = false;
+    });
   }
 
   function renderBiasTable(){
@@ -5453,6 +5478,7 @@
     tbody.querySelectorAll(".log-remove").forEach(btn => {
       btn.addEventListener("click", () => removeBiasEntry(btn.dataset.date));
     });
+    showClampButtonsIfNeeded(tbody);
     tbody.querySelectorAll(".bias-clamp-expand").forEach(btn => {
       btn.addEventListener("click", () => {
         const cell = document.getElementById(btn.dataset.target);
@@ -10151,6 +10177,16 @@
     document.querySelectorAll(".sidebar-btn").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.page === pageId);
     });
+    // The Bias Tracker's own data load (and every re-render it triggers)
+    // usually happens in the background before this page is ever the
+    // active one — .page{display:none} means scrollHeight/clientHeight
+    // both read as 0 on a hidden element, so showClampButtonsIfNeeded()'s
+    // overflow check inside renderBiasTable() can't measure anything
+    // meaningful until the panel is actually visible. Re-run it now that
+    // switching here just made it visible, so a Show more button that
+    // should exist doesn't stay permanently hidden from a measurement
+    // taken while nobody could see the table anyway.
+    if (pageId === "bias") showClampButtonsIfNeeded($("biasTableBody"));
   }
   document.querySelectorAll(".sidebar-btn").forEach(btn => {
     btn.addEventListener("click", () => setActivePage(btn.dataset.page));
