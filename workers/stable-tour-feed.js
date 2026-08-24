@@ -740,6 +740,23 @@ async function handleRequest(request, env) {
       return json({ quotes }, 200, { "Cache-Control": "public, max-age=900" });
     }
 
+    // One-time comprehensive audit — checks EVERY currently tracked
+    // trainer's notes against SmartPony's own race_entries data (by horse
+    // name, not by quote), not just newly-imported quotes. Built after
+    // repeatedly finding pre-existing mis-attributed notes (jockeys,
+    // owners, assistants, reporters, duplicate name variants) one at a
+    // time via user reports — this checks the whole backlog in one pass.
+    // Read-only: reports mismatches, changes nothing itself.
+    if (url.pathname === "/smartpony-audit" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      try {
+        const report = await auditNotesAgainstSmartPony(env);
+        return json(report, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `SmartPony audit failed: ${err.message}` }, 502);
+      }
+    }
+
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
       const lat = url.searchParams.get("lat");
       const lon = url.searchParams.get("lon");
@@ -3383,4 +3400,92 @@ async function fetchSmartPonyQuotes(env) {
     });
   }
   return quotes;
+}
+
+// Checks EVERY currently tracked trainer's notes against SmartPony's own
+// race_entries data, keyed by horse NAME — not by quote id, so this covers
+// the whole existing note backlog (including notes from TDN/HRN/News Wire/
+// thisishorseracing.com, not just SmartPony-sourced ones), unlike
+// fetchSmartPonyQuotes()'s own race_entries check which only ever applies
+// to a fresh SmartPony quote at import time. Built after repeatedly
+// finding pre-existing mis-attributed notes one at a time via user reports
+// (jockeys, owners, assistants, a reporter, duplicate name variants) —
+// this checks it all in one pass instead. Read-only: reports mismatches,
+// changes nothing itself.
+async function auditNotesAgainstSmartPony(env) {
+  const accessToken = await smartponyLogin(env);
+  const state = await readState(env);
+  const notes = state.notes;
+
+  const horseNames = [...new Set(notes.map((n) => (n.horse || "").trim()).filter(Boolean))];
+
+  // SmartPony stores horse_name in ALL CAPS — batched exact-match lookup
+  // (not one query per horse, of which there can be hundreds) to find each
+  // one's id. PostgREST's in.() list syntax needs each value double-quoted
+  // since horse names contain spaces; the whole list is percent-encoded as
+  // one unit and decoded back to literal syntax server-side, same as any
+  // other query string value.
+  const BATCH = 40;
+  const nameToHorseId = {};
+  for (let i = 0; i < horseNames.length; i += BATCH) {
+    const batch = horseNames.slice(i, i + BATCH);
+    const inList = batch.map((n) => `"${n.toUpperCase().replace(/"/g, '\\"')}"`).join(",");
+    const res = await fetch(
+      `${SMARTPONY_SUPABASE_URL}/rest/v1/horses?horse_name=in.(${encodeURIComponent(inList)})&select=id,horse_name`,
+      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) continue; // best-effort — skip a bad batch rather than failing the whole audit
+    const rows = await res.json();
+    for (const row of rows) {
+      const match = batch.find((n) => n.toUpperCase() === row.horse_name);
+      if (match) nameToHorseId[match] = row.id;
+    }
+  }
+
+  const horseIds = [...new Set(Object.values(nameToHorseId))];
+  const entryByHorseId = {};
+  for (let i = 0; i < horseIds.length; i += BATCH) {
+    const batch = horseIds.slice(i, i + BATCH);
+    const res = await fetch(
+      `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?horse_id=in.(${batch.join(",")})&select=horse_id,trainer,jockey,owner,created_at&order=created_at.desc`,
+      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) continue;
+    const rows = await res.json();
+    for (const e of rows) {
+      if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = e; // newest first — first hit per horse wins
+    }
+  }
+
+  const mismatches = [];
+  let checked = 0;
+  for (const n of notes) {
+    const horseId = nameToHorseId[(n.horse || "").trim()];
+    if (!horseId) continue; // horse not in SmartPony's data — nothing to check against
+    const entry = entryByHorseId[horseId];
+    if (!entry?.trainer) continue;
+    checked++;
+    const realTrainer = reformatLastFirstName(entry.trainer);
+    if (lastNameKey(n.trainer || "") !== lastNameKey(realTrainer)) {
+      mismatches.push({
+        noteId: n.id,
+        horse: n.horse,
+        currentTrainer: n.trainer,
+        realTrainer,
+        realJockey: entry.jockey ? reformatLastFirstName(entry.jockey) : null,
+        realOwner: entry.owner || null,
+        source: n.source || null,
+        noteSnippet: (n.note || "").slice(0, 120),
+      });
+    }
+  }
+
+  return {
+    totalNotes: notes.length,
+    distinctHorses: horseNames.length,
+    horsesFoundInSmartPony: Object.keys(nameToHorseId).length,
+    checked,
+    mismatchCount: mismatches.length,
+    mismatches,
+  };
 }
