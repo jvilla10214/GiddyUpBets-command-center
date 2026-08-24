@@ -749,7 +749,8 @@ async function handleRequest(request, env) {
         if (mode === "horse"){
           const horseId = url.searchParams.get("id") || "";
           const table = url.searchParams.get("table") || "horses";
-          const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(horseId)}&select=*`, {
+          const col = url.searchParams.get("col") || "id";
+          const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(horseId)}&select=*&limit=10`, {
             headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
           });
           const body = await res.text();
