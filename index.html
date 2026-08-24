@@ -4420,19 +4420,44 @@
   // single condition per column rather than the full multi-race string.
   const NYRA_DIRT_LABEL_MAP = { fast: "FAST", good: "GOOD", sloppy: "SLOPPY / WET", muddy: "MUDDY" };
   const NYRA_TURF_LABEL_MAP = { firm: "FIRM", good: "GOOD", yielding: "YIELDING", soft: "SOFT", hard: "FIRM" };
+  // Escalating wetness, matching classifyDirtCondition()'s own tiers —
+  // used to pick a single representative label when the condition changed
+  // mid-card (see parseNyraTrackCondition() below), so the stored
+  // dirtConditionLabel stays one of the four values other code compares
+  // against exactly (e.g. the Bias Tracker's wet/dry aggregate stats at
+  // `match.dirtConditionLabel === "MUDDY" || ... === "SLOPPY / WET"`).
+  const DIRT_LABEL_SEVERITY = { "FAST": 0, "GOOD": 1, "MUDDY": 2, "SLOPPY / WET": 3 };
   function parseNyraTrackCondition(trackCondition){
-    if (!trackCondition) return { dirtLabel: null, turfLabel: null };
+    if (!trackCondition) return { dirtLabel: null, turfLabel: null, dirtChangedNote: null };
     const [dirtPart, turfPart] = trackCondition.split("/").map(s => s?.trim());
     const firstWord = (s) => {
       if (!s) return null;
       const m = s.match(/^([A-Za-z\s]+?)(?:\s*\(|\s*;|$)/);
       return (m ? m[1] : s).trim().toLowerCase();
     };
-    const dirtRaw = firstWord(dirtPart);
+    // NYRA occasionally publishes a dirt condition that changed during the
+    // card — multiple ";"-separated segments, e.g. "Fast ( 3-4 ); Sloppy
+    // ( sealed ) 5-10" (confirmed real, 2026-08-23: Fast for the early
+    // races, sealed Sloppy after a mid-card thunderstorm). Used to only
+    // ever read the FIRST segment, silently dropping that the track got
+    // wetter later — every segment is parsed now, the worst (wettest) one
+    // becomes dirtLabel, and the full original text comes back separately
+    // in dirtChangedNote so the caller can fold it into a description
+    // instead of losing it.
+    const dirtSegments = (dirtPart || "").split(";").map(s => s.trim()).filter(Boolean);
+    const dirtLabels = dirtSegments
+      .map(seg => { const raw = firstWord(seg); return raw ? (NYRA_DIRT_LABEL_MAP[raw] ?? raw.toUpperCase()) : null; })
+      .filter(Boolean);
+    let dirtLabel = null;
+    if (dirtLabels.length){
+      dirtLabel = dirtLabels.reduce((worst, cur) =>
+        (DIRT_LABEL_SEVERITY[cur] ?? 0) > (DIRT_LABEL_SEVERITY[worst] ?? 0) ? cur : worst);
+    }
     const turfRaw = firstWord(turfPart);
     return {
-      dirtLabel: dirtRaw ? (NYRA_DIRT_LABEL_MAP[dirtRaw] ?? dirtRaw.toUpperCase()) : null,
+      dirtLabel,
       turfLabel: turfRaw ? (NYRA_TURF_LABEL_MAP[turfRaw] ?? turfRaw.toUpperCase()) : null,
+      dirtChangedNote: dirtLabels.length > 1 ? `Main track condition changed during the card: ${dirtPart.trim()}.` : null,
     };
   }
 
@@ -4751,10 +4776,10 @@
       const raw = nyraByDate.get(cursor);
       let nyraSourced = false;
       if (raw){
-        const { dirtLabel, turfLabel } = parseNyraTrackCondition(raw.trackCondition);
+        const { dirtLabel, turfLabel, dirtChangedNote } = parseNyraTrackCondition(raw.trackCondition);
         if (dirtLabel) stats.dirtConditionLabel = dirtLabel;
         if (turfLabel) stats.turfConditionLabel = turfLabel;
-        if (raw.weather) stats.conditionsDesc = raw.weather;
+        if (raw.weather) stats.conditionsDesc = dirtChangedNote ? `${raw.weather} ${dirtChangedNote}` : raw.weather;
         nyraSourced = !!(dirtLabel || turfLabel || raw.weather);
       }
 
