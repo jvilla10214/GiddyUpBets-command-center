@@ -736,8 +736,25 @@ async function handleRequest(request, env) {
     if (url.pathname === "/smartpony-debug" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const nameFilter = url.searchParams.get("name") || "";
+      const mode = url.searchParams.get("mode") || "";
       try {
         const accessToken = await smartponyLogin(env);
+        if (mode === "openapi") {
+          const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/`, {
+            headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+          });
+          const body = await res.text();
+          return new Response(body, { status: res.status, headers: { "Content-Type": "application/json" } });
+        }
+        if (mode === "horse"){
+          const horseId = url.searchParams.get("id") || "";
+          const table = url.searchParams.get("table") || "horses";
+          const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(horseId)}&select=*`, {
+            headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+          });
+          const body = await res.text();
+          return new Response(body, { status: res.status, headers: { "Content-Type": "application/json" } });
+        }
         const query = `select=*&trainer_name_raw=ilike.*${encodeURIComponent(nameFilter)}*&limit=5`;
         const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
           headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
