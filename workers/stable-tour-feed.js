@@ -1144,16 +1144,27 @@ function isAuthorized(request) {
 // Clement", and "Phil D'Amato" vs "Phil D’Amato" producing two separate
 // tracked trainers for the same person) this fixes. Purely widening, never
 // a source of a new false match.
+// Removes apostrophes entirely (not just curly -> straight) rather than
+// merely normalizing them — confirmed real that SmartPony's own
+// race_entries.trainer field sometimes drops the apostrophe altogether
+// ("DAMATO" vs our tracked "D'Amato"), a data inconsistency on their end
+// this app has no control over. Comparison-key use only — never applied to
+// a name that gets stored or displayed, just to the keys used to decide
+// whether two spellings refer to the same person.
 function stripDiacritics(str) {
-  return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[‘’ʼʻ]/g, "'");
+  return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/['‘’ʼʻ]/g, "");
 }
 
 // Trainers sort by last name — the last whitespace-separated token, which
 // holds even for hyphenated last names ("Ramirez-Rodriguez" stays one
 // token) and names with an unstripped leading initial ("W. Bret Calhoun"
-// -> "Calhoun").
+// -> "Calhoun"). Strips a trailing generational suffix first (reusing
+// hrnStripSuffix()) — confirmed real that tracked "Al Stall Jr." /
+// "Saffie Joseph Jr." were reading "jr." as their own last name, since a
+// bare last-whitespace-token split has no idea "Jr." isn't the surname,
+// breaking every comparison against them.
 function lastNameKey(fullName) {
-  const parts = stripDiacritics(fullName.trim()).split(/\s+/);
+  const parts = hrnStripSuffix(stripDiacritics(fullName.trim())).split(/\s+/);
   return parts[parts.length - 1].toLowerCase();
 }
 
