@@ -7315,15 +7315,21 @@
   }
   let stableSmartPonySeen = loadStableSmartPonySeen();
 
-  // Strips combining diacritical marks ("é" -> "e", "ñ" -> "n", ...) before
-  // any name comparison in this file — confirmed for real that a SmartPony
-  // quote for "Miguel Clément" silently failed to match tracked "Miguel
-  // Clement" otherwise (different Unicode code points, not just a case
-  // difference), dropping a genuine match instead of guessing wrong. Purely
-  // widening (an accented and unaccented spelling of the same name now
-  // compare equal), never a source of a new false match.
+  // Strips combining diacritical marks ("é" -> "e", "ñ" -> "n", ...) and
+  // normalizes curly/smart apostrophes to a plain one before any name
+  // comparison in this file. Confirmed for real twice: a SmartPony quote
+  // for "Miguel Clément" silently failed to match tracked "Miguel Clement"
+  // (different Unicode code points, not just case), and separately
+  // "Phil D'Amato" (straight apostrophe) vs "Phil D’Amato" (curly, U+2019 —
+  // different sources are inconsistent about which they use) produced two
+  // separate tracked trainers for the same real person. Neither is a
+  // diacritic technically (NFD decomposition doesn't touch apostrophes at
+  // all, hence the separate replace below), but the fix belongs in the same
+  // "normalize before comparing" place. Purely widening — a normalized and
+  // unnormalized spelling of the same name now compare equal, never a
+  // source of a new false match.
   function stripDiacritics(str){
-    return str.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[‘’ʼʻ]/g, "'");
   }
 
   // A detected section's trainerName ("Chad Brown") is matched against each
@@ -7362,6 +7368,7 @@
     larry: "lawrence",
     gene: "eugene",
     whit: "whitworth",
+    shug: "claude", // Claude "Shug" McGaughey III — confirmed real duplicate (tracked separately as both names before this)
   };
   // Normalizes ONE name token (not a full name) — strips a trailing
   // initial's period ("W." -> "w"), diacritics, case, and known nicknames.

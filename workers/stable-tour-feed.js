@@ -1120,13 +1120,15 @@ function isAuthorized(request) {
   return request.headers.get("X-Stable-Key") === WRITE_PASSPHRASE;
 }
 
-// Strips combining diacritical marks ("é" -> "e", "ñ" -> "n", ...) before
-// any name comparison in this file — see index.html's own copy of this
-// function for the confirmed real failure (a SmartPony quote for "Miguel
-// Clément" silently missing tracked "Miguel Clement") this fixes. Purely
-// widening, never a source of a new false match.
+// Strips combining diacritical marks and normalizes curly/smart apostrophes
+// to a plain one before any name comparison in this file — see index.html's
+// own copy of this function for the two confirmed real failures (a
+// SmartPony quote for "Miguel Clément" silently missing tracked "Miguel
+// Clement", and "Phil D'Amato" vs "Phil D’Amato" producing two separate
+// tracked trainers for the same person) this fixes. Purely widening, never
+// a source of a new false match.
 function stripDiacritics(str) {
-  return str.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[‘’ʼʻ]/g, "'");
 }
 
 // Trainers sort by last name — the last whitespace-separated token, which
@@ -1164,6 +1166,7 @@ const TRAINER_FIRST_NAME_ALIASES = {
   larry: "lawrence",
   gene: "eugene",
   whit: "whitworth",
+  shug: "claude", // Claude "Shug" McGaughey III — confirmed real duplicate (tracked separately as both names before this)
 };
 // Normalizes ONE name token — see index.html's normalizeNameToken() for why
 // this checks every token of a tracked name, not just its own first token
