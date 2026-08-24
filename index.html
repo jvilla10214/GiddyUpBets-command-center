@@ -7449,17 +7449,34 @@
   // extraction and horse-matching on their own end), so there's no
   // paragraph-proximity section-building to do here at all — just resolve
   // each quote's trainer against the tracked list and file it.
+  //
+  // Unlike TDN/HRN/News Wire, an unmatched trainer here gets ADDED, not
+  // skipped — user's explicit request. Safe in a way prose-scanning isn't:
+  // trainerName comes straight off SmartPony's own structured field, not
+  // guessed out of free text, the same reliability tier as
+  // thisishorseracing.com's own titled Stable Tour articles (see
+  // fetchStableTourFeed() above, which already auto-adds trainers for the
+  // same reason). Still refuses a bare surname with no first name — not
+  // enough to safely create a real, distinguishable new trainer entry.
   async function autoImportSmartPonyQuotes(){
     if (!stableTrainers.length) return; // nothing to match against
     let data;
     try{ data = await stableApiGet("/smartpony-quotes"); }
     catch(err){ console.error("SmartPony fetch failed", err); return; }
 
+    const newTrainerNames = [];
     const noteItems = [];
     for (const q of data.quotes || []){
       if (stableSmartPonySeen.has(q.quoteId)) continue;
-      const matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
-      if (!matchedTrainer) continue; // not tracked, or ambiguous same-surname — no guess, re-checked next poll
+      let matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
+      if (!matchedTrainer){
+        const hasFullName = q.trainerName.trim().split(/\s+/).length >= 2;
+        if (!hasFullName) continue; // bare surname only — no guess, re-checked next poll
+        matchedTrainer = q.trainerName.trim();
+        if (!stableTrainers.includes(matchedTrainer) && !newTrainerNames.includes(matchedTrainer)){
+          newTrainerNames.push(matchedTrainer);
+        }
+      }
       noteItems.push({
         trainer: matchedTrainer,
         horse: q.horseName,
@@ -7474,6 +7491,11 @@
     if (!noteItems.length) return;
 
     try{
+      // Trainers first — a note whose trainer doesn't exist yet would
+      // otherwise be written to a pool the Stable Tour UI never renders
+      // (it only ever lists tracked trainers), even though the write
+      // itself would succeed.
+      if (newTrainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: newTrainerNames });
       await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
       saveStableSmartPonySeen();
       const fresh = await loadStableData();
