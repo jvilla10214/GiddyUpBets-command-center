@@ -1967,6 +1967,19 @@
   }
   .stable-note-meta a{ color: var(--sky); text-decoration:none; }
   .stable-note-meta a:hover{ text-decoration:underline; }
+  /* SmartPony's own sentiment tag on a quote (job #18) — same small-badge
+     shape as .stable-auto-badge, just color-coded by tone. */
+  .stable-sentiment-badge{
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stable-sentiment-positive{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
+  .stable-sentiment-negative{ color: #e05252; background: rgba(224,82,82,0.12); }
+  .stable-sentiment-cautious, .stable-sentiment-mixed{ color: var(--tote-amber); background: rgba(240,180,41,0.12); }
+  .stable-sentiment-neutral{ color: var(--parchment-dim); background: rgba(169,164,150,0.12); }
   .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
   .stable-trainer{
     background: var(--panel-2);
@@ -6962,6 +6975,7 @@
                 <strong>${escapeHtml(n.horse) || "—"}</strong>
                 <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
                 ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
+                ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
                 <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
               </div>
               <div class="stable-note-text">${escapeHtml(n.note)}</div>
@@ -7564,6 +7578,7 @@
         source: q.source || "SmartPony",
         link: q.link || "",
         autoImported: true,
+        sentiment: q.sentiment || null,
       });
       stableSmartPonySeen.add(q.quoteId);
     }
