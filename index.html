@@ -2008,6 +2008,20 @@
   .archive-race-header strong{ color: var(--parchment); }
   .archive-finish-line{ font-size: 12.5px; color: var(--rail-green); margin-top: 6px; }
   .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
+  .archive-search-result{
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .archive-search-result:last-child{ margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+  .archive-search-result-date{
+    font-family:'Oswald', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 13px;
+    color: var(--tote-amber);
+    margin-bottom: 6px;
+  }
   .stable-save-btn{
     background: var(--tote-amber);
     color: var(--ink);
@@ -2775,6 +2789,7 @@
       </div>
       <div class="log-controls">
         <select id="archiveMonthSelect" aria-label="Month"></select>
+        <input type="text" id="archiveSearchInput" placeholder="Search horse, trainer, or jockey…" aria-label="Search saved race days">
         <span class="log-note" id="archiveStatus">Loading saved race days…</span>
       </div>
       <div class="stable-trainer-list" id="archiveList"></div>
@@ -5429,6 +5444,13 @@
   // actually has a saved day, so a long-running meet doesn't dump every
   // week of the season into one scrolling list.
   let selectedArchiveMonth = null;
+  // Search state — spans every saved day for this track (not just the
+  // selected month, since the whole point is finding a day without
+  // already knowing which month it's in). null query means "not
+  // searching," the normal month-browse view renders instead.
+  let archiveSearchQuery = "";
+  let archiveSearchResults = null; // null = no search run yet; array (possibly empty) once one has
+  let archiveSearching = false;
 
   async function loadRaceDayArchive(){
     const trackId = activeTrack.id;
@@ -5437,6 +5459,11 @@
     archiveDayCache = {};
     archiveSelectedRaceByDate = {};
     selectedArchiveMonth = null; // default back to this track's own most recent month, not whatever was being browsed before
+    archiveSearchQuery = "";
+    archiveSearchResults = null;
+    archiveSearching = false;
+    const searchInput = $("archiveSearchInput");
+    if (searchInput) searchInput.value = "";
     renderRaceDayArchive();
     let dates = [];
     try{
@@ -5581,6 +5608,77 @@
       </div>`;
   }
 
+  // Substring match (case-insensitive) across a horse's name, jockey, and
+  // trainer in a saved day's entries, plus the horse name in that day's
+  // saved results — a horse without saved entries for a backfilled day
+  // (see archiveDayCache's own comment on horses: null) can still be found
+  // by name through its results alone. Substring, not exact, since this is
+  // a lookup aid ("didn't this horse run a couple weeks ago?"), not an
+  // attribution decision — a loose match here just surfaces an extra race
+  // to glance at, not a wrong assertion the way a loose trainer match
+  // elsewhere in this file would be.
+  function archiveDaySearchMatches(cached, query){
+    const q = query.trim().toLowerCase();
+    if (!q || !cached) return [];
+    const resultsByRace = {};
+    (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
+    const races = (cached.entries && cached.entries.length)
+      ? cached.entries
+      : (cached.results || []).map(r => ({ raceNumber: r.raceNumber, horses: null }));
+    const matchedRaceNumbers = [];
+    for (const race of races){
+      let matched = (race.horses || []).some(h =>
+        (h.name || "").toLowerCase().includes(q) ||
+        (h.jockey || "").toLowerCase().includes(q) ||
+        (h.trainer || "").toLowerCase().includes(q));
+      if (!matched){
+        const result = resultsByRace[race.raceNumber];
+        matched = (result?.finishOrder || []).some(f => (f.horseName || "").toLowerCase().includes(q));
+      }
+      if (matched) matchedRaceNumbers.push(race.raceNumber);
+    }
+    return matchedRaceNumbers;
+  }
+
+  // Fetches every saved day for this track not already cached (a search
+  // has to see the whole history, unlike normal browsing which only ever
+  // loads a day once it's expanded), then matches each one. Runs the
+  // fetches in parallel — a full meet is 30-40 days, each a small JSON
+  // blob, so this is a burst of small requests rather than anything heavy.
+  async function runArchiveSearch(query){
+    archiveSearchQuery = query;
+    if (!query.trim()){
+      archiveSearchResults = null;
+      archiveSearching = false;
+      renderRaceDayArchive();
+      return;
+    }
+    archiveSearching = true;
+    renderRaceDayArchive();
+    const trackId = activeTrack.id;
+    const toFetch = archiveDates.filter(d => !archiveDayCache[d]);
+    await Promise.all(toFetch.map(async date => {
+      try{
+        const res = await fetch(stableApiUrl(`/raceday?track=${encodeURIComponent(trackId)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+        archiveDayCache[date] = res.ok ? await res.json() : { entries: [], results: [] };
+      } catch(err){
+        archiveDayCache[date] = { entries: [], results: [] }; // avoid retry-looping forever on a real failure
+      }
+    }));
+    if (activeTrack.id !== trackId) return; // stale — switched tracks mid-search
+    if (archiveSearchQuery !== query) return; // stale — a newer search superseded this one
+    const results = [];
+    for (const date of archiveDates){
+      for (const raceNumber of archiveDaySearchMatches(archiveDayCache[date], query)){
+        results.push({ date, raceNumber });
+      }
+    }
+    results.sort((a, b) => b.date.localeCompare(a.date) || a.raceNumber - b.raceNumber);
+    archiveSearching = false;
+    archiveSearchResults = results;
+    renderRaceDayArchive();
+  }
+
   function renderRaceDayArchive(){
     const status = $("archiveStatus");
     const list = $("archiveList");
@@ -5599,84 +5697,114 @@
       return;
     }
 
-    // Newest-first months, same grouping convention as the Daily Log's own
-    // month selector — a full meet (Saratoga runs mid-July to Labor Day) is
-    // 30-40 saved days, too many to scroll through as one flat list.
-    const monthKeys = [...new Set(archiveDates.map(monthKeyOf))].sort((a, b) => b.localeCompare(a));
-    if (!selectedArchiveMonth || !monthKeys.includes(selectedArchiveMonth)) selectedArchiveMonth = monthKeys[0];
-    if (monthSelect){
-      monthSelect.hidden = monthKeys.length < 2;
-      monthSelect.innerHTML = monthKeys.map(key => `<option value="${key}">${escapeHtml(monthLabelOf(key))}</option>`).join("");
-      monthSelect.value = selectedArchiveMonth;
-    }
-    const datesInMonth = archiveDates.filter(d => monthKeyOf(d) === selectedArchiveMonth);
-
-    status.textContent = `${datesInMonth.length} saved day${datesInMonth.length === 1 ? "" : "s"} for ${activeTrack.shortName} in ${monthLabelOf(selectedArchiveMonth)} (${archiveDates.length} total).`;
-    list.innerHTML = datesInMonth.map(date => {
-      const isOpen = archiveOpenDates.has(date);
-      const cached = archiveDayCache[date];
-      let bodyHtml = "";
-      if (isOpen){
-        if (!cached){
-          bodyHtml = `<div class="archive-empty">Loading…</div>`;
+    if (archiveSearchQuery.trim()){
+      // Search spans every saved day, not just the selected month — hide
+      // the month picker while a search is active so it doesn't imply the
+      // results are scoped to it.
+      if (monthSelect) monthSelect.hidden = true;
+      if (archiveSearching){
+        status.textContent = `Searching ${archiveDates.length} saved day${archiveDates.length === 1 ? "" : "s"} for ${activeTrack.shortName}…`;
+        list.innerHTML = `<div class="archive-empty">Loading…</div>`;
+      } else {
+        const results = archiveSearchResults || [];
+        if (!results.length){
+          status.textContent = `No matches for "${archiveSearchQuery}" in ${activeTrack.shortName}'s saved race days.`;
+          list.innerHTML = "";
         } else {
-          const resultsByRace = {};
-          (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
-          // Falls back to a results-only race list when entries weren't
-          // saved for this date — DMTC-sourced tracks (Del Mar) can't serve
-          // historical entries at all (fetchDmtcEntriesDay() only ever
-          // returns "today's" card), so a backfilled past day only ever has
-          // results. horses: null (not []) marks these as "no entries
-          // data" rather than "zero entries" — see archiveRaceHtml().
-          const races = (cached.entries && cached.entries.length)
-            ? cached.entries
-            : (cached.results || []).map(r => ({ raceNumber: r.raceNumber, horses: null }));
-          let racesHtml;
-          if (!races.length){
-            racesHtml = `<div class="archive-empty">No entries or results saved for this date.</div>`;
-          } else {
-            if (archiveSelectedRaceByDate[date] == null || !races.some(r => r.raceNumber === archiveSelectedRaceByDate[date])){
-              archiveSelectedRaceByDate[date] = races[0].raceNumber;
-            }
-            const selectedRace = archiveSelectedRaceByDate[date];
-            const tabsHtml = races.map(r => {
-              const timeLabel = formatPostTimeLabel(r.postTimeIso);
-              const isFinal = !!resultsByRace[r.raceNumber]?.isFinal;
-              return `
-                <button type="button" class="entries-race-tab archive-race-tab${r.raceNumber === selectedRace ? " active" : ""}" data-archive-date="${date}" data-race="${r.raceNumber}">
-                  <span class="entries-race-tab-num">R${r.raceNumber}${isFinal ? ` <span class="entries-race-tab-final">FINAL</span>` : ""}</span>
-                  <span class="entries-race-tab-time">${escapeHtml(timeLabel || "—")}</span>
-                </button>
-              `;
-            }).join("");
-            const race = races.find(r => r.raceNumber === selectedRace);
-            racesHtml = `
-              <div class="entries-race-tabs">${tabsHtml}</div>
-              ${archiveRaceHtml(race, resultsByRace[race.raceNumber])}
-            `;
-          }
-          bodyHtml = `
-            ${archiveWeatherSection(date)}
-            ${archiveBiasSection(date)}
-            <div class="archive-section">
-              <div class="archive-section-title">Entries &amp; Results</div>
-              ${racesHtml}
-            </div>`;
+          status.textContent = `${results.length} race${results.length === 1 ? "" : "s"} matching "${archiveSearchQuery}" across ${activeTrack.shortName}'s saved days.`;
+          list.innerHTML = results.map(({ date, raceNumber }) => {
+            const cached = archiveDayCache[date] || {};
+            const resultsByRace = {};
+            (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
+            const race = (cached.entries || []).find(r => r.raceNumber === raceNumber) || { raceNumber, horses: null };
+            return `
+              <div class="archive-search-result">
+                <div class="archive-search-result-date">${date}</div>
+                ${archiveRaceHtml(race, resultsByRace[raceNumber])}
+              </div>`;
+          }).join("");
         }
       }
-      const summary = archiveCardSummary(date);
-      return `
-        <div class="stable-trainer ${isOpen ? "open" : ""}" data-archive-date="${date}">
-          <div class="stable-trainer-header">
-            <button type="button" class="stable-trainer-toggle" data-archive-date="${date}">
-              <span class="chevron">▸</span>
-              <span class="stable-trainer-name">${date}</span>
-              ${summary ? `<span class="archive-summary">${escapeHtml(summary)}</span>` : ""}
-            </button>
-          </div>
-          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>${bodyHtml}</div>
-        </div>`;
-    }).join("");
+    } else {
+      // Newest-first months, same grouping convention as the Daily Log's own
+      // month selector — a full meet (Saratoga runs mid-July to Labor Day) is
+      // 30-40 saved days, too many to scroll through as one flat list.
+      const monthKeys = [...new Set(archiveDates.map(monthKeyOf))].sort((a, b) => b.localeCompare(a));
+      if (!selectedArchiveMonth || !monthKeys.includes(selectedArchiveMonth)) selectedArchiveMonth = monthKeys[0];
+      if (monthSelect){
+        monthSelect.hidden = monthKeys.length < 2;
+        monthSelect.innerHTML = monthKeys.map(key => `<option value="${key}">${escapeHtml(monthLabelOf(key))}</option>`).join("");
+        monthSelect.value = selectedArchiveMonth;
+      }
+      const datesInMonth = archiveDates.filter(d => monthKeyOf(d) === selectedArchiveMonth);
+
+      status.textContent = `${datesInMonth.length} saved day${datesInMonth.length === 1 ? "" : "s"} for ${activeTrack.shortName} in ${monthLabelOf(selectedArchiveMonth)} (${archiveDates.length} total).`;
+      list.innerHTML = datesInMonth.map(date => {
+        const isOpen = archiveOpenDates.has(date);
+        const cached = archiveDayCache[date];
+        let bodyHtml = "";
+        if (isOpen){
+          if (!cached){
+            bodyHtml = `<div class="archive-empty">Loading…</div>`;
+          } else {
+            const resultsByRace = {};
+            (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
+            // Falls back to a results-only race list when entries weren't
+            // saved for this date — DMTC-sourced tracks (Del Mar) can't serve
+            // historical entries at all (fetchDmtcEntriesDay() only ever
+            // returns "today's" card), so a backfilled past day only ever has
+            // results. horses: null (not []) marks these as "no entries
+            // data" rather than "zero entries" — see archiveRaceHtml().
+            const races = (cached.entries && cached.entries.length)
+              ? cached.entries
+              : (cached.results || []).map(r => ({ raceNumber: r.raceNumber, horses: null }));
+            let racesHtml;
+            if (!races.length){
+              racesHtml = `<div class="archive-empty">No entries or results saved for this date.</div>`;
+            } else {
+              if (archiveSelectedRaceByDate[date] == null || !races.some(r => r.raceNumber === archiveSelectedRaceByDate[date])){
+                archiveSelectedRaceByDate[date] = races[0].raceNumber;
+              }
+              const selectedRace = archiveSelectedRaceByDate[date];
+              const tabsHtml = races.map(r => {
+                const timeLabel = formatPostTimeLabel(r.postTimeIso);
+                const isFinal = !!resultsByRace[r.raceNumber]?.isFinal;
+                return `
+                  <button type="button" class="entries-race-tab archive-race-tab${r.raceNumber === selectedRace ? " active" : ""}" data-archive-date="${date}" data-race="${r.raceNumber}">
+                    <span class="entries-race-tab-num">R${r.raceNumber}${isFinal ? ` <span class="entries-race-tab-final">FINAL</span>` : ""}</span>
+                    <span class="entries-race-tab-time">${escapeHtml(timeLabel || "—")}</span>
+                  </button>
+                `;
+              }).join("");
+              const race = races.find(r => r.raceNumber === selectedRace);
+              racesHtml = `
+                <div class="entries-race-tabs">${tabsHtml}</div>
+                ${archiveRaceHtml(race, resultsByRace[race.raceNumber])}
+              `;
+            }
+            bodyHtml = `
+              ${archiveWeatherSection(date)}
+              ${archiveBiasSection(date)}
+              <div class="archive-section">
+                <div class="archive-section-title">Entries &amp; Results</div>
+                ${racesHtml}
+              </div>`;
+          }
+        }
+        const summary = archiveCardSummary(date);
+        return `
+          <div class="stable-trainer ${isOpen ? "open" : ""}" data-archive-date="${date}">
+            <div class="stable-trainer-header">
+              <button type="button" class="stable-trainer-toggle" data-archive-date="${date}">
+                <span class="chevron">▸</span>
+                <span class="stable-trainer-name">${date}</span>
+                ${summary ? `<span class="archive-summary">${escapeHtml(summary)}</span>` : ""}
+              </button>
+            </div>
+            <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>${bodyHtml}</div>
+          </div>`;
+      }).join("");
+    }
 
     list.querySelectorAll(".stable-trainer-toggle").forEach(btn => {
       btn.addEventListener("click", () => toggleArchiveDay(btn.dataset.archiveDate));
@@ -9989,6 +10117,15 @@
   $("archiveMonthSelect").addEventListener("change", (e) => {
     selectedArchiveMonth = e.target.value;
     renderRaceDayArchive();
+  });
+  // Debounced — each keystroke can trigger a burst of fetches for
+  // not-yet-cached days, so this waits for typing to pause rather than
+  // searching after every character.
+  let archiveSearchDebounce = null;
+  $("archiveSearchInput").addEventListener("input", (e) => {
+    const query = e.target.value;
+    clearTimeout(archiveSearchDebounce);
+    archiveSearchDebounce = setTimeout(() => runArchiveSearch(query), 400);
   });
   $("historyLookupBtn").addEventListener("click", () => {
     const val = $("historyDateInput").value;
