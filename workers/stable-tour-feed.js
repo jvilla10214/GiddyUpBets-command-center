@@ -473,15 +473,24 @@ async function handleRequest(request, env) {
       const body = await request.json().catch(() => ({}));
       const name = (body.name || "").trim();
       if (!name) return json({ error: "Missing name" }, 400);
+      // Provenance tag for the roster UI — who/what added this trainer.
+      // Defaults to "manual" so any older caller that doesn't send it (or a
+      // future one that forgets to) still gets a sensible value rather than
+      // undefined.
+      const source = (body.source || "manual").trim();
       const state = await readState(env);
       const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
-      if (!exists) state.trainers.push(name);
+      if (!exists) {
+        state.trainers.push(name);
+        state.trainerMeta[name] = { source, addedAt: new Date().toISOString() };
+      }
       // Always re-sort and re-save, even on a duplicate — lets re-posting an
       // already-added name (harmless no-op otherwise) double as a one-time
       // way to re-sort the whole existing list after this ordering changed.
       state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
       await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
-      return json({ trainers: state.trainers }, 200, { "Cache-Control": "no-store" });
+      if (!exists) await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      return json({ trainers: state.trainers, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/trainers/bulk" && request.method === "POST") {
@@ -489,17 +498,24 @@ async function handleRequest(request, env) {
       const body = await request.json().catch(() => ({}));
       const names = Array.isArray(body.names) ? body.names.map(n => (n || "").trim()).filter(Boolean) : [];
       if (!names.length) return json({ error: "Missing names" }, 400);
+      const source = (body.source || "manual").trim();
       const state = await readState(env);
+      let addedAny = false;
       // One KV write for the whole batch instead of one per name — KV write
       // quota is a hard daily cap (free tier: 1,000/day, account-wide), and
       // a 100-name bulk-add used to cost 100+ writes on its own.
       for (const name of names) {
         const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
-        if (!exists) state.trainers.push(name);
+        if (!exists) {
+          state.trainers.push(name);
+          state.trainerMeta[name] = { source, addedAt: new Date().toISOString() };
+          addedAny = true;
+        }
       }
       state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
       await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
-      return json({ trainers: state.trainers }, 200, { "Cache-Control": "no-store" });
+      if (addedAny) await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      return json({ trainers: state.trainers, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/trainers" && request.method === "DELETE") {
@@ -509,9 +525,11 @@ async function handleRequest(request, env) {
       const state = await readState(env);
       const trainers = state.trainers.filter(t => t !== name);
       const notes = state.notes.filter(n => n.trainer !== name); // cascade — no orphaned notes for a removed trainer
+      delete state.trainerMeta[name];
       await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
-      return json({ trainers, notes }, 200, { "Cache-Control": "no-store" });
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      return json({ trainers, notes, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/notes" && request.method === "POST") {
@@ -1277,13 +1295,19 @@ async function readBiasLog(env, track) {
 }
 
 async function readState(env) {
-  const [trainersRaw, notesRaw] = await Promise.all([
+  const [trainersRaw, notesRaw, trainerMetaRaw] = await Promise.all([
     env.STABLE_KV.get("trainers"),
     env.STABLE_KV.get("notes"),
+    env.STABLE_KV.get("trainerMeta"),
   ]);
   return {
     trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
     notes: notesRaw ? JSON.parse(notesRaw) : [],
+    // name -> { source, addedAt } — how/where each tracked trainer was
+    // added (manual add, or which auto-import source). Only ever set at
+    // add time, never overwritten by a later re-add of the same name, so
+    // it reflects genuine provenance rather than most-recent-touch.
+    trainerMeta: trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {},
   };
 }
 
@@ -3325,6 +3349,50 @@ function reformatLastFirstName(raw) {
   return titleCaseName([...rest, last].join(" "));
 }
 
+// Shared by fetchSmartPonyQuotes() and auditNotesAgainstSmartPony() — both
+// need "given a set of horse names, find their SmartPony horse_id" and
+// "given a set of horse_ids, find each one's most recent race_entries row."
+// SmartPony stores horse_name in ALL CAPS — batched exact-match lookup (not
+// one query per horse, of which there can be hundreds). PostgREST's in.()
+// list syntax needs each value double-quoted since horse names contain
+// spaces; the whole list is percent-encoded as one unit and decoded back to
+// literal syntax server-side, same as any other query string value.
+const SMARTPONY_LOOKUP_BATCH = 40;
+async function lookupHorseIdsByName(accessToken, horseNames) {
+  const nameToHorseId = {};
+  for (let i = 0; i < horseNames.length; i += SMARTPONY_LOOKUP_BATCH) {
+    const batch = horseNames.slice(i, i + SMARTPONY_LOOKUP_BATCH);
+    const inList = batch.map((n) => `"${n.toUpperCase().replace(/"/g, '\\"')}"`).join(",");
+    const res = await fetch(
+      `${SMARTPONY_SUPABASE_URL}/rest/v1/horses?horse_name=in.(${encodeURIComponent(inList)})&select=id,horse_name`,
+      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) continue; // best-effort — skip a bad batch rather than failing the whole lookup
+    const rows = await res.json();
+    for (const row of rows) {
+      const match = batch.find((n) => n.toUpperCase() === row.horse_name);
+      if (match) nameToHorseId[match] = row.id;
+    }
+  }
+  return nameToHorseId;
+}
+async function lookupRaceEntriesByHorseId(accessToken, horseIds) {
+  const entryByHorseId = {};
+  for (let i = 0; i < horseIds.length; i += SMARTPONY_LOOKUP_BATCH) {
+    const batch = horseIds.slice(i, i + SMARTPONY_LOOKUP_BATCH);
+    const res = await fetch(
+      `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?horse_id=in.(${batch.join(",")})&select=horse_id,trainer,jockey,owner,created_at&order=created_at.desc`,
+      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) continue;
+    const rows = await res.json();
+    for (const e of rows) {
+      if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = e; // newest first — first hit per horse wins
+    }
+  }
+  return entryByHorseId;
+}
+
 async function fetchSmartPonyQuotes(env) {
   const accessToken = await smartponyLogin(env);
   // All three of SmartPony's own review states (needs_review, auto_matched,
@@ -3359,20 +3427,25 @@ async function fetchSmartPonyQuotes(env) {
   // the tracked-trainer list). One bulk lookup for every horse referenced
   // in this batch, not one query per quote — KV/API-call discipline this
   // file follows everywhere else too.
-  const horseIds = [...new Set(rows.map((r) => r.matched_horse_id).filter(Boolean))];
-  const entryByHorseId = {};
-  if (horseIds.length) {
-    const entriesRes = await fetch(
-      `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?horse_id=in.(${horseIds.join(",")})&select=horse_id,trainer,jockey,owner,created_at&order=created_at.desc`,
-      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
-    );
-    if (entriesRes.ok) {
-      const entryRows = await entriesRes.json();
-      for (const e of entryRows) {
-        if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = e; // newest first — first hit per horse wins
-      }
-    }
-  }
+  //
+  // matched_horse_id is SmartPony's own pre-computed match and is sometimes
+  // null even when the horse genuinely exists in their horses table —
+  // confirmed real via a later full-backlog audit (auditNotesAgainstSmartPony,
+  // which looks horses up by name instead) finding real mis-attributions
+  // that this cross-reference had missed. So: use matched_horse_id where
+  // present, and fall back to the same name-based lookup the audit uses for
+  // every row that's missing one — maximizes how many quotes get verified
+  // against a real trainer before ever reaching the client's auto-add path,
+  // rather than relying solely on SmartPony's own match quality.
+  const namedHorseNames = [...new Set(
+    rows.filter((r) => !r.matched_horse_id).map((r) => (r.mentioned_horse_name || "").trim()).filter(Boolean)
+  )];
+  const nameToHorseId = namedHorseNames.length ? await lookupHorseIdsByName(accessToken, namedHorseNames) : {};
+  const horseIds = [...new Set([
+    ...rows.map((r) => r.matched_horse_id).filter(Boolean),
+    ...Object.values(nameToHorseId),
+  ])];
+  const entryByHorseId = horseIds.length ? await lookupRaceEntriesByHorseId(accessToken, horseIds) : {};
 
   const quotes = [];
   for (const row of rows) {
@@ -3383,7 +3456,8 @@ async function fetchSmartPonyQuotes(env) {
     if (!trainerName) continue;
     let noteText = text;
 
-    const entry = row.matched_horse_id ? entryByHorseId[row.matched_horse_id] : null;
+    const horseId = row.matched_horse_id || nameToHorseId[horseName];
+    const entry = horseId ? entryByHorseId[horseId] : null;
     if (entry?.trainer) {
       const realTrainer = reformatLastFirstName(entry.trainer);
       if (lastNameKey(trainerName) !== lastNameKey(realTrainer)) {
@@ -3429,44 +3503,9 @@ async function auditNotesAgainstSmartPony(env) {
   const notes = state.notes;
 
   const horseNames = [...new Set(notes.map((n) => (n.horse || "").trim()).filter(Boolean))];
-
-  // SmartPony stores horse_name in ALL CAPS — batched exact-match lookup
-  // (not one query per horse, of which there can be hundreds) to find each
-  // one's id. PostgREST's in.() list syntax needs each value double-quoted
-  // since horse names contain spaces; the whole list is percent-encoded as
-  // one unit and decoded back to literal syntax server-side, same as any
-  // other query string value.
-  const BATCH = 40;
-  const nameToHorseId = {};
-  for (let i = 0; i < horseNames.length; i += BATCH) {
-    const batch = horseNames.slice(i, i + BATCH);
-    const inList = batch.map((n) => `"${n.toUpperCase().replace(/"/g, '\\"')}"`).join(",");
-    const res = await fetch(
-      `${SMARTPONY_SUPABASE_URL}/rest/v1/horses?horse_name=in.(${encodeURIComponent(inList)})&select=id,horse_name`,
-      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
-    );
-    if (!res.ok) continue; // best-effort — skip a bad batch rather than failing the whole audit
-    const rows = await res.json();
-    for (const row of rows) {
-      const match = batch.find((n) => n.toUpperCase() === row.horse_name);
-      if (match) nameToHorseId[match] = row.id;
-    }
-  }
-
+  const nameToHorseId = await lookupHorseIdsByName(accessToken, horseNames);
   const horseIds = [...new Set(Object.values(nameToHorseId))];
-  const entryByHorseId = {};
-  for (let i = 0; i < horseIds.length; i += BATCH) {
-    const batch = horseIds.slice(i, i + BATCH);
-    const res = await fetch(
-      `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?horse_id=in.(${batch.join(",")})&select=horse_id,trainer,jockey,owner,created_at&order=created_at.desc`,
-      { headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` } }
-    );
-    if (!res.ok) continue;
-    const rows = await res.json();
-    for (const e of rows) {
-      if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = e; // newest first — first hit per horse wins
-    }
-  }
+  const entryByHorseId = await lookupRaceEntriesByHorseId(accessToken, horseIds);
 
   const mismatches = [];
   let checked = 0;

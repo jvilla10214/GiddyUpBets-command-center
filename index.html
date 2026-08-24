@@ -1980,6 +1980,18 @@
   .stable-sentiment-negative{ color: #e05252; background: rgba(224,82,82,0.12); }
   .stable-sentiment-cautious, .stable-sentiment-mixed{ color: var(--tote-amber); background: rgba(240,180,41,0.12); }
   .stable-sentiment-neutral{ color: var(--parchment-dim); background: rgba(169,164,150,0.12); }
+  /* Trainer-roster provenance badge — same small-badge shape as
+     .stable-auto-badge/.stable-sentiment-badge, neutral tone since it's
+     informational rather than a status. */
+  .stable-source-badge{
+    font-size: 9px;
+    color: var(--parchment-dim);
+    background: rgba(169,164,150,0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
   .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
   .stable-trainer{
     background: var(--panel-2);
@@ -6691,6 +6703,7 @@
   const STABLE_API_KEY_KEY = "giddyupbets_stable_api_key_v1";
   let stableTrainers = [];
   let stableNotes = [];
+  let stableTrainerMeta = {}; // name -> { source, addedAt } — how each trainer was added
   let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
 
   function escapeHtml(str){
@@ -6840,10 +6853,11 @@
       return {
         trainers: Array.isArray(data.trainers) ? data.trainers : [],
         notes: Array.isArray(data.notes) ? data.notes : [],
+        trainerMeta: (data.trainerMeta && typeof data.trainerMeta === "object") ? data.trainerMeta : {},
       };
     } catch(err){
       stableApiError("load shared data", err);
-      return { trainers: [], notes: [] };
+      return { trainers: [], notes: [], trainerMeta: {} };
     }
   }
 
@@ -6851,8 +6865,9 @@
     const trimmed = name.trim();
     if (!trimmed) return;
     try{
-      const data = await stableApiWrite("POST", "/trainers", { name: trimmed });
+      const data = await stableApiWrite("POST", "/trainers", { name: trimmed, source: "manual" });
       stableTrainers = data.trainers;
+      if (data.trainerMeta) stableTrainerMeta = data.trainerMeta;
       renderStableTour();
     } catch(err){ stableApiError("add trainer", err); }
   }
@@ -6861,6 +6876,7 @@
       const data = await stableApiWrite("DELETE", "/trainers", { name });
       stableTrainers = data.trainers;
       stableNotes = data.notes;
+      if (data.trainerMeta) stableTrainerMeta = data.trainerMeta;
       stableOpenTrainers.delete(name);
       renderStableTour();
     } catch(err){ stableApiError("remove trainer", err); }
@@ -6934,6 +6950,19 @@
   let stablePendingExtracts = {}; // trainer -> chunks[] awaiting review — in-memory UI state only, never persisted
   let stableSearchQuery = ""; // in-memory UI state only, not persisted
 
+  // Small provenance tag on the trainer roster — how this trainer got
+  // added. Silent for a manual add (the expected/default case, no need to
+  // call it out) or when no metadata exists at all (trainers added before
+  // this feature shipped); only auto-import sources get a badge, since
+  // those are the ones worth being able to spot-check at a glance.
+  const STABLE_TRAINER_SOURCE_LABELS = { smartpony: "SmartPony", "stable-tour": "Stable Tour" };
+  function stableTrainerSourceBadge(trainer){
+    const source = stableTrainerMeta[trainer]?.source;
+    const label = STABLE_TRAINER_SOURCE_LABELS[source];
+    if (!label) return "";
+    return `<span class="stable-source-badge" title="Auto-added from ${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+  }
+
   function renderStableTour(){
     const list = $("stableTrainerList");
     if (!stableTrainers.length){
@@ -7005,6 +7034,7 @@
               <span class="chevron">▸</span>
               <span class="stable-trainer-name">${safeTrainer}</span>
               <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+              ${stableTrainerSourceBadge(trainer)}
             </button>
             <button type="button" class="stable-trainer-remove" data-trainer="${safeTrainer}" title="Remove trainer">×</button>
           </div>
@@ -7093,8 +7123,9 @@
       // One request for the whole batch — both faster than one-at-a-time
       // and immune to Workers KV's daily write-quota (a single write per
       // batch instead of one per name, which used to burn through it fast).
-      const data = await stableApiWrite("POST", "/trainers/bulk", { names });
+      const data = await stableApiWrite("POST", "/trainers/bulk", { names, source: "manual" });
       stableTrainers = data.trainers;
+      if (data.trainerMeta) stableTrainerMeta = data.trainerMeta;
       renderStableTour();
       const added = stableTrainers.length - before;
       statusEl.textContent = `Added ${added} new trainer${added === 1 ? "" : "s"} (${rawNames.length - added} already on the list or duplicates).`;
@@ -7245,7 +7276,7 @@
       // One write for all trainers, one write for all notes — regardless of
       // how many articles/horses this poll picked up (see /trainers/bulk and
       // /notes/bulk in the Worker for why: KV write quota is a hard daily cap).
-      if (trainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: trainerNames });
+      if (trainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: trainerNames, source: "stable-tour" });
       if (noteItems.length) await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
       saveStableSeenArticles();
 
@@ -7253,6 +7284,7 @@
         const fresh = await loadStableData();
         stableTrainers = fresh.trainers;
         stableNotes = fresh.notes;
+        stableTrainerMeta = fresh.trainerMeta;
         renderStableTour();
       }
 
@@ -7504,6 +7536,7 @@
       const fresh = await loadStableData();
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
+      stableTrainerMeta = fresh.trainerMeta;
       renderStableTour();
     } catch(err){
       console.error("TDN Saratoga Notebook import failed to save", err);
@@ -7550,6 +7583,7 @@
       const fresh = await loadStableData();
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
+      stableTrainerMeta = fresh.trainerMeta;
       renderStableTour();
     } catch(err){
       console.error("Horse Racing Nation import failed to save", err);
@@ -7609,12 +7643,13 @@
       // otherwise be written to a pool the Stable Tour UI never renders
       // (it only ever lists tracked trainers), even though the write
       // itself would succeed.
-      if (newTrainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: newTrainerNames });
+      if (newTrainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: newTrainerNames, source: "smartpony" });
       await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
       saveStableSmartPonySeen();
       const fresh = await loadStableData();
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
+      stableTrainerMeta = fresh.trainerMeta;
       renderStableTour();
     } catch(err){
       console.error("SmartPony import failed to save", err);
@@ -10474,6 +10509,7 @@
     const data = await loadStableData();
     stableTrainers = data.trainers;
     stableNotes = data.notes;
+    stableTrainerMeta = data.trainerMeta;
     renderStableTour();
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
@@ -10499,6 +10535,7 @@
     const data = await loadStableData();
     stableTrainers = data.trainers;
     stableNotes = data.notes;
+    stableTrainerMeta = data.trainerMeta;
     renderStableTour();
   }
   setInterval(refreshStableDataIfIdle, 5 * 60 * 1000);
