@@ -1749,13 +1749,16 @@ function parseNyraRaceFragment(html, date) {
   // post position (the same number shown on each horse's saddle-N block),
   // not by horse name — verified directly against a real 7-horse race
   // where the 7 numbered owners lined up 1:1 with the 7 saddle numbers in
-  // the same document order. Scoped between the "Owners" and "Breeders"
-  // labels since both sections share the identical "<strong>N</strong> -
-  // Name" shape and would otherwise collide.
+  // the same document order. Scoped to end at the next section label (same
+  // "text-sm uppercase tracking-wider mb-1" class both "Owners" and
+  // "Breeders" use) rather than hardcoding ">Breeders<" specifically — a
+  // fragment variant that omits/reorders that section would otherwise let
+  // this fall through to end-of-document and pick up unrelated
+  // "<strong>N</strong> - text" shaped content from elsewhere on the page.
   const owners = {};
   const ownersStart = html.indexOf(">Owners<");
   if (ownersStart !== -1) {
-    const ownersEnd = html.indexOf(">Breeders<", ownersStart);
+    const ownersEnd = html.indexOf('class="text-sm uppercase tracking-wider mb-1"', ownersStart + 8);
     const ownersSection = ownersEnd === -1 ? html.slice(ownersStart) : html.slice(ownersStart, ownersEnd);
     for (const om of ownersSection.matchAll(/<strong>([^<]+)<\/strong>\s*-\s*([\s\S]*?)<\/div>/g)) {
       const pp = decodeEntities(om[1]).trim();
@@ -3010,7 +3013,7 @@ function extractHrnArticleBody(html) {
 }
 
 function extractHrnEntriesTable(tableHtml) {
-  const map = {}; // trainerLastName -> { fullName, horses: [horseNames] }
+  const map = {}; // trainerLastName -> [{ fullName, horses: [horseNames] }, ...]
   for (const rowMatch of tableHtml.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
     const row = rowMatch[1];
     const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
@@ -3033,11 +3036,16 @@ function extractHrnEntriesTable(tableHtml) {
     // the surname, and the whole lookup silently misses.
     const fullName = hrnStripSuffix(decodeEntities(personLinks[0][1]).trim());
     const lastName = fullName.split(/\s+/).pop();
-    // Keep the full registered name too, not just the surname — needed
-    // client-side to tell apart two tracked trainers who share a surname
-    // (e.g. "Riley Mott" vs "William Mott"), which a bare last name can't.
-    if (!map[lastName]) map[lastName] = { fullName, horses: [] };
-    if (!map[lastName].horses.includes(horseName)) map[lastName].horses.push(horseName);
+    // Keep an array per surname, not a single slot — two different tracked
+    // trainers can share a surname (e.g. "Riley Mott" and "William Mott"),
+    // and a single race's field can genuinely include both. Collapsing
+    // them into one slot would silently merge one trainer's horses under
+    // the other's name — exactly the mis-attribution this full-name
+    // tracking exists to prevent, just reintroduced one layer up.
+    if (!map[lastName]) map[lastName] = [];
+    let entry = map[lastName].find((e) => e.fullName === fullName);
+    if (!entry) { entry = { fullName, horses: [] }; map[lastName].push(entry); }
+    if (!entry.horses.includes(horseName)) entry.horses.push(horseName);
   }
   return map;
 }
@@ -3088,35 +3096,41 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
     for (const h of paras[i].horseNames) if (!horsesByTrainerFromProse[best].includes(h)) horsesByTrainerFromProse[best].push(h);
   }
 
-  return [...quotedLastNames]
-    .map((lastName) => {
-      const horseNames = entriesMap[lastName]?.horses?.length ? entriesMap[lastName].horses : (horsesByTrainerFromProse[lastName] || []);
-      if (!horseNames.length) return null; // no identifiable horse — no guessing which one
-      // Every paragraph within range of ANY mention of this trainer (not
-      // gated on that paragraph itself naming a horse) — HRN's actual quote
-      // paragraphs almost never re-link the horse by name (they use "she"/
-      // "her" instead, verified against a real example), so gating the TEXT
-      // on horseNames presence the way job #7 does would silently drop the
-      // quote itself even once the horse is correctly identified above.
-      const paraIdxSet = new Set();
-      for (const mi of mentionsByTrainer[lastName]) {
-        for (let d = -HRN_PROXIMITY_WINDOW; d <= HRN_PROXIMITY_WINDOW; d++) {
-          const idx = mi + d;
-          if (idx >= 0 && idx < paras.length) paraIdxSet.add(idx);
-        }
+  // Every paragraph within range of ANY mention of this surname (not gated
+  // on that paragraph itself naming a horse) — HRN's actual quote
+  // paragraphs almost never re-link the horse by name (they use "she"/
+  // "her" instead, verified against a real example), so gating the TEXT on
+  // horseNames presence the way job #7 does would silently drop the quote
+  // itself even once the horse is correctly identified above.
+  const textForLastName = (lastName) => {
+    const paraIdxSet = new Set();
+    for (const mi of mentionsByTrainer[lastName]) {
+      for (let d = -HRN_PROXIMITY_WINDOW; d <= HRN_PROXIMITY_WINDOW; d++) {
+        const idx = mi + d;
+        if (idx >= 0 && idx < paras.length) paraIdxSet.add(idx);
       }
-      const sortedIdx = [...paraIdxSet].sort((a, b) => a - b);
-      return {
-        // Prefer the entries table's full registered name ("William Mott")
-        // over the bare quote-attribution surname ("Mott") when we have it
-        // — the client needs this to disambiguate same-surname tracked
-        // trainers (see resolveTrackedTrainer() in index.html).
-        trainerName: entriesMap[lastName]?.fullName || lastName,
-        horseNames,
-        text: sortedIdx.map((i) => paras[i].plain).join(" ").slice(0, 1500),
-      };
-    })
-    .filter(Boolean);
+    }
+    const sortedIdx = [...paraIdxSet].sort((a, b) => a - b);
+    return sortedIdx.map((i) => paras[i].plain).join(" ").slice(0, 1500);
+  };
+
+  return [...quotedLastNames].flatMap((lastName) => {
+    const tableEntries = entriesMap[lastName];
+    if (tableEntries?.length) {
+      // One section per distinct full-name candidate the entries table has
+      // for this surname, not one merged section — see the comment on
+      // extractHrnEntriesTable()'s map shape for why. The prose-proximity
+      // text is still surname-scoped (paragraphs mentioning "Mott" don't
+      // say which Mott), so it can end up identical across two same-surname
+      // sections — an acceptable trade next to filing the wrong trainer's
+      // horses under the wrong name entirely.
+      const text = textForLastName(lastName);
+      return tableEntries.map((entry) => ({ trainerName: entry.fullName, horseNames: entry.horses, text }));
+    }
+    const horseNames = horsesByTrainerFromProse[lastName] || [];
+    if (!horseNames.length) return []; // no identifiable horse — no guessing which one
+    return [{ trainerName: lastName, horseNames, text: textForLastName(lastName) }];
+  });
 }
 
 async function fetchHrnNews() {

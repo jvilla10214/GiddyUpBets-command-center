@@ -8087,10 +8087,30 @@
       // ever yields a bare last name ("Mott said"), not enough on its own
       // to tell same-surname tracked trainers apart (see
       // resolveTrackedTrainer()'s own comment for the confirmed real case).
-      const introMatch = bodyText.match(/\btrainer\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/);
+      // Collected as ALL occurrences, not just the first in the article —
+      // a single first() match applied to every quote would wrongly hand
+      // a later, different same-surname trainer's quote the EARLIER
+      // trainer's full name whenever the two share a surname (verified
+      // this was a real regression: an article introducing "trainer Riley
+      // Mott" up top, then later quoting "Mott said" about an unrelated
+      // William Mott horse, would've mislabeled that second quote as
+      // Riley's). Each quote instead looks for its OWN nearest same-surname
+      // intro within INTRO_NAME_MAX_DIST characters — close enough that
+      // it's realistically introducing that specific quote, not some
+      // earlier unrelated one — and falls back to the bare surname (safe,
+      // since resolveTrackedTrainer() won't guess on an ambiguous one)
+      // when nothing qualifies.
+      const introMatches = [...bodyText.matchAll(/\btrainer\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/g)];
+      const INTRO_NAME_MAX_DIST = 400;
       for (const match of quotes){
         const quotedLast = trainerLastName(match[1]);
-        const sourceName = (introMatch && trainerLastName(introMatch[1]) === quotedLast) ? introMatch[1] : match[1];
+        let sourceName = match[1];
+        let bestDist = Infinity;
+        for (const im of introMatches){
+          if (trainerLastName(im[1]) !== quotedLast) continue;
+          const dist = Math.abs(im.index - match.index);
+          if (dist < bestDist && dist <= INTRO_NAME_MAX_DIST) { bestDist = dist; sourceName = im[1]; }
+        }
         const matchedTrainer = resolveTrackedTrainer(sourceName, stableTrainers);
         if (!matchedTrainer) continue;
         const seenKey = `${item.link}|${matchedTrainer}`;
