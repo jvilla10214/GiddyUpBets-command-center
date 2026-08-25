@@ -1955,7 +1955,8 @@
     box-sizing: border-box;
   }
   .stable-search-row input:focus{ border-color: var(--tote-amber); }
-  .stable-view-tabs{ display:flex; gap: 6px; margin: 10px 0; }
+  .stable-view-tabs{ display:flex; align-items:center; gap: 6px; margin: 10px 0; }
+  .stable-view-tabs #stableQuickAddBtn{ margin-left: auto; }
   .stable-note-trainer{ color: var(--sky); }
   .stable-setup-section{ display:flex; flex-direction:column; gap:16px; margin-top: 18px; }
   .stable-auto-badge{
@@ -3001,7 +3002,33 @@
         <button type="button" class="bias-window-btn active" data-view="trainer">By Trainer</button>
         <button type="button" class="bias-window-btn" data-view="horse">By Horse</button>
         <button type="button" class="bias-window-btn" data-view="date">By Date</button>
+        <button type="button" id="stableQuickAddBtn" class="stable-save-btn">+ Add</button>
       </div>
+
+      <div class="bias-form" id="stableQuickAddForm">
+        <div class="bias-form-row">
+          <label>Trainer
+            <input type="text" id="stableQuickAddTrainer" list="stableTrainerDatalist" placeholder="Trainer name" autocomplete="off">
+          </label>
+          <label>Horse
+            <input type="text" id="stableQuickAddHorse" class="stableHorseInput" placeholder="Horse name">
+          </label>
+          <label>Date
+            <input type="date" id="stableQuickAddDate">
+          </label>
+          <label>Source (optional)
+            <input type="text" id="stableQuickAddSource" class="stableSourceInput" placeholder="e.g. heard from the barn">
+          </label>
+        </div>
+        <label>Note
+          <textarea id="stableQuickAddNote" class="stableNoteInput" placeholder="What did you hear about this horse? Doesn't need to have run or be entered yet — it'll match automatically once it shows up in Entries."></textarea>
+        </label>
+        <div class="bias-form-actions">
+          <button type="button" id="stableQuickAddSaveBtn">Save</button>
+          <button type="button" id="stableQuickAddCancelBtn">Cancel</button>
+        </div>
+      </div>
+      <datalist id="stableTrainerDatalist"></datalist>
 
       <div class="stable-trainer-list" id="stableTrainerList">
         <div class="log-empty">No trainers added yet — add one below to get started.</div>
@@ -7216,6 +7243,58 @@
     });
   });
 
+  // Quick Add — a tip about a horse that hasn't run/entered yet doesn't
+  // need its trainer already tracked first; this creates the trainer (or
+  // reuses a matching tracked one, same nickname/last-name-aware matching
+  // used everywhere else a free-typed name gets compared) and files the
+  // note under it in one step. The note then sits in the shared store like
+  // any other and the existing entry-alert job picks it up automatically
+  // whenever that horse+trainer combo eventually shows up in a real entry —
+  // no separate "watchlist" needed, this is the exact same mechanism.
+  function openStableQuickAddForm(){
+    $("stableTrainerDatalist").innerHTML = stableTrainers.map(t => `<option value="${escapeHtml(t)}"></option>`).join("");
+    $("stableQuickAddTrainer").value = "";
+    $("stableQuickAddHorse").value = "";
+    $("stableQuickAddSource").value = "";
+    $("stableQuickAddNote").value = "";
+    $("stableQuickAddDate").value = nowInTrackTZ().date;
+    $("stableQuickAddForm").classList.add("open");
+    $("stableQuickAddTrainer").focus();
+  }
+  function closeStableQuickAddForm(){
+    $("stableQuickAddForm").classList.remove("open");
+  }
+  $("stableQuickAddBtn").addEventListener("click", () => {
+    if ($("stableQuickAddForm").classList.contains("open")) closeStableQuickAddForm();
+    else openStableQuickAddForm();
+  });
+  $("stableQuickAddCancelBtn").addEventListener("click", closeStableQuickAddForm);
+  $("stableQuickAddSaveBtn").addEventListener("click", async () => {
+    const trainerInput = $("stableQuickAddTrainer");
+    const horseInput = $("stableQuickAddHorse");
+    const noteInput = $("stableQuickAddNote");
+    const typedTrainer = trainerInput.value.trim();
+    const horse = horseInput.value.trim();
+    const note = noteInput.value.trim();
+    if (!typedTrainer){ trainerInput.focus(); return; }
+    if (!horse){ horseInput.focus(); return; }
+    if (!note){ noteInput.focus(); return; }
+
+    let trainer = resolveTrackedTrainer(typedTrainer, stableTrainers);
+    if (!trainer){
+      trainer = typedTrainer;
+      await addStableTrainer(trainer);
+    }
+    const date = $("stableQuickAddDate").value;
+    const source = $("stableQuickAddSource").value.trim();
+    // Set before saving, not after — addStableNote() already re-renders
+    // internally, so adding to the open-set afterward would miss that
+    // render and leave the card collapsed despite just being saved to.
+    stableOpenTrainers.add(trainer);
+    const saved = await addStableNote(trainer, { horse, date, source, note });
+    if (saved) closeStableQuickAddForm();
+  });
+
   // Leaderboard/roster pages tend to use official-standings formatting
   // (middle initials, "Jr."/"II"/"III" suffixes) that rarely appears in
   // ordinary news prose — stripping it down to the everyday "First Last"
@@ -10662,7 +10741,7 @@
   // something typed and unsaved, so a background refresh can't silently
   // wipe someone's in-progress entry.
   function stableHasUnsavedInput(){
-    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse";
+    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse, #stableQuickAddTrainer";
     return [...document.querySelectorAll(selector)].some(el => el.value.trim().length > 0);
   }
   async function refreshStableDataIfIdle(){
