@@ -425,7 +425,16 @@ const WRITE_PASSPHRASE = "giddyup";
 // RESEND_FROM_EMAIL defaults to Resend's own onboarding sender, which only
 // works for low-volume/testing use — swap it for a verified sending
 // domain's address once one exists (see the Deploy note above).
-const NOTIFY_EMAILS = ["jvilla10214@gmail.com", "mark@giddyupbets.com", "cdilo191@gmail.com"];
+//
+// Back down to one recipient — confirmed real that Resend's shared
+// onboarding@resend.dev sender 403s on any recipient besides the account's
+// own verified address until a real domain is verified on Resend. Rather
+// than wait on that, the user set up Gmail filters on jvilla10214@gmail.com
+// forwarding entry-alert mail (From: onboarding@resend.dev) on to
+// mark@giddyupbets.com and cdilo191@gmail.com — so fan-out happens on
+// Gmail's side instead of Resend's. If a verified sending domain gets set
+// up later, this can go back to listing all three directly.
+const NOTIFY_EMAILS = ["jvilla10214@gmail.com"];
 const RESEND_FROM_EMAIL = "GiddyUpBets Alerts <onboarding@resend.dev>";
 
 // Job #12 — the visualiser page itself fetches this same URL client-side on
