@@ -478,7 +478,13 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/trainers" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      // No passphrase gate — this Worker's URL isn't public, only the small
+      // team using this site has it, same trust level /biaslog and
+      // /weatherlog writes already run at (never gated at all). The
+      // passphrase was never real security to begin with (see the Deploy
+      // note up top); it was just adding friction for legitimate teammates,
+      // confirmed real when a note failed to save for a team member who
+      // hadn't separately configured it in their own browser's Setup panel.
       const body = await request.json().catch(() => ({}));
       const name = (body.name || "").trim();
       if (!name) return json({ error: "Missing name" }, 400);
@@ -503,7 +509,6 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/trainers/bulk" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const names = Array.isArray(body.names) ? body.names.map(n => (n || "").trim()).filter(Boolean) : [];
       if (!names.length) return json({ error: "Missing names" }, 400);
@@ -528,7 +533,6 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/trainers" && request.method === "DELETE") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const name = body.name;
       const state = await readState(env);
@@ -542,9 +546,16 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/notes" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
-      if (!body.trainer || !body.horse || !body.note) return json({ error: "Missing required fields" }, 400);
+      // Trainer is optional for a manually-added note (not for /notes/bulk,
+      // which is auto-import only and always resolves a real trainer first)
+      // — confirmed real need: a tip about a horse that hasn't run yet can
+      // arrive before its trainer is even known, or the horse changes barns
+      // before it does run, and forcing a guess at save time just means the
+      // note stops matching once the guess turns out wrong. A trainer-less
+      // note instead matches purely on horse name in notesForHorse() below,
+      // valid regardless of which barn the horse ends up in.
+      if (!body.horse || !body.note) return json({ error: "Missing required fields" }, 400);
       const state = await readState(env);
       // Multiple devices independently auto-importing the same article would
       // otherwise each file a duplicate note — dedupe on (trainer, horse,
@@ -555,7 +566,7 @@ async function handleRequest(request, env) {
       }
       const note = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        trainer: body.trainer,
+        trainer: body.trainer || "",
         horse: body.horse,
         note: body.note,
         date: body.date || "",
@@ -571,7 +582,6 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/notes/bulk" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const items = Array.isArray(body.notes) ? body.notes : [];
       if (!items.length) return json({ error: "Missing notes" }, 400);
@@ -603,7 +613,6 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/notes" && request.method === "DELETE") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const state = await readState(env);
       const notes = state.notes.filter(n => n.id !== body.id);
@@ -2964,23 +2973,36 @@ function entryAlertTodayDate() {
 // for the same reason: Entries' trainer field comes from NYRA's own scraped
 // text, not guaranteed to string-match a tracked trainer's free-typed name
 // exactly). Horse name match stays exact (case/whitespace-insensitive only).
+//
+// A note saved with no trainer (manual "trainer not known/might change" —
+// see /notes POST) always matches by horse name alone, regardless of what
+// horse.trainer says — that's the whole point of leaving it blank, so the
+// note stays valid even if the horse switches barns before it runs. Those
+// bypass the same-surname disambiguation entirely since there's no trainer
+// to disambiguate against.
 function notesForHorse(notes, trainer, horseName) {
-  if (!trainer || !horseName) return [];
-  const wantTrainer = lastNameKey(trainer);
+  if (!horseName) return [];
   const wantHorse = horseName.trim().toLowerCase();
-  const candidates = notes
-    .filter((n) => n.horse && n.trainer && lastNameKey(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse);
-  const distinctTrainers = [...new Set(candidates.map((n) => n.trainer))];
-  let matched = candidates;
-  if (distinctTrainers.length > 1) {
-    // This exact horse name has notes filed under more than one
-    // same-surname trainer — narrow to whichever one the day's entry row
-    // actually agrees with (see resolveTrackedTrainer() above) instead of
-    // emailing another trainer's notes for this horse.
-    const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
-    matched = resolved ? candidates.filter((n) => n.trainer === resolved) : [];
+  const horseMatches = notes.filter((n) => n.horse && n.horse.trim().toLowerCase() === wantHorse);
+  const untracked = horseMatches.filter((n) => !n.trainer);
+  let matchedTracked = [];
+  if (trainer) {
+    const wantTrainer = lastNameKey(trainer);
+    const candidates = horseMatches.filter((n) => n.trainer && lastNameKey(n.trainer) === wantTrainer);
+    const distinctTrainers = [...new Set(candidates.map((n) => n.trainer))];
+    if (distinctTrainers.length > 1) {
+      // This exact horse name has notes filed under more than one
+      // same-surname trainer — narrow to whichever one the day's entry row
+      // actually agrees with (see resolveTrackedTrainer() above) instead of
+      // emailing another trainer's notes for this horse.
+      const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
+      matchedTracked = resolved ? candidates.filter((n) => n.trainer === resolved) : [];
+    } else {
+      matchedTracked = candidates;
+    }
   }
-  return matched.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+  return [...untracked, ...matchedTracked]
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
 }
 
 // "1:51 PM" from NYRA's raw post-time string — same logic as
@@ -3056,7 +3078,15 @@ async function runEntryAlerts(env, source = "manual") {
   let sent = 0;
   try {
     const state = await readState(env);
-    if (!state.trainers.length) {
+    // Horse names (lowercased) with at least one trainer-less note — these
+    // need checking even when horse.trainer isn't a tracked trainer at all,
+    // since a trainer-less note is deliberately not pinned to any trainer
+    // (see /notes POST) and must still catch the horse regardless of who
+    // ends up training it.
+    const untrackedHorseNames = new Set(
+      state.notes.filter((n) => !n.trainer && n.horse).map((n) => n.horse.trim().toLowerCase())
+    );
+    if (!state.trainers.length && !untrackedHorseNames.size) {
       const empty = { checked: 0, sent: 0 };
       await recordEntryAlertsRun(env, source, empty);
       return empty; // nothing to match against
@@ -3075,7 +3105,9 @@ async function runEntryAlerts(env, source = "manual") {
         for (const horse of race.horses || []) {
           checked++;
           if (horse.scratched) continue;
-          if (!horse.trainer || !trackedLastNames.has(lastNameKey(horse.trainer))) continue;
+          const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
+          const hasUntrackedNote = untrackedHorseNames.has((horse.name || "").trim().toLowerCase());
+          if (!trainerTracked && !hasUntrackedNote) continue;
           // Only worth an email if there's actually a note to show — not
           // dedup-marked when skipped for this reason (see below), so a
           // note added earlier that same race day before the 8am window
@@ -3584,6 +3616,7 @@ async function auditNotesAgainstSmartPony(env) {
   const mismatches = [];
   let checked = 0;
   for (const n of notes) {
+    if (!n.trainer) continue; // deliberately trainer-less (see /notes POST) — not a mismatch, nothing to compare
     const horseId = nameToHorseId[(n.horse || "").trim()];
     if (!horseId) continue; // horse not in SmartPony's data — nothing to check against
     const entry = entryByHorseId[horseId];

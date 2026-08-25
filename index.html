@@ -3007,8 +3007,8 @@
 
       <div class="bias-form" id="stableQuickAddForm">
         <div class="bias-form-row">
-          <label>Trainer
-            <input type="text" id="stableQuickAddTrainer" list="stableTrainerDatalist" placeholder="Trainer name" autocomplete="off">
+          <label>Trainer (optional)
+            <input type="text" id="stableQuickAddTrainer" list="stableTrainerDatalist" placeholder="Leave blank if unknown or might change" autocomplete="off">
           </label>
           <label>Horse
             <input type="text" id="stableQuickAddHorse" class="stableHorseInput" placeholder="Horse name">
@@ -6988,6 +6988,7 @@
   let stableViewMode = "trainer"; // "trainer" | "horse" | "date" — which of the 3 groupings is showing
   let stableOpenHorses = new Set(); // which horse groups are expanded in "By Horse" view
   let stableOpenDates = new Set(); // which date groups are expanded in "By Date" view
+  let stableUnassignedOpen = false; // the one fixed "Unassigned" (no-trainer notes) group in "By Trainer" view
 
   // Small provenance tag on the trainer roster — how this trainer got
   // added. Silent for a manual add (the expected/default case, no need to
@@ -7031,7 +7032,10 @@
 
   function renderStableTour(){
     const list = $("stableTrainerList");
-    if (!stableTrainers.length){
+    // A trainer-less note (see /notes POST) can exist with zero trainers
+    // tracked at all — e.g. the very first thing added is a Quick Add left
+    // blank on purpose — so "no trainers" alone isn't "nothing to show".
+    if (!stableTrainers.length && !stableNotes.some(n => !n.trainer)){
       list.innerHTML = `<div class="log-empty">No trainers added yet — add one below to get started.</div>`;
     } else if (stableViewMode === "horse"){
       renderStableTourByHorse(list);
@@ -7062,7 +7066,10 @@
     const trackedSet = new Set(stableTrainers);
     const byHorse = {};
     for (const n of stableNotes){
-      if (!trackedSet.has(n.trainer)) continue;
+      // A trainer-less note (n.trainer falsy) always shows — it's not tied
+      // to any trainer by design. One that names a trainer only shows once
+      // that trainer's actually tracked, same as every other view.
+      if (n.trainer && !trackedSet.has(n.trainer)) continue;
       const horse = (n.horse || "").trim();
       if (!horse) continue;
       const key = horse.toLowerCase();
@@ -7081,8 +7088,12 @@
       const { display, notes: rawNotes } = byHorse[key];
       const notes = sortNotesNewestFirst(rawNotes);
       const isOpen = query ? true : stableOpenHorses.has(key);
-      const distinctTrainers = new Set(notes.map(n => n.trainer)).size;
-      const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: false, showTrainer: distinctTrainers > 1 })).join("");
+      const distinctTrainers = new Set(notes.map(n => n.trainer).filter(Boolean)).size;
+      // Also flag a trainer-less note even when it's the only note for this
+      // horse — worth showing that this one isn't pinned to anyone, not
+      // just when there's a real trainer alongside it to compare against.
+      const hasUntracked = notes.some(n => !n.trainer);
+      const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: false, showTrainer: distinctTrainers > 1 || (distinctTrainers >= 1 && hasUntracked) })).join("");
       return `
         <div class="stable-trainer ${isOpen ? "open" : ""}">
           <div class="stable-trainer-header">
@@ -7107,7 +7118,7 @@
     const trackedSet = new Set(stableTrainers);
     const byDate = {};
     for (const n of stableNotes){
-      if (!trackedSet.has(n.trainer)) continue;
+      if (n.trainer && !trackedSet.has(n.trainer)) continue;
       if (query && !(n.trainer || "").toLowerCase().includes(query) && !(n.horse || "").toLowerCase().includes(query)) continue;
       const date = n.date || "Undated";
       if (!byDate[date]) byDate[date] = [];
@@ -7138,6 +7149,35 @@
     }).join("");
   }
 
+  // Trainer-less notes (see /notes POST) have nowhere to nest in this
+  // view — no trainer card to go under — so they get one fixed pseudo-card
+  // of their own instead, read-only (no paste/add-note forms, since there's
+  // no trainer context for those to attach to; use Quick Add or a real
+  // trainer's card to add more). Rendered separately from the per-trainer
+  // .map() below rather than folded in, since the real trainer cards carry
+  // editing UI (extract form, remove button) that doesn't apply here.
+  function renderStableUnassignedGroupHtml(query){
+    const notes = sortNotesNewestFirst(
+      stableNotes.filter(n => !n.trainer && (!query || (n.horse || "").toLowerCase().includes(query)))
+    );
+    if (!notes.length) return "";
+    const isOpen = query ? true : stableUnassignedOpen;
+    const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: true, showTrainer: false })).join("");
+    return `
+      <div class="stable-trainer ${isOpen ? "open" : ""}">
+        <div class="stable-trainer-header">
+          <button type="button" class="stable-trainer-toggle" data-unassigned-key="1">
+            <span class="chevron">▸</span>
+            <span class="stable-trainer-name">Unassigned</span>
+            <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+          </button>
+        </div>
+        <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+          <div class="stable-note-list">${notesHtml}</div>
+        </div>
+      </div>`;
+  }
+
   function renderStableTourByTrainer(list){
     const query = stableSearchQuery.trim().toLowerCase();
     const visibleTrainers = stableTrainers.filter(trainer => {
@@ -7145,11 +7185,12 @@
       if (trainer.toLowerCase().includes(query)) return true;
       return stableNotes.some(n => n.trainer === trainer && (n.horse || "").toLowerCase().includes(query));
     });
-    if (!visibleTrainers.length){
+    const unassignedHtml = renderStableUnassignedGroupHtml(query);
+    if (!visibleTrainers.length && !unassignedHtml){
       list.innerHTML = `<div class="log-empty">No trainers or horses match "${escapeHtml(stableSearchQuery.trim())}".</div>`;
       return;
     }
-    list.innerHTML = visibleTrainers.map(trainer => {
+    list.innerHTML = unassignedHtml + visibleTrainers.map(trainer => {
       const trainerNameMatches = query && trainer.toLowerCase().includes(query);
       const allNotes = sortNotesNewestFirst(stableNotes.filter(n => n.trainer === trainer));
       // Searching by horse name (not a trainer-name match) narrows the notes
@@ -7277,21 +7318,30 @@
     const typedTrainer = trainerInput.value.trim();
     const horse = horseInput.value.trim();
     const note = noteInput.value.trim();
-    if (!typedTrainer){ trainerInput.focus(); return; }
     if (!horse){ horseInput.focus(); return; }
     if (!note){ noteInput.focus(); return; }
 
-    let trainer = resolveTrackedTrainer(typedTrainer, stableTrainers);
-    if (!trainer){
-      trainer = typedTrainer;
-      await addStableTrainer(trainer);
+    // Trainer is optional — a tip can arrive before anyone knows who trains
+    // the horse, or before a barn change that would make a guess wrong. Left
+    // blank, the note matches purely by horse name later (see
+    // notesForHorse()/findHorseStableNotes()), regardless of who ends up
+    // training it, instead of being pinned to a guess that might not hold.
+    let trainer = "";
+    if (typedTrainer){
+      trainer = resolveTrackedTrainer(typedTrainer, stableTrainers);
+      if (!trainer){
+        trainer = typedTrainer;
+        await addStableTrainer(trainer);
+      }
+      // Set before saving, not after — addStableNote() already re-renders
+      // internally, so adding to the open-set afterward would miss that
+      // render and leave the card collapsed despite just being saved to.
+      stableOpenTrainers.add(trainer);
+    } else {
+      stableUnassignedOpen = true; // same reasoning — land on it expanded
     }
     const date = $("stableQuickAddDate").value;
     const source = $("stableQuickAddSource").value.trim();
-    // Set before saving, not after — addStableNote() already re-renders
-    // internally, so adding to the open-set afterward would miss that
-    // render and leave the card collapsed despite just being saved to.
-    stableOpenTrainers.add(trainer);
     const saved = await addStableNote(trainer, { horse, date, source, note });
     if (saved) closeStableQuickAddForm();
   });
@@ -7353,6 +7403,8 @@
         const key = toggleBtn.dataset.dateKey;
         if (stableOpenDates.has(key)) stableOpenDates.delete(key);
         else stableOpenDates.add(key);
+      } else if (toggleBtn.dataset.unassignedKey !== undefined){
+        stableUnassignedOpen = !stableUnassignedOpen;
       } else {
         const trainer = toggleBtn.dataset.trainer;
         if (stableOpenTrainers.has(trainer)) stableOpenTrainers.delete(trainer);
@@ -7686,23 +7738,33 @@
   // Horse name match is exact (case/whitespace-insensitive only, no fuzzy
   // matching) — deliberately strict, since a wrong match here would be worse
   // than no match at all.
+  // A note saved with no trainer (manual "trainer not known/might change" —
+  // see the Quick Add form) always matches by horse name alone, regardless
+  // of what this entry's trainer field says — the note stays valid even if
+  // the horse switches barns before it runs. Those bypass the same-surname
+  // disambiguation entirely since there's no trainer to disambiguate against.
   function findHorseStableNotes(trainer, horseName){
-    if (!trainer || !horseName) return [];
-    const wantTrainer = trainerLastName(trainer);
+    if (!horseName) return [];
     const wantHorse = horseName.trim().toLowerCase();
-    const candidates = stableNotes
-      .filter(n => n.horse && n.trainer && trainerLastName(n.trainer) === wantTrainer && n.horse.trim().toLowerCase() === wantHorse);
-    const distinctTrainers = [...new Set(candidates.map(n => n.trainer))];
-    let matched = candidates;
-    if (distinctTrainers.length > 1){
-      // Notes for this exact horse name are filed under more than one
-      // same-surname trainer — narrow to whichever one this Entries row's
-      // own trainer field actually agrees with (see resolveTrackedTrainer()
-      // above), rather than surfacing another trainer's notes here.
-      const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
-      matched = resolved ? candidates.filter(n => n.trainer === resolved) : [];
+    const horseMatches = stableNotes.filter(n => n.horse && n.horse.trim().toLowerCase() === wantHorse);
+    const untracked = horseMatches.filter(n => !n.trainer);
+    let matchedTracked = [];
+    if (trainer){
+      const wantTrainer = trainerLastName(trainer);
+      const candidates = horseMatches.filter(n => n.trainer && trainerLastName(n.trainer) === wantTrainer);
+      const distinctTrainers = [...new Set(candidates.map(n => n.trainer))];
+      if (distinctTrainers.length > 1){
+        // Notes for this exact horse name are filed under more than one
+        // same-surname trainer — narrow to whichever one this Entries row's
+        // own trainer field actually agrees with (see resolveTrackedTrainer()
+        // above), rather than surfacing another trainer's notes here.
+        const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
+        matchedTracked = resolved ? candidates.filter(n => n.trainer === resolved) : [];
+      } else {
+        matchedTracked = candidates;
+      }
     }
-    return matched
+    return [...untracked, ...matchedTracked]
       .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
   }
 
