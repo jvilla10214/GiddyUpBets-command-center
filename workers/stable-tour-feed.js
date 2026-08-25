@@ -996,17 +996,24 @@ async function handleRequest(request, env) {
     // without needing an actual tracked-trainer entry to exist that day
     // (runEntryAlerts() only sends when it finds one, so on a dark day it
     // can't verify delivery at all).
+    // Defaults to just NOTIFY_EMAILS[0] (the Resend account's own verified
+    // address) rather than the full list — confirmed real that Resend's
+    // shared onboarding@resend.dev sender 403s on any recipient besides the
+    // account owner until a real domain is verified, so testing the other
+    // two addresses this way isn't possible yet regardless of what this
+    // route sends to. An explicit ?to= overrides this once that's sorted.
     if (url.pathname === "/debug-send-test-email" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : [NOTIFY_EMAILS[0]];
       try {
         const res = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             from: RESEND_FROM_EMAIL,
-            to: NOTIFY_EMAILS,
+            to,
             subject: "GiddyUpBets entry alerts — test email",
-            html: `<p>This is a test of the entry-alert email pipeline. If you're reading this, delivery to all ${NOTIFY_EMAILS.length} recipients is working: ${escapeHtmlForEmail(NOTIFY_EMAILS.join(", "))}.</p>`,
+            html: `<p>This is a test of the entry-alert email pipeline. If you're reading this, delivery is working.</p>`,
           }),
         });
         if (!res.ok) {
@@ -1014,7 +1021,7 @@ async function handleRequest(request, env) {
           return json({ error: `Resend HTTP ${res.status}: ${body.slice(0, 300)}` }, 502);
         }
         const body = await res.json().catch(() => ({}));
-        return json({ sentTo: NOTIFY_EMAILS, resendId: body.id || null }, 200, { "Cache-Control": "no-store" });
+        return json({ sentTo: to, resendId: body.id || null }, 200, { "Cache-Control": "no-store" });
       } catch (err) {
         return json({ error: `Test email failed: ${err.message}` }, 500);
       }
