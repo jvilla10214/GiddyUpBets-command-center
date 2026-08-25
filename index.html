@@ -1955,6 +1955,8 @@
     box-sizing: border-box;
   }
   .stable-search-row input:focus{ border-color: var(--tote-amber); }
+  .stable-view-tabs{ display:flex; gap: 6px; margin: 10px 0; }
+  .stable-note-trainer{ color: var(--sky); }
   .stable-setup-section{ display:flex; flex-direction:column; gap:16px; margin-top: 18px; }
   .stable-auto-badge{
     font-size: 9px;
@@ -2993,6 +2995,12 @@
 
       <div class="stable-search-row">
         <input type="search" id="stableSearchInput" placeholder="Search trainers or horses…">
+      </div>
+
+      <div class="stable-view-tabs">
+        <button type="button" class="bias-window-btn active" data-view="trainer">By Trainer</button>
+        <button type="button" class="bias-window-btn" data-view="horse">By Horse</button>
+        <button type="button" class="bias-window-btn" data-view="date">By Date</button>
       </div>
 
       <div class="stable-trainer-list" id="stableTrainerList">
@@ -6949,6 +6957,9 @@
 
   let stablePendingExtracts = {}; // trainer -> chunks[] awaiting review — in-memory UI state only, never persisted
   let stableSearchQuery = ""; // in-memory UI state only, not persisted
+  let stableViewMode = "trainer"; // "trainer" | "horse" | "date" — which of the 3 groupings is showing
+  let stableOpenHorses = new Set(); // which horse groups are expanded in "By Horse" view
+  let stableOpenDates = new Set(); // which date groups are expanded in "By Date" view
 
   // Small provenance tag on the trainer roster — how this trainer got
   // added. Silent for a manual add (the expected/default case, no need to
@@ -6963,12 +6974,143 @@
     return `<span class="stable-source-badge" title="Auto-added from ${escapeHtml(label)}">${escapeHtml(label)}</span>`;
   }
 
+  // Shared by all 3 view modes — the trainer view already showed the horse
+  // name on every row (grouping is by trainer, so horse is the missing
+  // context); the horse/date views need the inverse, or both, since their
+  // grouping drops one or both of those out of the header.
+  function renderStableNoteHtml(n, opts = {}){
+    const { showHorse = true, showTrainer = false } = opts;
+    const sourceHtml = n.source
+      ? (n.link ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.source)}</a>` : escapeHtml(n.source))
+      : "";
+    const leadBits = [];
+    if (showHorse) leadBits.push(`<strong>${escapeHtml(n.horse) || "—"}</strong>`);
+    if (showTrainer) leadBits.push(`<span class="stable-note-trainer">${escapeHtml(n.trainer) || "—"}</span>`);
+    return `
+      <div class="stable-note">
+        <div class="stable-note-meta">
+          ${leadBits.join(" · ")}
+          <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
+          ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
+          ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
+          <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
+        </div>
+        <div class="stable-note-text">${escapeHtml(n.note)}</div>
+      </div>`;
+  }
+  const sortNotesNewestFirst = (notes) => notes.slice()
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+
   function renderStableTour(){
     const list = $("stableTrainerList");
     if (!stableTrainers.length){
       list.innerHTML = `<div class="log-empty">No trainers added yet — add one below to get started.</div>`;
+    } else if (stableViewMode === "horse"){
+      renderStableTourByHorse(list);
+    } else if (stableViewMode === "date"){
+      renderStableTourByDate(list);
+    } else {
+      renderStableTourByTrainer(list);
+    }
+    // Entries' note indicators read stableNotes/stableTrainers directly (no
+    // fetch of their own) — every path that changes those and calls this
+    // function (adding/removing a note or trainer, the periodic refresh,
+    // TDN auto-import) needs to keep them in sync too, or a note could go
+    // stale on the Entries tab until something else happens to re-render
+    // it. Harmless no-op before Entries has ever loaded (lastEntriesRaces
+    // is still empty) or while some other page is active — this just
+    // rewrites entriesBody's innerHTML, same as any other hidden-panel
+    // update elsewhere in this app.
+    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+  }
+
+  // Grouped by horse name (case-insensitive — sources vary in casing, e.g.
+  // NYRA's ALL CAPS vs a news article's title case) instead of trainer, for
+  // when the question is "what's on file for this horse" rather than "what
+  // has this trainer said." Read-only — no paste/add-note forms here, since
+  // those are inherently trainer-scoped actions; use By Trainer to add.
+  function renderStableTourByHorse(list){
+    const query = stableSearchQuery.trim().toLowerCase();
+    const trackedSet = new Set(stableTrainers);
+    const byHorse = {};
+    for (const n of stableNotes){
+      if (!trackedSet.has(n.trainer)) continue;
+      const horse = (n.horse || "").trim();
+      if (!horse) continue;
+      const key = horse.toLowerCase();
+      if (!byHorse[key]) byHorse[key] = { display: horse, notes: [] };
+      byHorse[key].notes.push(n);
+    }
+    let keys = Object.keys(byHorse).sort((a, b) => byHorse[a].display.localeCompare(byHorse[b].display));
+    if (query){
+      keys = keys.filter(k => k.includes(query) || byHorse[k].notes.some(n => (n.trainer || "").toLowerCase().includes(query)));
+    }
+    if (!keys.length){
+      list.innerHTML = `<div class="log-empty">${query ? `No horses match "${escapeHtml(stableSearchQuery.trim())}".` : "No notes yet."}</div>`;
       return;
     }
+    list.innerHTML = keys.map(key => {
+      const { display, notes: rawNotes } = byHorse[key];
+      const notes = sortNotesNewestFirst(rawNotes);
+      const isOpen = query ? true : stableOpenHorses.has(key);
+      const distinctTrainers = new Set(notes.map(n => n.trainer)).size;
+      const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: false, showTrainer: distinctTrainers > 1 })).join("");
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-horse-key="${escapeHtml(key)}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${escapeHtml(display)}</span>
+              <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  // Flat reverse-chronological feed, grouped by date so a run of same-day
+  // notes doesn't repeat the date on every row — every note shows both
+  // horse and trainer since neither is implied by the grouping here.
+  function renderStableTourByDate(list){
+    const query = stableSearchQuery.trim().toLowerCase();
+    const trackedSet = new Set(stableTrainers);
+    const byDate = {};
+    for (const n of stableNotes){
+      if (!trackedSet.has(n.trainer)) continue;
+      if (query && !(n.trainer || "").toLowerCase().includes(query) && !(n.horse || "").toLowerCase().includes(query)) continue;
+      const date = n.date || "Undated";
+      if (!byDate[date]) byDate[date] = [];
+      byDate[date].push(n);
+    }
+    const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a)); // newest date first
+    if (!dates.length){
+      list.innerHTML = `<div class="log-empty">${query ? `No notes match "${escapeHtml(stableSearchQuery.trim())}".` : "No notes yet."}</div>`;
+      return;
+    }
+    list.innerHTML = dates.map(date => {
+      const notes = sortNotesNewestFirst(byDate[date]);
+      const isOpen = query ? true : stableOpenDates.has(date);
+      const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: true, showTrainer: true })).join("");
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-date-key="${escapeHtml(date)}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${date === "Undated" ? "Undated" : fmtStableDate(date)}</span>
+              <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  function renderStableTourByTrainer(list){
     const query = stableSearchQuery.trim().toLowerCase();
     const visibleTrainers = stableTrainers.filter(trainer => {
       if (!query) return true;
@@ -6981,9 +7123,7 @@
     }
     list.innerHTML = visibleTrainers.map(trainer => {
       const trainerNameMatches = query && trainer.toLowerCase().includes(query);
-      const allNotes = stableNotes
-        .filter(n => n.trainer === trainer)
-        .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.capturedAt.localeCompare(a.capturedAt));
+      const allNotes = sortNotesNewestFirst(stableNotes.filter(n => n.trainer === trainer));
       // Searching by horse name (not a trainer-name match) narrows the notes
       // shown to just the matches, rather than dumping the trainer's full list.
       const notes = (query && !trainerNameMatches)
@@ -6994,22 +7134,7 @@
       const pending = stablePendingExtracts[trainer] || [];
 
       const notesHtml = notes.length
-        ? notes.map(n => {
-            const sourceHtml = n.source
-              ? (n.link ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.source)}</a>` : escapeHtml(n.source))
-              : "";
-            return `
-            <div class="stable-note">
-              <div class="stable-note-meta">
-                <strong>${escapeHtml(n.horse) || "—"}</strong>
-                <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
-                ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
-                ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
-                <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
-              </div>
-              <div class="stable-note-text">${escapeHtml(n.note)}</div>
-            </div>`;
-          }).join("")
+        ? notes.map(n => renderStableNoteHtml(n, { showHorse: true, showTrainer: false })).join("")
         : `<div class="log-empty">No notes yet for ${safeTrainer}.</div>`;
 
       const extractResultsHtml = pending.length
@@ -7067,17 +7192,6 @@
     list.querySelectorAll(".stableDateInput, .stableExtractDate").forEach(input => {
       if (!input.value) input.value = nowInTrackTZ().date;
     });
-
-    // Entries' note indicators read stableNotes/stableTrainers directly (no
-    // fetch of their own) — every path that changes those and calls this
-    // function (adding/removing a note or trainer, the periodic refresh,
-    // TDN auto-import) needs to keep them in sync too, or a note could go
-    // stale on the Entries tab until something else happens to re-render
-    // it. Harmless no-op before Entries has ever loaded (lastEntriesRaces
-    // is still empty) or while some other page is active — this just
-    // rewrites entriesBody's innerHTML, same as any other hidden-panel
-    // update elsewhere in this app.
-    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
   }
 
   $("addTrainerBtn").addEventListener("click", () => {
@@ -7092,6 +7206,14 @@
   $("stableSearchInput").addEventListener("input", (e) => {
     stableSearchQuery = e.target.value;
     renderStableTour();
+  });
+
+  document.querySelectorAll(".stable-view-tabs .bias-window-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      stableViewMode = btn.dataset.view;
+      document.querySelectorAll(".stable-view-tabs .bias-window-btn").forEach(b => b.classList.toggle("active", b === btn));
+      renderStableTour();
+    });
   });
 
   // Leaderboard/roster pages tend to use official-standings formatting
@@ -7140,9 +7262,22 @@
   $("stableTrainerList").addEventListener("click", (e) => {
     const toggleBtn = e.target.closest(".stable-trainer-toggle");
     if (toggleBtn){
-      const trainer = toggleBtn.dataset.trainer;
-      if (stableOpenTrainers.has(trainer)) stableOpenTrainers.delete(trainer);
-      else stableOpenTrainers.add(trainer);
+      // Same button class across all 3 view modes (identical look/behavior,
+      // just a different open-state Set and a different data-* key) — which
+      // dataset attribute is present tells us which view rendered it.
+      if (toggleBtn.dataset.horseKey !== undefined){
+        const key = toggleBtn.dataset.horseKey;
+        if (stableOpenHorses.has(key)) stableOpenHorses.delete(key);
+        else stableOpenHorses.add(key);
+      } else if (toggleBtn.dataset.dateKey !== undefined){
+        const key = toggleBtn.dataset.dateKey;
+        if (stableOpenDates.has(key)) stableOpenDates.delete(key);
+        else stableOpenDates.add(key);
+      } else {
+        const trainer = toggleBtn.dataset.trainer;
+        if (stableOpenTrainers.has(trainer)) stableOpenTrainers.delete(trainer);
+        else stableOpenTrainers.add(trainer);
+      }
       renderStableTour();
       return;
     }
