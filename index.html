@@ -159,7 +159,7 @@
          refreshOfficialTrackConditions().
      (2) .skel-block — a standalone placeholder element used only in markup
          that gets wholesale innerHTML-replaced once real data arrives
-         (Next 3 Days, Next 8 Hours, Rain Nowcast body, News Wire, Entries,
+         (Futurecast, Next 8 Hours, Rain Nowcast body, News Wire, Entries,
          table bodies) — no JS removal needed, the real render call already
          discards it. */
   @keyframes skel-shimmer{ 0%{ background-position: 200% 0; } 100%{ background-position: -200% 0; } }
@@ -1099,7 +1099,7 @@
   .tick .t-precip{ font-size: 11px; color: var(--sky); }
   .tick .t-wind{ font-size: 10px; color: var(--parchment-dim); margin-top:2px; }
 
-  /* ---------- Next 3 Days ---------- */
+  /* ---------- Futurecast (5-day forecast) ---------- */
   .forecast3-grid{
     display:grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1139,6 +1139,12 @@
     margin-bottom: 4px;
   }
   .f3-temps .f3-lo{ color: var(--parchment-dim); font-weight:400; font-size:14px; margin-left:6px; }
+  .f3-feels{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--parchment-dim);
+    margin-bottom: 6px;
+  }
   .f3-detail{
     font-family:'IBM Plex Mono', monospace;
     font-size: 9.5px;
@@ -2669,7 +2675,7 @@
     </div>
 
     <div class="ticker-panel">
-      <div class="panel-title">Next 3 Days</div>
+      <div class="panel-title">Futurecast</div>
       <div class="forecast3-grid" id="forecast3Grid">
         <div class="forecast3-day"><div class="skel-block skel-line inline" style="width:70%;"></div><div class="skel-block skel-line inline big" style="width:50%;"></div></div>
         <div class="forecast3-day"><div class="skel-block skel-line inline" style="width:70%;"></div><div class="skel-block skel-line inline big" style="width:50%;"></div></div>
@@ -3742,7 +3748,8 @@
       `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,weather_code` +
       `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
       `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
-      `wind_speed_10m_max,wind_gusts_10m_max,weather_code` +
+      `apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max,` +
+      `wind_direction_10m_dominant,weather_code` +
       `&past_days=8` + // covers the Past Rainfall tile's 7-day window (168h) plus a buffer, regardless of what hour "now" falls on
       `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=${encodeURIComponent(t.timezone)}`;
   }
@@ -10036,19 +10043,24 @@
   function renderNext3Days(data, todayIdx){
     const grid = $("forecast3Grid");
     grid.innerHTML = "";
-    for (let i = 1; i <= 3; i++){
+    for (let i = 1; i <= 5; i++){
       const idx = todayIdx + i;
       const dateStr = data.daily?.time?.[idx];
       if (!dateStr) break;
       const hi = data.daily.temperature_2m_max?.[idx];
       const lo = data.daily.temperature_2m_min?.[idx];
+      const feelsHi = data.daily.apparent_temperature_max?.[idx];
+      const feelsLo = data.daily.apparent_temperature_min?.[idx];
       const wind = data.daily.wind_speed_10m_max?.[idx];
+      const windDir = data.daily.wind_direction_10m_dominant?.[idx];
       const pop = data.daily.precipitation_probability_max?.[idx];
+      const rainAmt = data.daily.precipitation_sum?.[idx];
       const code = data.daily.weather_code?.[idx];
       const stormy = [95, 96, 99].includes(code) || (pop != null && pop >= 60);
       const dayLabel = new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', {
         weekday: 'short', month: 'numeric', day: 'numeric', timeZone: 'UTC',
       });
+      const rainAmtText = rainAmt != null && rainAmt >= 0.01 ? ` (${rainAmt.toFixed(2)}")` : "";
 
       const card = document.createElement("div");
       card.className = "forecast3-day";
@@ -10056,7 +10068,11 @@
         <div class="f3-date">${dayLabel}</div>
         <div class="f3-desc">${WMO[code] ?? "—"}</div>
         <div class="f3-temps">${hi != null ? Math.round(hi) + "°" : "—"}<span class="f3-lo">${lo != null ? Math.round(lo) + "°" : "—"}</span></div>
-        <div class="f3-detail${stormy ? " f3-stormy" : ""}">Wind ${wind != null ? Math.round(wind) : "—"} mph · Rain ${pop != null ? pop : "—"}%</div>
+        <div class="f3-feels">Feels ${feelsHi != null ? Math.round(feelsHi) + "°" : "—"}/${feelsLo != null ? Math.round(feelsLo) + "°" : "—"}</div>
+        <div class="f3-detail${stormy ? " f3-stormy" : ""}">
+          Wind ${wind != null ? Math.round(wind) : "—"} mph ${windDir != null ? compassPoint(windDir) : ""}<br>
+          Rain ${pop != null ? pop : "—"}%${rainAmtText}
+        </div>
       `;
       grid.appendChild(card);
     }
