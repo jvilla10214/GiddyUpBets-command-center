@@ -990,6 +990,36 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
+    // Sends a real email through the Resend pipeline right now, independent
+    // of runEntryAlerts()'s own matching/dedup logic — a way to confirm
+    // RESEND_API_KEY, RESEND_FROM_EMAIL, and NOTIFY_EMAILS are all correct
+    // without needing an actual tracked-trainer entry to exist that day
+    // (runEntryAlerts() only sends when it finds one, so on a dark day it
+    // can't verify delivery at all).
+    if (url.pathname === "/debug-send-test-email" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      try {
+        const res = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from: RESEND_FROM_EMAIL,
+            to: NOTIFY_EMAILS,
+            subject: "GiddyUpBets entry alerts — test email",
+            html: `<p>This is a test of the entry-alert email pipeline. If you're reading this, delivery to all ${NOTIFY_EMAILS.length} recipients is working: ${escapeHtmlForEmail(NOTIFY_EMAILS.join(", "))}.</p>`,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return json({ error: `Resend HTTP ${res.status}: ${body.slice(0, 300)}` }, 502);
+        }
+        const body = await res.json().catch(() => ({}));
+        return json({ sentTo: NOTIFY_EMAILS, resendId: body.id || null }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Test email failed: ${err.message}` }, 500);
+      }
+    }
+
     // Read-only — reports the last runEntryAlerts() run (real cron or
     // manual, see recordEntryAlertsRun()) without triggering a new one.
     // The actual way to confirm the Cron Trigger is firing on its own: 0
