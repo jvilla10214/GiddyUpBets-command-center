@@ -1852,10 +1852,11 @@
     border-radius: 8px;
     padding: 14px;
     margin-bottom: 16px;
-    display:flex;
+    display:none;
     flex-direction:column;
     gap:10px;
   }
+  .stable-autoimport.open{ display:flex; }
   .stable-autoimport .bias-form-row{ display:flex; gap:12px; flex-wrap:wrap; }
   .stable-autoimport label{
     display:flex; flex-direction:column; gap:4px;
@@ -3037,10 +3038,11 @@
         <div class="log-controls">
           <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
           <button type="button" id="addTrainerBtn">+ Add Trainer</button>
+          <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableAutoimportPanel" title="Shared data source setup">⚙</button>
         </div>
         <div class="log-note stable-api-status" id="stableApiStatus"></div>
 
-        <div class="stable-autoimport">
+        <div class="stable-autoimport" id="stableAutoimportPanel">
           <div class="bias-form-row">
             <label>Shared Data Source (Worker URL)
               <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
