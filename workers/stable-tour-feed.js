@@ -3400,11 +3400,27 @@ async function smartponyLogin(env) {
 function titleCaseName(s) {
   return s.toLowerCase().split(/\s+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
+// Continuation particles for multi-word surnames (Spanish/Portuguese/
+// French/Dutch naming conventions, common among jockeys and trainers) —
+// confirmed real: taking only the FIRST token as the surname mangled
+// "DE PAZ HORACIO" (jockey Horacio De Paz) into "Paz Horacio De", a
+// recurring false-positive in the SmartPony audit.
+const SURNAME_PARTICLES = new Set(["de", "del", "dela", "la", "van", "von", "der", "di", "du", "dos", "das", "el"]);
 function reformatLastFirstName(raw) {
   const parts = raw.trim().split(/\s+/).filter(Boolean);
   if (parts.length < 2) return titleCaseName(raw);
-  const [last, ...rest] = parts;
-  return titleCaseName([...rest, last].join(" "));
+  // Surname starts as just the first token, then grows by one more token
+  // for every particle encountered — "DE PAZ HORACIO" grows past "De" into
+  // "De Paz" before stopping, leaving "Horacio" as the given name. Always
+  // leaves at least one trailing token for the given name, even if that
+  // means under-extending a compound surname on a malformed/nameless input.
+  let splitAt = 1;
+  while (splitAt < parts.length - 1 && SURNAME_PARTICLES.has(parts[splitAt - 1].toLowerCase())) {
+    splitAt++;
+  }
+  const surname = parts.slice(0, splitAt);
+  const given = parts.slice(splitAt);
+  return titleCaseName([...given, ...surname].join(" "));
 }
 
 // Shared by fetchSmartPonyQuotes() and auditNotesAgainstSmartPony() — both
