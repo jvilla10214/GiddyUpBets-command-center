@@ -1268,6 +1268,7 @@ const TRAINER_FIRST_NAME_ALIASES = {
   gene: "eugene",
   whit: "whitworth",
   shug: "claude", // Claude "Shug" McGaughey III — confirmed real duplicate (tracked separately as both names before this)
+  phil: "philip", // Phil D'Amato — confirmed real: SmartPony's own "Philip Damato" spelling wasn't recognized as the same person, letting it keep re-splitting into a duplicate tracked entry
 };
 // Normalizes ONE name token — see index.html's normalizeNameToken() for why
 // this checks every token of a tracked name, not just its own first token
