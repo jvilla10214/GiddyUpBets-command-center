@@ -3501,6 +3501,7 @@ async function lookupRaceEntriesByHorseId(accessToken, horseIds) {
 
 async function fetchSmartPonyQuotes(env) {
   const accessToken = await smartponyLogin(env);
+  const state = await readState(env); // trainers list — see the tracked-spelling snap below
   // All three of SmartPony's own review states (needs_review, auto_matched,
   // verified) — originally scoped to verified-only, but that missed most
   // of what's actually on their site (confirmed real: several Chad Brown
@@ -3577,6 +3578,18 @@ async function fetchSmartPonyQuotes(env) {
         trainerName = realTrainer;
       }
     }
+    // Snap to an already-tracked trainer's exact spelling whenever one
+    // matches — confirmed real: SmartPony's own two fields disagree with
+    // each other on spelling (their quote attribution vs. their
+    // race_entries table sometimes drop an apostrophe differently), so
+    // trusting either blindly lets the same real trainer spawn a new
+    // near-duplicate tracked entry every time a slightly different spelling
+    // comes through (e.g. "Philip Damato" repeatedly re-appearing alongside
+    // the already-tracked "Phil D'Amato"). The tracked roster itself is the
+    // more stable source of truth once a trainer's already been added
+    // correctly, so it wins over both of SmartPony's own fields here.
+    const tracked = resolveTrackedTrainer(trainerName, state.trainers);
+    if (tracked) trainerName = tracked;
 
     const article = row.raw_articles || {};
     quotes.push({
