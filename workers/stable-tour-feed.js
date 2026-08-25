@@ -425,7 +425,7 @@ const WRITE_PASSPHRASE = "giddyup";
 // RESEND_FROM_EMAIL defaults to Resend's own onboarding sender, which only
 // works for low-volume/testing use — swap it for a verified sending
 // domain's address once one exists (see the Deploy note above).
-const NOTIFY_EMAILS = ["jvilla10214@gmail.com"];
+const NOTIFY_EMAILS = ["jvilla10214@gmail.com", "mark@giddyupbets.com", "cdilo191@gmail.com"];
 const RESEND_FROM_EMAIL = "GiddyUpBets Alerts <onboarding@resend.dev>";
 
 // Job #12 — the visualiser page itself fetches this same URL client-side on
@@ -2999,51 +2999,63 @@ async function sendEntryAlertEmail(env, track, date, race, horse, notes) {
 // hour, it just checks whatever "today" is whenever it's called, real cron
 // or manual alike.
 async function runEntryAlerts(env, source = "manual") {
-  const state = await readState(env);
-  if (!state.trainers.length) {
-    const empty = { checked: 0, sent: 0 };
-    await recordEntryAlertsRun(env, source, empty);
-    return empty; // nothing to match against
-  }
-  const trackedLastNames = new Set(state.trainers.map(lastNameKey));
-  const date = entryAlertTodayDate();
+  // Whole body wrapped in one try/catch so a mid-run crash still leaves a
+  // record behind — confirmed real gap: before this, an exception anywhere
+  // in the per-horse loop would skip the final recordEntryAlertsRun() call
+  // entirely, making a genuine bug indistinguishable from "the Cron Trigger
+  // never fired at all" when read back from /debug-last-run, which is
+  // exactly the ambiguity that made a real scheduling problem hard to tell
+  // apart from a code bug.
   let checked = 0;
   let sent = 0;
-  for (const track of Object.keys(NYRA_ENTRIES_BASE)) {
-    let result;
-    try {
-      result = await fetchNyraEntriesDay(track, date);
-    } catch (err) {
-      console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
-      continue;
+  try {
+    const state = await readState(env);
+    if (!state.trainers.length) {
+      const empty = { checked: 0, sent: 0 };
+      await recordEntryAlertsRun(env, source, empty);
+      return empty; // nothing to match against
     }
-    for (const race of result.races || []) {
-      for (const horse of race.horses || []) {
-        checked++;
-        if (horse.scratched) continue;
-        if (!horse.trainer || !trackedLastNames.has(lastNameKey(horse.trainer))) continue;
-        // Only worth an email if there's actually a note to show — not
-        // dedup-marked when skipped for this reason (see below), so a
-        // note added earlier that same race day before the 8am window
-        // still gets caught at the next scheduled run.
-        const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-        if (!notes.length) continue;
-        const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
-        const already = await env.STABLE_KV.get(key);
-        if (already) continue;
-        try {
-          await sendEntryAlertEmail(env, track, date, race, horse, notes);
-          await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
-          sent++;
-        } catch (err) {
-          console.error(`Entry alerts: send failed for ${horse.name} (${track} ${date} R${race.raceNumber})`, err.message);
+    const trackedLastNames = new Set(state.trainers.map(lastNameKey));
+    const date = entryAlertTodayDate();
+    for (const track of Object.keys(NYRA_ENTRIES_BASE)) {
+      let result;
+      try {
+        result = await fetchNyraEntriesDay(track, date);
+      } catch (err) {
+        console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
+        continue;
+      }
+      for (const race of result.races || []) {
+        for (const horse of race.horses || []) {
+          checked++;
+          if (horse.scratched) continue;
+          if (!horse.trainer || !trackedLastNames.has(lastNameKey(horse.trainer))) continue;
+          // Only worth an email if there's actually a note to show — not
+          // dedup-marked when skipped for this reason (see below), so a
+          // note added earlier that same race day before the 8am window
+          // still gets caught at the next scheduled run.
+          const notes = notesForHorse(state.notes, horse.trainer, horse.name);
+          if (!notes.length) continue;
+          const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
+          const already = await env.STABLE_KV.get(key);
+          if (already) continue;
+          try {
+            await sendEntryAlertEmail(env, track, date, race, horse, notes);
+            await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
+            sent++;
+          } catch (err) {
+            console.error(`Entry alerts: send failed for ${horse.name} (${track} ${date} R${race.raceNumber})`, err.message);
+          }
         }
       }
     }
+    const summary = { checked, sent };
+    await recordEntryAlertsRun(env, source, summary);
+    return summary;
+  } catch (err) {
+    await recordEntryAlertsRun(env, source, { checked, sent, error: err.message });
+    throw err;
   }
-  const summary = { checked, sent };
-  await recordEntryAlertsRun(env, source, summary);
-  return summary;
 }
 
 // Written on every run (real cron or manual alike) so /debug-last-run can
