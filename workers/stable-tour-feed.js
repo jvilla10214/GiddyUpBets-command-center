@@ -3607,16 +3607,68 @@ async function fetchSmartPonyQuotes(env) {
   return quotes;
 }
 
-// Checks EVERY currently tracked trainer's notes against SmartPony's own
-// race_entries data, keyed by horse NAME — not by quote id, so this covers
-// the whole existing note backlog (including notes from TDN/HRN/News Wire/
-// thisishorseracing.com, not just SmartPony-sourced ones), unlike
-// fetchSmartPonyQuotes()'s own race_entries check which only ever applies
-// to a fresh SmartPony quote at import time. Built after repeatedly
-// finding pre-existing mis-attributed notes one at a time via user reports
-// (jockeys, owners, assistants, a reporter, duplicate name variants) —
-// this checks it all in one pass instead. Read-only: reports mismatches,
-// changes nothing itself.
+// A window of YYYY-MM-DD date strings starting today (NY time), `days`
+// more after it — same lookahead NYRA's own entries posting horizon
+// covers. Used to cross-check notes against LIVE current entries, which
+// take precedence over SmartPony's own race_entries table when both are
+// available — confirmed real: they disagreed for Glen Airy (SmartPony's
+// race_entries said Michael Maker, NYRA's own live card said Linda Rice),
+// and NYRA's own current posting is the more trustworthy "who trains this
+// right now" signal.
+function nyDateWindow(days) {
+  const { year, month, day } = nyNowParts();
+  const start = new Date(Date.UTC(year, month - 1, day));
+  const out = [];
+  for (let i = 0; i <= days; i++) {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i);
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`);
+  }
+  return out;
+}
+
+// Scans NYRA_ENTRIES_BASE's tracks over the next 7 days for real, live
+// entries, building horseName (lowercased) -> {trainer, track, date} —
+// first hit per horse wins, i.e. the soonest-posted entry. Bounded by the
+// same tracks/window runEntryAlerts() already checks daily, so this stays
+// a small, predictable number of fetches even though it's live data, not
+// a KV read.
+async function lookupNyraEntriesTrainerByHorse() {
+  const dates = nyDateWindow(6);
+  const byHorse = {};
+  for (const track of Object.keys(NYRA_ENTRIES_BASE)) {
+    for (const date of dates) {
+      let result;
+      try {
+        result = await fetchNyraEntriesDay(track, date);
+      } catch (err) {
+        continue; // best-effort — a bad fetch for one day/track shouldn't kill the whole audit
+      }
+      for (const race of result.races || []) {
+        for (const horse of race.horses || []) {
+          if (horse.scratched || !horse.trainer || !horse.name) continue;
+          const key = horse.name.trim().toLowerCase();
+          if (!byHorse[key]) byHorse[key] = { trainer: horse.trainer, track, date };
+        }
+      }
+    }
+  }
+  return byHorse;
+}
+
+// Checks EVERY currently tracked trainer's notes against real trainer data
+// — NYRA's own live entries first (see lookupNyraEntriesTrainerByHorse()
+// above for why that wins when available), falling back to SmartPony's
+// race_entries data (broader historical coverage, but sometimes stale or
+// wrong) for a horse with no current NYRA entry. Keyed by horse NAME — not
+// by quote id, so this covers the whole existing note backlog (including
+// notes from TDN/HRN/News Wire/thisishorseracing.com, not just
+// SmartPony-sourced ones), unlike fetchSmartPonyQuotes()'s own race_entries
+// check which only ever applies to a fresh SmartPony quote at import time.
+// Built after repeatedly finding pre-existing mis-attributed notes one at a
+// time via user reports (jockeys, owners, assistants, a reporter, duplicate
+// name variants) — this checks it all in one pass instead. Read-only:
+// reports mismatches, changes nothing itself.
 async function auditNotesAgainstSmartPony(env) {
   const accessToken = await smartponyLogin(env);
   const state = await readState(env);
@@ -3626,25 +3678,40 @@ async function auditNotesAgainstSmartPony(env) {
   const nameToHorseId = await lookupHorseIdsByName(accessToken, horseNames);
   const horseIds = [...new Set(Object.values(nameToHorseId))];
   const entryByHorseId = await lookupRaceEntriesByHorseId(accessToken, horseIds);
+  const nyraByHorse = await lookupNyraEntriesTrainerByHorse();
 
   const mismatches = [];
   let checked = 0;
   for (const n of notes) {
     if (!n.trainer) continue; // deliberately trainer-less (see /notes POST) — not a mismatch, nothing to compare
-    const horseId = nameToHorseId[(n.horse || "").trim()];
-    if (!horseId) continue; // horse not in SmartPony's data — nothing to check against
-    const entry = entryByHorseId[horseId];
-    if (!entry?.trainer) continue;
+    const nyraHit = nyraByHorse[(n.horse || "").trim().toLowerCase()];
+
+    let realTrainer, realJockey, realOwner, checkedAgainst;
+    if (nyraHit?.trainer) {
+      realTrainer = nyraHit.trainer;
+      realJockey = null;
+      realOwner = null;
+      checkedAgainst = "nyra-entries";
+    } else {
+      const horseId = nameToHorseId[(n.horse || "").trim()];
+      if (!horseId) continue; // not found in either source — nothing to check against
+      const entry = entryByHorseId[horseId];
+      if (!entry?.trainer) continue;
+      realTrainer = reformatLastFirstName(entry.trainer);
+      realJockey = entry.jockey ? reformatLastFirstName(entry.jockey) : null;
+      realOwner = entry.owner || null;
+      checkedAgainst = "smartpony";
+    }
     checked++;
-    const realTrainer = reformatLastFirstName(entry.trainer);
     if (lastNameKey(n.trainer || "") !== lastNameKey(realTrainer)) {
       mismatches.push({
         noteId: n.id,
         horse: n.horse,
         currentTrainer: n.trainer,
         realTrainer,
-        realJockey: entry.jockey ? reformatLastFirstName(entry.jockey) : null,
-        realOwner: entry.owner || null,
+        realJockey,
+        realOwner,
+        checkedAgainst,
         source: n.source || null,
         noteSnippet: (n.note || "").slice(0, 120),
       });
@@ -3655,6 +3722,7 @@ async function auditNotesAgainstSmartPony(env) {
     totalNotes: notes.length,
     distinctHorses: horseNames.length,
     horsesFoundInSmartPony: Object.keys(nameToHorseId).length,
+    horsesFoundInNyraEntries: Object.keys(nyraByHorse).length,
     checked,
     mismatchCount: mismatches.length,
     mismatches,
