@@ -1659,6 +1659,18 @@
     padding: 2px 7px;
     border-radius: 4px;
   }
+  .pp-badge{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    border: 1px solid rgba(0,0,0,0.35);
+    font-weight: 700;
+    font-size: 12px;
+    line-height: 1;
+  }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
   .entries-owner{ display: block; margin-top: 2px; font-size: 11.5px; color: var(--parchment-dim); }
   /* When rendered as a button (owner has other runners today), reset the
@@ -1808,7 +1820,6 @@
   .odds-arrow{ margin-left: 4px; font-size: 10px; font-weight: 700; }
   .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
   .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
-  .uk-odds-live{ margin-left: 5px; font-size: 12px; cursor: help; }
   .log-remove{ font-size: 14px; padding: 2px 4px; }
   .log-edit{ font-size: 13px; padding: 2px 5px; margin-right: 4px; }
   .log-remove:hover{ color: var(--silk-red); }
@@ -5068,6 +5079,34 @@
   // cleanly (works for any source that populates both fields, not just
   // NYRA — Del Mar/Monmouth's parsers currently always leave currentOdds
   // null, so this naturally shows nothing there today).
+  // Standard North American saddlecloth colors by post position (the
+  // NTRA-standard chart virtually every US track uses) — bg/fg pairs
+  // verified against the official color+number combinations, not just
+  // guessed hex values. Posts past 12 (rare, but real on a big Kentucky
+  // Downs-size field) fall back to plain text in ppBadgeHtml() below
+  // rather than guessing a color — tracks generally use dedicated striped
+  // patterns past 12 that a flat color swatch can't represent honestly.
+  const SADDLECLOTH_COLORS = {
+    1: { bg: "#e21f26", fg: "#ffffff" },  // red / white
+    2: { bg: "#ffffff", fg: "#000000" },  // white / black
+    3: { bg: "#1c4faa", fg: "#ffffff" },  // blue / white
+    4: { bg: "#ffd400", fg: "#000000" },  // yellow / black
+    5: { bg: "#1a7a3c", fg: "#ffffff" },  // green / white
+    6: { bg: "#000000", fg: "#ffd400" },  // black / yellow
+    7: { bg: "#f7941d", fg: "#000000" },  // orange / black
+    8: { bg: "#f2a7c3", fg: "#000000" },  // pink / black
+    9: { bg: "#40e0d0", fg: "#000000" },  // turquoise / black
+    10: { bg: "#7b2d8e", fg: "#ffffff" }, // purple / white
+    11: { bg: "#9a9a9a", fg: "#c1272d" }, // gray / red
+    12: { bg: "#9acd32", fg: "#000000" }, // lime / black
+  };
+  function ppBadgeHtml(postPosition){
+    const n = parseInt(postPosition, 10);
+    const colors = SADDLECLOTH_COLORS[n];
+    if (!colors) return escapeHtml(postPosition || "—");
+    return `<span class="pp-badge" style="background:${colors.bg}; color:${colors.fg};">${n}</span>`;
+  }
+
   function oddsMoveArrow(mlOdds, currentOdds){
     const ml = parseOddsToDecimal(mlOdds);
     const cur = parseOddsToDecimal(currentOdds);
@@ -5076,54 +5115,6 @@
     return `<span class="odds-arrow ${shortened ? "odds-arrow-down" : "odds-arrow-up"}" title="${shortened ? "Shortened" : "Drifted"} from ML ${escapeHtml(mlOdds)}">${shortened ? "↓" : "↑"}</span>`;
   }
 
-  // UK odds (job #20) have no morning line to compare against — Sporting
-  // Life's own "Live Odds" page shows movement by accumulating every price
-  // it sees over the viewer's own live session, which isn't something a
-  // single fetch can reconstruct (confirmed directly: the bookmakerOdds
-  // entry itself carries no history array, just the current price). This
-  // recreates the same idea cheaply on our end instead: the first UK price
-  // this browser ever observes for a given horse+day becomes the baseline,
-  // stored in localStorage (same per-device convention as every other
-  // "seen" set in this file), and every later refresh compares the current
-  // price back against that baseline — one small arrow, not a growing list,
-  // so it stays out of the way visually the same way the ML arrow does.
-  // Pruned to the last 3 days on every save so this can't grow forever.
-  const UK_ODDS_BASELINE_KEY = "giddyupbets_uk_odds_baseline_v1";
-  function loadUkOddsBaseline(){
-    try { return JSON.parse(localStorage.getItem(UK_ODDS_BASELINE_KEY)) ?? {}; }
-    catch { return {}; }
-  }
-  function saveUkOddsBaseline(){
-    try {
-      const cutoff = shiftDateStr(nowInTrackTZ().date, -3);
-      for (const key of Object.keys(ukOddsBaseline)){
-        if (key.split("|")[0] < cutoff) delete ukOddsBaseline[key];
-      }
-      localStorage.setItem(UK_ODDS_BASELINE_KEY, JSON.stringify(ukOddsBaseline));
-    } catch(err){ console.error("UK odds baseline failed to save", err); }
-  }
-  let ukOddsBaseline = loadUkOddsBaseline();
-
-  // Records this horse's first-seen UK price for `date` if none exists yet,
-  // then returns a small arrow (same visual language as oddsMoveArrow
-  // above) comparing the CURRENT price back against that recorded opening
-  // price — green down = shortened since we started watching (sharper),
-  // red up = drifted out. Full context lives in the tooltip rather than as
-  // visible text, keeping the Entries table exactly as dense as it is today.
-  function ukOddsMoveArrow(date, horseName, ukOdds){
-    const key = `${date}|${(horseName || "").trim().toLowerCase()}`;
-    if (!ukOddsBaseline[key]) {
-      ukOddsBaseline[key] = ukOdds;
-      saveUkOddsBaseline();
-      return "";
-    }
-    const opening = ukOddsBaseline[key];
-    const openDec = parseOddsToDecimal(opening);
-    const curDec = parseOddsToDecimal(ukOdds);
-    if (openDec == null || curDec == null || curDec === openDec) return "";
-    const shortened = curDec < openDec;
-    return `<span class="odds-arrow ${shortened ? "odds-arrow-down" : "odds-arrow-up"}" title="${shortened ? "Shortened" : "Drifted"} from ${escapeHtml(opening)} since this browser started watching today">${shortened ? "↓" : "↑"}</span>`;
-  }
 
   // Finds the hourly forecast slot closest to a race's post time and reduces
   // it to the same headwind/crosswind read Track Play Analysis uses for
@@ -5336,12 +5327,6 @@
       weatherHtml = `<div class="entries-weather-strip entries-weather-unknown">No forecast match for this race's post time yet.</div>`;
     }
 
-    // Feature-detected rather than hardcoded to a track id — shows
-    // whenever the worker's enrichWithUkOdds() (job #20) actually attached
-    // odds to this race, so it appears for Saratoga today and picks up
-    // Belmont automatically later without another client change, rather
-    // than coupling this render function to a specific track.
-    const hasUkOdds = race.horses.some(h => h.ukOdds);
     const rows = race.horses.map(h => {
       // Applies only to live rides (scratched horses aren't running, so a
       // rider swap for one is moot) — see saratogaJockeyChange()'s own
@@ -5351,29 +5336,17 @@
       const jockeyHtml = newJockey
         ? `<span class="entries-jockey-changed" title="Changed from ${escapeHtml(h.jockey || "—")}">${escapeHtml(newJockey)}</span>`
         : escapeHtml(h.jockey || "—");
-      // Shown in its own native UK fractional format, exactly as Sporting
-      // Life publishes it — never converted for display (the worker's
-      // fractionalOddsToDecimal() only exists to power the ukLive flag
-      // below, not to change what's shown here). The flame is
-      // deliberately one-directional (see the worker's horseIsLiveInUk()
-      // comment) — it only ever means "UK money is already shorter on
-      // this one than the US pool reflects," never "these two disagree."
-      const ukLiveHtml = h.ukLive ? `<span class="uk-odds-live" title="Notably shorter in the UK than the US price — sharp UK money may already be on this one">🔥</span>` : "";
-      const ukMoveHtml = h.ukOdds ? ukOddsMoveArrow(date, h.name, h.ukOdds) : "";
-      const ukOddsCell = hasUkOdds ? `<td>${escapeHtml(h.ukOdds || "—")}${ukMoveHtml}${ukLiveHtml}</td>` : "";
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
-        <td>${escapeHtml(h.postPosition || "—")}</td>
+        <td>${ppBadgeHtml(h.postPosition)}</td>
         <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${entriesOwnerHtml(h.owner, race.raceNumber, h.name)}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
-        ${ukOddsCell}
       </tr>
     `;
     }).join("");
-    const ukOddsHeader = hasUkOdds ? "<th>UK Odds</th>" : "";
 
     // Official Results — shown above the entries/odds table, never
     // replacing it, since morning-line/final odds stay useful for review
@@ -5390,7 +5363,7 @@
       const finishRows = result.finishOrder.map(f => `
         <tr>
           <td>${escapeHtml(String(f.finishPosition))}</td>
-          <td>${escapeHtml(f.postPosition || "—")}</td>
+          <td>${ppBadgeHtml(f.postPosition)}</td>
           <td>${escapeHtml(f.horseName || "—")}</td>
           <td>${f.winPayout ? escapeHtml(f.winPayout) : "—"}</td>
           <td>${f.placePayout ? escapeHtml(f.placePayout) : "—"}</td>
@@ -5449,7 +5422,7 @@
         ${weatherHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
-            <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th>${ukOddsHeader}</tr></thead>
+            <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
@@ -5776,7 +5749,7 @@
       const finishRows = result.finishOrder.map(f => `
         <tr>
           <td>${f.finishPosition}</td>
-          <td>${escapeHtml(f.postPosition || "—")}</td>
+          <td>${ppBadgeHtml(f.postPosition)}</td>
           <td>${escapeHtml(f.horseName || "—")}</td>
           <td>${escapeHtml(f.winPayout || f.placePayout || f.showPayout || "—")}</td>
         </tr>
@@ -5794,7 +5767,7 @@
     }
     const rows = (entryRace.horses || []).map(h => `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
-        <td>${escapeHtml(h.postPosition || "—")}</td>
+        <td>${ppBadgeHtml(h.postPosition)}</td>
         <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${escapeHtml(h.jockey || "—")}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.mlOdds || h.currentOdds || "—")}</td>

@@ -374,36 +374,6 @@
 //    gaps (DRF_KEYWORD_TRACK_NAMES and DRF_RACE_NAME_SUFFIXES are both
 //    necessarily incomplete, so an untracked track or race name
 //    occasionally reads as a horse).
-// 20. UK odds on Saratoga entries (folded into GET /entries via
-//    enrichWithUkOdds(), not its own route) — pulls each horse's live Sky
-//    Bet price from Sporting Life's per-race "Live Odds" page
-//    (fetchSaratogaSkyBetOdds()), NOT the whole-card fast-cards page job
-//    #6's Sporting Life branch already uses for York/Ascot/etc. Confirmed
-//    real user finding 2026-08-26: that whole-card page's generic
-//    betting.current_odds field doesn't match what a human actually sees
-//    on Sporting Life's own site (their screenshot: "Odds by: Sky Bet") —
-//    the real per-bookmaker prices (Sky Bet, Paddy Power, Betfair
-//    Sportsbook, all present per horse) live on a separate per-race page
-//    keyed by each race's own id, not the meeting id. Real cost of that
-//    correction: one request per race (8 for a full Saratoga card)
-//    instead of one for the whole card. Attaches ukOdds to each matching
-//    horse (by name, case/whitespace-insensitive, country suffix
-//    stripped) after the primary NYRA fetch, wrapped so a Sporting Life
-//    hiccup never breaks the primary entries response. Displayed in its
-//    own native UK fractional format, never converted — fractionalOddsToDecimal() and
-//    horseIsLiveInUk() exist only to power the ukLive flag, shown
-//    client-side as a flame icon. Deliberately one-directional per
-//    explicit user reasoning 2026-08-26: this isn't "these two numbers
-//    disagree," it's "sharp UK money is already on this horse before the
-//    US pool reflects it" (the two markets don't share information, so UK
-//    fixed-odds action can shorten a price well ahead of US pari-mutuel
-//    pool money catching up) — ukLive only ever fires when UK is shorter
-//    than US by UK_ODDS_LIVE_RATIO, never the reverse (a horse drifting
-//    longer in the UK isn't "live," just less backed somewhere). Saratoga
-//    only for now (UK_ODDS_TRACKS) — Belmont needs its own live-card
-//    verification once that meet reopens before being added, same rule as
-//    every other source here.
-//
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
 // for jobs #1, #3, #5, #9, #15, and #16 to work — jobs #2, #4, #6, #7, #8,
@@ -990,7 +960,6 @@ async function handleRequest(request, env) {
       } catch (err) {
         return json({ error: `Entries fetch failed: ${err.message}` }, 502);
       }
-      result = await enrichWithUkOdds(track, date, result); // job #20 — no-op for any track not in UK_ODDS_TRACKS
       return json(result, 200, { "Cache-Control": "public, max-age=120" });
     }
 
@@ -2704,180 +2673,10 @@ const SPORTINGLIFE_COURSE_SLUG_BY_TRACK = {
   curragh: "curragh", longchamp: "paris-longchamp",
   shatin: "sha-tin", happyvalley: "happy-valley", meydan: "meydan",
 };
-// Saratoga is deliberately NOT in the two maps above — job #20 (UK odds)
-// doesn't go through fetchSportingLifeEntriesDay()/sportingLifeMapRace() at
-// all. It was briefly added here on 2026-08-26 to reuse that pipeline's
-// generic betting.current_odds field, then removed again the same day once
-// that field turned out not to match what a human sees on Sporting Life's
-// own "Live Odds" tab — see fetchSaratogaSkyBetOdds()'s own comment for the
-// real per-bookmaker source this uses instead.
-
-// ---------- Job #20: UK odds alongside Saratoga entries ----------
-// Confirmed real ask 2026-08-26: show Sporting Life's UK fractional odds
-// (already fetched above via the exact same pipeline as York/Ascot/etc.)
-// next to Saratoga's own US odds on the Entries tab, with an alert icon
-// when the two disagree enough to be worth a second look — NOT a converted
-// number shown to the user, both stay in their own native fractional
-// format; the conversion below exists ONLY to decide whether to flag it,
-// never for display.
-//
-// Threshold and direction refined 2026-08-26 per explicit user reasoning:
-// this isn't "these two numbers disagree," it's specifically "UK money is
-// already onto this one before the US pool reflects it" — sharp/informed
-// UK fixed-odds action can shorten a horse up well ahead of the US
-// pari-mutuel pool having any idea, since the two markets don't share
-// information. The reverse case (UK drifting a horse longer than the US
-// price) isn't the same signal at all — that's just "less backed
-// somewhere," not "live" — so this is deliberately one-directional now,
-// only ever firing when UK is shorter than US, never the other way.
-// Still a ratio rather than a flat point-gap so it means the same thing
-// at every price point (a 2-point gap is enormous for a 5/2 favorite and
-// trivial for a 20/1 longshot). 2x is a starting bar for "this looks like
-// more than ordinary book-to-book variance," not a scientifically derived
-// number — expected to get tuned once this has actually run against a
-// few live race days.
-const UK_ODDS_LIVE_RATIO = 2;
-// Tracks this enrichment runs for — deliberately NOT the same set as
-// SPORTINGLIFE_COURSE_NAME_BY_TRACK (that map also covers the UK/
-// international tracks, which don't need "their own" odds compared
-// against themselves). Belmont isn't here yet: its meet is dark until
-// Sept 18, 2026, and this needs a live card to verify Sporting Life
-// actually covers it the same way before turning it on, same rule as
-// every other source in this file.
-const UK_ODDS_TRACKS = new Set(["saratoga"]);
-
-// "5/2" -> 3.5, "9/5" -> 2.8, "20/1" -> 21. Handles the literal "EVS"/
-// "Evens" token British racing media uses in place of "1/1" (verified
-// Sporting Life's own current_odds field can return this string). Returns
-// null for anything unparseable (a scratched horse's missing price, "SP"
-// placeholders, etc.) rather than guessing.
-function fractionalOddsToDecimal(str) {
-  if (!str) return null;
-  const trimmed = String(str).trim();
-  if (/^evs?$/i.test(trimmed)) return 2;
-  const m = trimmed.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
-  if (!m) return null;
-  const denom = parseFloat(m[2]);
-  if (!denom) return null;
-  return parseFloat(m[1]) / denom + 1;
-}
-
-// One-directional by design (see UK_ODDS_LIVE_RATIO's own comment) — only
-// true when the UK price is the SHORTER one by at least the ratio, never
-// when US is shorter than UK.
-function horseIsLiveInUk(usOddsStr, ukOddsStr) {
-  const us = fractionalOddsToDecimal(usOddsStr);
-  const uk = fractionalOddsToDecimal(ukOddsStr);
-  if (!us || !uk) return false;
-  return us / uk >= UK_ODDS_LIVE_RATIO;
-}
-
-// Strips a trailing country-of-origin suffix ("Right to Win (IRE)" ->
-// "Right to Win") before matching between sources — confirmed real gap:
-// NYRA includes it, Sporting Life's own horse.name field never does (spot
-// -checked "Right To Win" and "Unit Economics", both foreign-bred runners
-// NYRA lists with (IRE)/(GB), neither carrying it on Sporting Life's
-// side), so without this strip those two genuinely-the-same horses just
-// silently never matched.
-function stripCountrySuffix(name) {
-  return name.replace(/\s*\([A-Z]{2,4}\)\s*$/, "").trim();
-}
-
-// SUPERSEDES an earlier version of this function that read the fast-cards
-// page's generic betting.current_odds field — confirmed real user finding
-// 2026-08-26 that number doesn't match what a human actually sees on
-// Sporting Life's own "Live Odds" tab (their screenshot: "Odds by: Sky
-// Bet"), which draws from a completely different per-race page with its
-// own per-bookmaker bookmakerOdds array (Sky Bet v2/Paddy Power/Betfair
-// Sportsbook, confirmed present per horse) — see UK_ODDS_BOOKMAKER_NAME's
-// own comment for the full story and the URL shape. Genuine cost versus
-// the old approach: one request per race (8 for a full Saratoga card)
-// instead of one for the whole card at once — confirmed acceptable
-// tradeoff for actually matching the number the user is reading.
-const UK_ODDS_BOOKMAKER_NAME = "Sky Bet v2"; // matches the "Odds by: Sky Bet" table the user is actually reading
-
-// Fetches Sporting Life's Saratoga meeting listing (same first step as
-// fetchSportingLifeEntriesDay(), reused via the same low-level
-// sportingLifeFetchJson() helper) purely to learn each race's own
-// race_summary_reference.id — a DIFFERENT id than the meeting_reference.id
-// used for the whole-card fast-cards endpoint, confirmed directly (race 3
-// was 935744, race 4 was 935745 — sequential per-race ids, not shared).
-// Then fetches each race's own live-show page for its real per-bookmaker
-// prices. A single race's fetch failing (or a horse this specific
-// bookmaker hasn't priced yet) just skips that one entry rather than
-// failing the whole lookup.
-async function fetchSaratogaSkyBetOdds(date) {
-  const oddsByHorseName = {};
-  const listing = await sportingLifeFetchJson(`/racing/racecards/${date}`);
-  const meetings = listing?.props?.pageProps?.meetings || [];
-  const meeting = meetings.find((m) => m.meeting_summary?.course?.name === "Saratoga");
-  if (!meeting || meeting.meeting_summary.date !== date) return oddsByHorseName; // not running, or not published yet
-
-  const meetingId = meeting.meeting_summary.meeting_reference.id;
-  const card = await sportingLifeFetchJson(`/racing/fast-cards/${meetingId}/${date}/saratoga`);
-  const races = card?.props?.pageProps?.meeting?.races || [];
-
-  for (const race of races) {
-    const raceId = race?.race_summary?.race_summary_reference?.id;
-    if (!raceId) continue;
-    let raceData;
-    try {
-      raceData = await sportingLifeFetchJson(`/racing/racecards/${date}/saratoga/live-show/${raceId}/race`);
-    } catch (err) {
-      continue; // one race's live-show hiccup shouldn't cost the rest of the card
-    }
-    const rides = raceData?.props?.pageProps?.race?.rides || [];
-    for (const ride of rides) {
-      const name = ride?.horse?.name;
-      const skyBet = (ride?.bookmakerOdds || []).find((b) => b.bookmakerName === UK_ODDS_BOOKMAKER_NAME);
-      if (name && skyBet?.fractionalOdds) {
-        oddsByHorseName[stripCountrySuffix(name.trim()).toLowerCase()] = skyBet.fractionalOdds;
-      }
-    }
-  }
-  return oddsByHorseName;
-}
-
-// Attaches ukOdds/ukLive to each matching horse in an already-fetched
-// primary result (NYRA, for Saratoga) by name — case/whitespace-
-// insensitive and with stripCountrySuffix() applied to both sides (safe
-// even though only NYRA has been confirmed to carry the suffix, in case
-// that's ever reversed), the same forgiving match every other horse-name
-// comparison in this file uses, since the two sources don't always agree
-// on capitalization ("Atlas a Eye" vs "Atlas A Eye", confirmed directly)
-// either. Wrapped so a Sporting Life hiccup never breaks the primary
-// entries display — the worst case is just no UK odds shown that call,
-// not a failed /entries request.
-async function enrichWithUkOdds(track, date, result) {
-  if (!UK_ODDS_TRACKS.has(track)) return result;
-  try {
-    const ukByName = await fetchSaratogaSkyBetOdds(date);
-    for (const race of result.races || []) {
-      for (const horse of race.horses || []) {
-        const ukOdds = ukByName[stripCountrySuffix((horse.name || "").trim()).toLowerCase()];
-        if (!ukOdds) continue;
-        horse.ukOdds = ukOdds;
-        horse.ukLive = horseIsLiveInUk(horse.currentOdds, ukOdds);
-      }
-    }
-  } catch (err) {
-    console.error(`UK odds enrichment failed for ${track} ${date}`, err.message);
-  }
-  return result;
-}
-
 async function sportingLifeFetchJson(path) {
   const res = await fetch(`https://www.sportinglife.com${path}`, {
     headers: { "User-Agent": BROWSER_UA },
-    // Shortened from 120s to 20s 2026-08-26 — confirmed real ask that UK
-    // odds (job #20) should update on every dashboard refresh, not lag
-    // behind on a stale Cloudflare-cached subrequest. The dashboard's own
-    // auto-refresh is every 5 minutes, well clear of even the old 120s
-    // window, but a manual "Refresh Now" click sooner than that could
-    // still have served a cached price — 20s comfortably clears that case
-    // too while still absorbing truly back-to-back duplicate requests
-    // (e.g. multiple open tabs hitting the same edge node at once).
-    cf: { cacheTtl: 20, cacheEverything: true },
+    cf: { cacheTtl: 120, cacheEverything: true },
   });
   if (!res.ok) throw new Error(`Sporting Life returned HTTP ${res.status}`);
   const html = await res.text();
