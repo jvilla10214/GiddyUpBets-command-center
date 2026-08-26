@@ -3008,6 +3008,7 @@
         <button type="button" class="bias-window-btn active" data-view="trainer">By Trainer</button>
         <button type="button" class="bias-window-btn" data-view="horse">By Horse</button>
         <button type="button" class="bias-window-btn" data-view="date">By Date</button>
+        <button type="button" class="bias-window-btn" data-view="added">Newest Added</button>
         <button type="button" id="stableQuickAddBtn" class="stable-save-btn">+ Add</button>
       </div>
 
@@ -6992,9 +6993,10 @@
 
   let stablePendingExtracts = {}; // trainer -> chunks[] awaiting review — in-memory UI state only, never persisted
   let stableSearchQuery = ""; // in-memory UI state only, not persisted
-  let stableViewMode = "trainer"; // "trainer" | "horse" | "date" — which of the 3 groupings is showing
+  let stableViewMode = "trainer"; // "trainer" | "horse" | "date" | "added" — which grouping is showing
   let stableOpenHorses = new Set(); // which horse groups are expanded in "By Horse" view
   let stableOpenDates = new Set(); // which date groups are expanded in "By Date" view
+  let stableOpenAddedDates = new Set(); // which day groups are expanded in "Newest Added" view — separate Set from stableOpenDates since these keys are calendar days a note was captured, not the note's own (often much older) content date
   let stableUnassignedOpen = false; // the one fixed "Unassigned" (no-trainer notes) group in "By Trainer" view
 
   // Small provenance tag on the trainer roster — how this trainer got
@@ -7048,6 +7050,8 @@
       renderStableTourByHorse(list);
     } else if (stableViewMode === "date"){
       renderStableTourByDate(list);
+    } else if (stableViewMode === "added"){
+      renderStableTourByAdded(list);
     } else {
       renderStableTourByTrainer(list);
     }
@@ -7146,6 +7150,51 @@
             <button type="button" class="stable-trainer-toggle" data-date-key="${escapeHtml(date)}">
               <span class="chevron">▸</span>
               <span class="stable-trainer-name">${date === "Undated" ? "Undated" : fmtStableDate(date)}</span>
+              <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  // Flat reverse-chronological feed grouped by the calendar day a note was
+  // actually SAVED to the site (n.capturedAt), not the day its content is
+  // about (n.date, used by "By Date" above) — real need: a podcast/article
+  // often covers a horse's race from weeks or months back, and "By Date"
+  // buries that note under its old content date instead of surfacing it as
+  // the fresh addition it actually is. Sorted purely by capturedAt, both
+  // for which day-group comes first and for note order within a day —
+  // deliberately NOT reusing sortNotesNewestFirst (which sorts by n.date
+  // first) since that's exactly the ordering this view exists to avoid.
+  function renderStableTourByAdded(list){
+    const query = stableSearchQuery.trim().toLowerCase();
+    const trackedSet = new Set(stableTrainers);
+    const byAdded = {};
+    for (const n of stableNotes){
+      if (n.trainer && !trackedSet.has(n.trainer)) continue;
+      if (query && !(n.trainer || "").toLowerCase().includes(query) && !(n.horse || "").toLowerCase().includes(query)) continue;
+      const addedDate = n.capturedAt ? n.capturedAt.slice(0, 10) : "Unknown";
+      if (!byAdded[addedDate]) byAdded[addedDate] = [];
+      byAdded[addedDate].push(n);
+    }
+    const addedDates = Object.keys(byAdded).sort((a, b) => b.localeCompare(a)); // newest added-day first
+    if (!addedDates.length){
+      list.innerHTML = `<div class="log-empty">${query ? `No notes match "${escapeHtml(stableSearchQuery.trim())}".` : "No notes yet."}</div>`;
+      return;
+    }
+    list.innerHTML = addedDates.map(addedDate => {
+      const notes = byAdded[addedDate].slice().sort((a, b) => (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+      const isOpen = query ? true : stableOpenAddedDates.has(addedDate);
+      const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: true, showTrainer: true })).join("");
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-added-key="${escapeHtml(addedDate)}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${addedDate === "Unknown" ? "Unknown" : fmtStableDate(addedDate)}</span>
               <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
             </button>
           </div>
@@ -7410,6 +7459,10 @@
         const key = toggleBtn.dataset.dateKey;
         if (stableOpenDates.has(key)) stableOpenDates.delete(key);
         else stableOpenDates.add(key);
+      } else if (toggleBtn.dataset.addedKey !== undefined){
+        const key = toggleBtn.dataset.addedKey;
+        if (stableOpenAddedDates.has(key)) stableOpenAddedDates.delete(key);
+        else stableOpenAddedDates.add(key);
       } else if (toggleBtn.dataset.unassignedKey !== undefined){
         stableUnassignedOpen = !stableUnassignedOpen;
       } else {
