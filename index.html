@@ -797,34 +797,6 @@
 
   /* ---------- NYRA scratches / rail / track conditions embed ---------- */
   .nyra-panel{ margin-top: 18px; }
-  .official-conditions{
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
-    margin-bottom: 10px;
-    background: var(--panel-2);
-    border: 1px solid var(--panel-border);
-    border-radius: 8px;
-  }
-  .oc-row{
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12px;
-  }
-  .oc-label{ color: var(--parchment-dim); letter-spacing: 1px; width: 34px; flex-shrink: 0; }
-  .oc-value{ color: var(--parchment); flex: 1; }
-  .oc-badge{
-    font-size: 9.5px;
-    letter-spacing: 0.5px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-  }
-  .oc-badge-official{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
-  .oc-timestamp{ color: var(--parchment-dim); font-size: 10.5px; margin-top: 2px; }
   .pp-stats-controls{
     display: flex;
     align-items: center;
@@ -2575,13 +2547,6 @@
         <span class="tag">LIVE · NYRA.COM</span>
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="nyraScratchesInfo" title="Why this works this way">ⓘ</button>
       </div>
-      <div class="official-conditions" id="officialConditionsBlock" hidden>
-        <div class="oc-row">
-          <span class="oc-label">Rail</span>
-          <span class="oc-value skel" id="ocRailValue">—</span>
-        </div>
-        <div class="oc-timestamp" id="ocTimestamp"></div>
-      </div>
       <div class="nyra-frame-wrap">
         <iframe
           id="nyraFrame"
@@ -2591,14 +2556,13 @@
         </iframe>
       </div>
       <div class="info-disclosure" id="nyraScratchesInfo">
-        Rail settings above are parsed straight from NYRA's own live conditions page (refreshed every 10
-        minutes during racing hours). This only ever shows a value NYRA itself has posted — on a dark day, or
-        before that day's card has been confirmed, it stays blank rather than guessing (rail placement isn't
-        something a weather forecast can estimate anyway). Dirt/Turf condition now shows on the Main Track
-        (Dirt)/Turf Course tiles on the track photo instead — tagged "NYRA" with a timestamp when it's NYRA's
-        own official call, or shown plain (no tag) when it's this app's own weather-based estimate, which is
-        the only option on a dark day like this or before NYRA has confirmed conditions. The embed below is
-        NYRA's full page, for scratches and program changes.
+        Rail and Dirt/Turf condition both show on the track photo above — Rail, Main Track (Dirt), and Turf
+        Course tiles — tagged "NYRA" with a timestamp when it's NYRA's own official call, or shown plain (no
+        tag, dirt/turf only) when it's this app's own weather-based estimate, which is the only option on a
+        dark day like this or before NYRA has confirmed conditions. The rail tile only ever shows a value NYRA
+        itself has posted — it stays blank rather than guessing, since rail placement isn't something a
+        weather forecast can estimate anyway. The embed below is NYRA's full page, for scratches and program
+        changes.
       </div>
     </div>
 
@@ -9805,29 +9769,13 @@
   }
 
   // ---------- Official (NYRA) track conditions, structured ----------
-  // Renders the worker's parsed NYRA scratches-page fields (job #9) — just
-  // the rail-out distances now (Inner/Mellon feet), since Dirt/Turf moved
-  // to the Main Track (Dirt)/Turf Course tiles on the track photo (see
-  // updateTrackConditionTiles() below) rather than being shown here too.
-  // Deliberately no fallback estimate for the rail line specifically — rail
-  // placement isn't something a weather heuristic can guess at all, so
-  // there's nothing sensible to fall back to; it just stays "—" until NYRA
-  // posts it.
+  // Renders the worker's parsed NYRA scratches-page fields (job #9). Rail,
+  // Dirt, and Turf all show on the Main Track (Dirt)/Turf Course/Rail tiles
+  // on the track photo (see updateTrackConditionTiles() below) — this
+  // function's own job now is just caching the payload and triggering that
+  // repaint (plus the Entries page's per-race Changes note, which also
+  // reads off lastOfficialConditions).
   function renderOfficialTrackConditions(payload){
-    const block = $("officialConditionsBlock");
-    if (!block) return;
-    block.hidden = false;
-
-    $("ocRailValue").classList.remove("skel");
-    $("ocRailValue").textContent = (payload?.available && payload.railSettings?.length)
-      ? payload.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
-      : "—";
-
-    const providerLabel = OFFICIAL_CONDITIONS_LABEL[OFFICIAL_CONDITIONS_PROVIDER[activeTrack.id]] || "NYRA";
-    $("ocTimestamp").textContent = (payload?.available && payload.lastUpdatedLabel)
-      ? `${providerLabel} confirmed ${payload.lastUpdatedLabel} · ${payload.cardDateLabel ?? ""}`
-      : `${providerLabel} hasn't confirmed conditions for today yet`;
-
     lastOfficialConditions = payload;
     updateTrackConditionTiles();
     // Saratoga's per-race "Changes" note (saratogaRaceChangeNote()) reads
@@ -10015,11 +9963,8 @@
   }
 
   async function refreshOfficialTrackConditions(){
-    const block = $("officialConditionsBlock");
-    if (!block) return;
     const trackId = activeTrack.id;
     if (!OFFICIAL_CONDITIONS_SUPPORTED.has(trackId)){
-      block.hidden = true;
       return;
     }
     const { date: todayStr } = nowInTrackTZ();
@@ -10528,10 +10473,6 @@
     const hasNyra = track.nyraCode != null;
     const hasScratchesLink = !hasNyra && track.scratchesUrl != null;
     $("nyraScratchesPanel").hidden = !hasNyra;
-    // Hide immediately on switch rather than showing the previous track's
-    // official-conditions block until refreshOfficialTrackConditions()'s
-    // own fetch resolves — that fetch re-shows it once it has real data.
-    $("officialConditionsBlock").hidden = !OFFICIAL_CONDITIONS_SUPPORTED.has(track.id);
     $("nyraXPanel").hidden = !hasNyra; // NYRA's own X account only makes sense for NYRA tracks
     $("scratchesLinkPanel").hidden = !hasScratchesLink;
     $("nyraFallbackPanel").hidden = hasNyra || hasScratchesLink;
@@ -10669,7 +10610,7 @@
     // else in this block.)
     addSkeleton("aqiValue", "aqiCategory", "tideHeight", "tideState", "windSpeed", "windDir",
       "dirtConditionValue", "turfConditionValue",
-      "biasScoreSpeedValue", "biasScoreCloserValue", "ocRailValue");
+      "biasScoreSpeedValue", "biasScoreCloserValue", "railConditionValue");
     // Cleared here (not just left to be overwritten) so a stale official
     // read from the PREVIOUS track can't flash onto the new one for the
     // moment before its own fetches resolve.
