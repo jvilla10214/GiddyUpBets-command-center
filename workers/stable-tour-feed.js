@@ -289,14 +289,21 @@
 //    one matching stable note (notesForHorse(), a direct port of the
 //    client's findHorseStableNotes() matching rules, reusing this file's
 //    own lastNameKey() for the same forgiving last-name-only trainer match)
-//    — a tracked horse with zero notes on file doesn't email at all,
-//    deliberately, since the whole point is surfacing notes at entry time —
-//    it emails NOTIFY_EMAILS the race's when/where/conditions plus every
-//    one of those notes via Resend's API. raceNotifyKvKey() dedupes so the
-//    same horse+race only ever emails once, TTL'd at 30 days so the keys
-//    don't accumulate forever; a no-notes horse is deliberately left
-//    un-dedup'd so a note added earlier that same race day, before the
-//    day's cron run, still gets caught. Saratoga only for now — Belmont was
+//    — a tracked horse with zero notes on file doesn't get included at all,
+//    deliberately, since the whole point is surfacing notes at entry time.
+//    Every matching horse for a track gets bundled into ONE digest email per
+//    track per day (buildEntryDigestEmail()/sendEntryDigestEmail()) —
+//    grouped by race number, each horse showing trainer/jockey/post plus
+//    every matching note (both manual and auto-imported) — not a separate
+//    Resend send per horse the way this originally shipped; that was too
+//    noisy in practice (confirmed real complaint 2026-08-26). raceNotifyKvKey()
+//    still dedupes per horse+race so the same horse never appears in a
+//    digest twice, TTL'd at 30 days so the keys don't accumulate forever;
+//    those dedup keys are only written after the digest send actually
+//    succeeds, so a failed Resend call doesn't silently mark horses as
+//    already-notified. A no-notes horse is deliberately left un-dedup'd so
+//    a note added earlier that same race day, before the day's cron run,
+//    still gets caught. Saratoga only for now — Belmont was
 //    tried and reverted (see NYRA_ENTRIES_BASE's own comment on why its
 //    dark-meet response isn't the safe no-op it looked like); re-add once
 //    that meet reopens and its markup is actually verified. Every run (real cron or
@@ -3035,23 +3042,48 @@ function escapeHtmlForEmail(str) {
 
 const NYRA_TRACK_LABEL = { saratoga: "Saratoga", belmont: "Belmont" };
 
-async function sendEntryAlertEmail(env, track, date, race, horse, notes) {
-  const trackLabel = NYRA_TRACK_LABEL[track] || track;
-  const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
-  const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
-  const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
-  // runEntryAlerts() only calls this once notes.length is already confirmed
-  // non-empty — see its own comment on why a note-less entry doesn't email.
-  const notesHtml = notes.map((n) => `<li><strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}): ${escapeHtmlForEmail(n.note)}</li>`).join("");
-  const subject = `${horse.name || "Horse"} entered — ${trackLabel} R${race.raceNumber}, ${date}`;
+function entryDigestNotesHtml(notes) {
+  // Unchanged from the old per-horse email — shows both manual and
+  // auto-imported notes side by side, same "(manual)" vs "(source name)"
+  // label either way.
+  return notes.map((n) => `<li><strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}): ${escapeHtmlForEmail(n.note)}</li>`).join("");
+}
+
+// One combined digest per track per day instead of a separate email per
+// horse (confirmed real change requested 2026-08-26 — the old version, one
+// Resend send per matched horse, was too noisy). Same per-horse fields as
+// before (Trainer/Jockey, Stable Notes with both manual and auto-imported
+// notes), just grouped under a Race N heading instead of repeated in every
+// subject line. raceGroups is already sorted by race number:
+// [{ race, horses: [{ horse, notes }] }].
+function buildEntryDigestEmail(trackLabel, date, raceGroups) {
+  const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+  const subject = `${horseCount} tracked horse${horseCount === 1 ? "" : "s"} entered today — ${trackLabel}, ${date}`;
+  const racesHtml = raceGroups.map(({ race, horses }) => {
+    const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
+    const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
+    const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
+    const horsesHtml = horses.map(({ horse, notes }) => `
+      <h4>${escapeHtmlForEmail(horse.name || "Horse")}</h4>
+      <p><strong>Trainer:</strong> ${escapeHtmlForEmail(horse.trainer || "—")} &nbsp; <strong>Jockey:</strong> ${escapeHtmlForEmail(horse.jockey || "—")}${horse.postPosition ? ` &nbsp; <strong>Post:</strong> ${escapeHtmlForEmail(String(horse.postPosition))}` : ""}</p>
+      <p><strong>Stable Notes:</strong></p>
+      <ul>${entryDigestNotesHtml(notes)}</ul>
+    `).join("");
+    return `
+      <h3>Race ${race.raceNumber} — post time ${escapeHtmlForEmail(postTime)}${conditionsBits ? ` — ${escapeHtmlForEmail(conditionsBits)}` : ""}${distBits ? ` — ${escapeHtmlForEmail(distBits)}` : ""}</h3>
+      ${horsesHtml}
+    `;
+  }).join("");
   const html = `
-    <h2>${escapeHtmlForEmail(horse.name || "Horse")} entered — ${escapeHtmlForEmail(trackLabel)} R${race.raceNumber}, ${date}</h2>
-    <p><strong>When/where:</strong> ${escapeHtmlForEmail(trackLabel)}, ${date}, Race ${race.raceNumber}, post time ${escapeHtmlForEmail(postTime)}</p>
-    <p><strong>Conditions:</strong> ${escapeHtmlForEmail(conditionsBits || "—")}${distBits ? ` — ${escapeHtmlForEmail(distBits)}` : ""}</p>
-    <p><strong>Trainer:</strong> ${escapeHtmlForEmail(horse.trainer || "—")} &nbsp; <strong>Jockey:</strong> ${escapeHtmlForEmail(horse.jockey || "—")}</p>
-    <p><strong>Stable Notes:</strong></p>
-    <ul>${notesHtml}</ul>
+    <h2>${escapeHtmlForEmail(trackLabel)} Entry Digest — ${date}</h2>
+    <p><strong>${horseCount} tracked horse${horseCount === 1 ? "" : "s"}</strong> entered today with stable notes on file.</p>
+    ${racesHtml}
   `;
+  return { subject, html };
+}
+
+async function sendEntryDigestEmail(env, trackLabel, date, raceGroups) {
+  const { subject, html } = buildEntryDigestEmail(trackLabel, date, raceGroups);
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -3062,22 +3094,24 @@ async function sendEntryAlertEmail(env, track, date, race, horse, notes) {
 
 // The actual job: scans NYRA_ENTRIES_BASE's tracks (Saratoga + Belmont) over
 // entryAlertDateWindow(), and for every non-scratched horse whose trainer is
-// tracked, sends (at most once — see raceNotifyKvKey()) an email with that
-// race's info plus any matching stable notes. Called from both the real
-// Cron Trigger (scheduled(), below) and the manual /debug-run-scheduled
-// route, so this is the one place the actual logic lives.
+// tracked, bundles it (at most once per horse+race — see raceNotifyKvKey())
+// into that track's single daily digest email, grouped by race, with each
+// horse's when/where/conditions plus every matching stable note. Called from
+// both the real Cron Trigger (scheduled(), below) and the manual
+// /debug-run-scheduled route, so this is the one place the actual logic
+// lives.
 // "scheduled" vs "manual" (the real Cron Trigger vs /debug-run-scheduled)
 // is only for telling the two apart in /debug-last-run's own record — it
 // doesn't change what this actually does.
 // Race-day-only digest — NOT "email the moment a tracked horse with a note
 // gets entered." A horse entered five days out for a Saturday stakes race
-// doesn't email until Saturday morning; the whole point is one email per
-// horse on the day it actually runs, not a batch the moment it's first
-// discovered somewhere in a lookahead window. That timing comes entirely
-// from the Cron Trigger firing once daily around 8am Eastern (see the
-// Deploy note's DST caveat) — this function itself doesn't gate on the
-// hour, it just checks whatever "today" is whenever it's called, real cron
-// or manual alike.
+// doesn't appear in a digest until Saturday morning; the whole point is one
+// digest per track on the day its horses actually run, not a batch the
+// moment a horse is first discovered somewhere in a lookahead window. That
+// timing comes entirely from the Cron Trigger firing once daily around 8am
+// Eastern (see the Deploy note's DST caveat) — this function itself doesn't
+// gate on the hour, it just checks whatever "today" is whenever it's
+// called, real cron or manual alike.
 async function runEntryAlerts(env, source = "manual") {
   // Whole body wrapped in one try/catch so a mid-run crash still leaves a
   // record behind — confirmed real gap: before this, an exception anywhere
@@ -3113,14 +3147,22 @@ async function runEntryAlerts(env, source = "manual") {
         console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
         continue;
       }
+      // Collect every matched horse first, grouped by race, then send ONE
+      // digest email for this track covering the whole card — not one
+      // Resend call per horse. Dedup keys are still per-horse-per-race
+      // (raceNotifyKvKey), checked here before a horse is added to the
+      // digest, but only actually written after the digest send succeeds —
+      // so a failed send doesn't silently mark horses as already-notified.
+      const raceGroups = [];
       for (const race of result.races || []) {
+        const matchedHorses = [];
         for (const horse of race.horses || []) {
           checked++;
           if (horse.scratched) continue;
           const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
           const hasUntrackedNote = untrackedHorseNames.has((horse.name || "").trim().toLowerCase());
           if (!trainerTracked && !hasUntrackedNote) continue;
-          // Only worth an email if there's actually a note to show — not
+          // Only worth including if there's actually a note to show — not
           // dedup-marked when skipped for this reason (see below), so a
           // note added earlier that same race day before the 8am window
           // still gets caught at the next scheduled run.
@@ -3129,14 +3171,22 @@ async function runEntryAlerts(env, source = "manual") {
           const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
           const already = await env.STABLE_KV.get(key);
           if (already) continue;
-          try {
-            await sendEntryAlertEmail(env, track, date, race, horse, notes);
+          matchedHorses.push({ horse, notes, key });
+        }
+        if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
+      }
+      if (!raceGroups.length) continue;
+      const trackLabel = NYRA_TRACK_LABEL[track] || track;
+      try {
+        await sendEntryDigestEmail(env, trackLabel, date, raceGroups);
+        for (const { horses } of raceGroups) {
+          for (const { key } of horses) {
             await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
-            sent++;
-          } catch (err) {
-            console.error(`Entry alerts: send failed for ${horse.name} (${track} ${date} R${race.raceNumber})`, err.message);
           }
         }
+        sent += raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+      } catch (err) {
+        console.error(`Entry alerts: digest send failed for ${track} ${date}`, err.message);
       }
     }
     const summary = { checked, sent };
