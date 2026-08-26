@@ -554,7 +554,9 @@
      ("30' Out") is far shorter than a condition word and doesn't need equal
      billing on the photo. NYRA tracks only (Saratoga, Belmont) — no other
      source in this app reports rail placement. */
-  .track-condition-rail{ min-width: 64px; padding: 6px 10px; font-size: 11px; }
+  .track-condition-rail{ min-width: 0; width: max-content; padding: 6px 9px; font-size: 10px; letter-spacing: 0.5px; }
+  .track-condition-rail .rail-line{ white-space: nowrap; }
+  .track-condition-rail .rail-line + .rail-line{ margin-top: 2px; }
   .track-condition .tc-value{ display:block; }
   .cond-fast{ color: var(--rail-green); }
   .cond-good{ color: var(--sky); }
@@ -9983,8 +9985,8 @@
     if (railTile){
       if (OFFICIAL_CONDITIONS_PROVIDER[trackId] === "nyra"){
         railTile.hidden = false;
-        $("railConditionValue").textContent = (official?.available && official.railSettings?.length)
-          ? official.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
+        $("railConditionValue").innerHTML = (official?.available && official.railSettings?.length)
+          ? official.railSettings.map(r => `<div class="rail-line">${escapeHtml(r.course)}: ${escapeHtml(r.label)}</div>`).join("")
           : "—";
       } else {
         railTile.hidden = true;
