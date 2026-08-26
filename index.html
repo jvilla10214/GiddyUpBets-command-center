@@ -5076,6 +5076,55 @@
     return `<span class="odds-arrow ${shortened ? "odds-arrow-down" : "odds-arrow-up"}" title="${shortened ? "Shortened" : "Drifted"} from ML ${escapeHtml(mlOdds)}">${shortened ? "↓" : "↑"}</span>`;
   }
 
+  // UK odds (job #20) have no morning line to compare against — Sporting
+  // Life's own "Live Odds" page shows movement by accumulating every price
+  // it sees over the viewer's own live session, which isn't something a
+  // single fetch can reconstruct (confirmed directly: the bookmakerOdds
+  // entry itself carries no history array, just the current price). This
+  // recreates the same idea cheaply on our end instead: the first UK price
+  // this browser ever observes for a given horse+day becomes the baseline,
+  // stored in localStorage (same per-device convention as every other
+  // "seen" set in this file), and every later refresh compares the current
+  // price back against that baseline — one small arrow, not a growing list,
+  // so it stays out of the way visually the same way the ML arrow does.
+  // Pruned to the last 3 days on every save so this can't grow forever.
+  const UK_ODDS_BASELINE_KEY = "giddyupbets_uk_odds_baseline_v1";
+  function loadUkOddsBaseline(){
+    try { return JSON.parse(localStorage.getItem(UK_ODDS_BASELINE_KEY)) ?? {}; }
+    catch { return {}; }
+  }
+  function saveUkOddsBaseline(){
+    try {
+      const cutoff = shiftDateStr(nowInTrackTZ().date, -3);
+      for (const key of Object.keys(ukOddsBaseline)){
+        if (key.split("|")[0] < cutoff) delete ukOddsBaseline[key];
+      }
+      localStorage.setItem(UK_ODDS_BASELINE_KEY, JSON.stringify(ukOddsBaseline));
+    } catch(err){ console.error("UK odds baseline failed to save", err); }
+  }
+  let ukOddsBaseline = loadUkOddsBaseline();
+
+  // Records this horse's first-seen UK price for `date` if none exists yet,
+  // then returns a small arrow (same visual language as oddsMoveArrow
+  // above) comparing the CURRENT price back against that recorded opening
+  // price — green down = shortened since we started watching (sharper),
+  // red up = drifted out. Full context lives in the tooltip rather than as
+  // visible text, keeping the Entries table exactly as dense as it is today.
+  function ukOddsMoveArrow(date, horseName, ukOdds){
+    const key = `${date}|${(horseName || "").trim().toLowerCase()}`;
+    if (!ukOddsBaseline[key]) {
+      ukOddsBaseline[key] = ukOdds;
+      saveUkOddsBaseline();
+      return "";
+    }
+    const opening = ukOddsBaseline[key];
+    const openDec = parseOddsToDecimal(opening);
+    const curDec = parseOddsToDecimal(ukOdds);
+    if (openDec == null || curDec == null || curDec === openDec) return "";
+    const shortened = curDec < openDec;
+    return `<span class="odds-arrow ${shortened ? "odds-arrow-down" : "odds-arrow-up"}" title="${shortened ? "Shortened" : "Drifted"} from ${escapeHtml(opening)} since this browser started watching today">${shortened ? "↓" : "↑"}</span>`;
+  }
+
   // Finds the hourly forecast slot closest to a race's post time and reduces
   // it to the same headwind/crosswind read Track Play Analysis uses for
   // "right now" — here applied at whatever hour that specific race actually
@@ -5310,7 +5359,8 @@
       // comment) — it only ever means "UK money is already shorter on
       // this one than the US pool reflects," never "these two disagree."
       const ukLiveHtml = h.ukLive ? `<span class="uk-odds-live" title="Notably shorter in the UK than the US price — sharp UK money may already be on this one">🔥</span>` : "";
-      const ukOddsCell = hasUkOdds ? `<td>${escapeHtml(h.ukOdds || "—")}${ukLiveHtml}</td>` : "";
+      const ukMoveHtml = h.ukOdds ? ukOddsMoveArrow(date, h.name, h.ukOdds) : "";
+      const ukOddsCell = hasUkOdds ? `<td>${escapeHtml(h.ukOdds || "—")}${ukMoveHtml}${ukLiveHtml}</td>` : "";
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
