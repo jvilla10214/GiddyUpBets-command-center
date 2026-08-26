@@ -9986,7 +9986,18 @@
       if (OFFICIAL_CONDITIONS_PROVIDER[trackId] === "nyra"){
         railTile.hidden = false;
         $("railConditionValue").innerHTML = (official?.available && official.railSettings?.length)
-          ? official.railSettings.map(r => `<div class="rail-line">${escapeHtml(r.course)}: ${escapeHtml(r.label)}</div>`).join("")
+          ? official.railSettings.map(r => {
+              // turfRaceCourse comes off the same NYRA scratches/changes parse
+              // as miscChanges/jockeyChanges (job #9) — maps race # -> which
+              // turf course it runs on, so a course with multiple configs
+              // (Inner vs. Mellon/Widener) shows which races it actually
+              // affects instead of leaving that to be inferred.
+              const raceNums = Object.keys(official.turfRaceCourse || {})
+                .filter(num => official.turfRaceCourse[num] === r.course)
+                .sort((a, b) => Number(a) - Number(b));
+              const raceNote = raceNums.length ? ` (R${raceNums.join(", ")})` : "";
+              return `<div class="rail-line">${escapeHtml(r.course)}: ${escapeHtml(r.label)}${escapeHtml(raceNote)}</div>`;
+            }).join("")
           : "—";
       } else {
         railTile.hidden = true;
