@@ -3058,7 +3058,7 @@ function entryDigestNotesHtml(notes) {
 // [{ race, horses: [{ horse, notes }] }].
 function buildEntryDigestEmail(trackLabel, date, raceGroups) {
   const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
-  const subject = `${horseCount} tracked horse${horseCount === 1 ? "" : "s"} entered today — ${trackLabel}, ${date}`;
+  const subject = `GiddyUpBets Barn Report — ${trackLabel} — ${horseCount} horse${horseCount === 1 ? "" : "s"} today (${date})`;
   const racesHtml = raceGroups.map(({ race, horses }) => {
     const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
@@ -3075,8 +3075,8 @@ function buildEntryDigestEmail(trackLabel, date, raceGroups) {
     `;
   }).join("");
   const html = `
-    <h2>${escapeHtmlForEmail(trackLabel)} Entry Digest — ${date}</h2>
-    <p><strong>${horseCount} tracked horse${horseCount === 1 ? "" : "s"}</strong> entered today with stable notes on file.</p>
+    <h2>GiddyUpBets Barn Report — ${escapeHtmlForEmail(trackLabel)}</h2>
+    <p>${date} &nbsp;&middot;&nbsp; <strong>${horseCount} tracked horse${horseCount === 1 ? "" : "s"}</strong> entered today with stable notes on file.</p>
     ${racesHtml}
   `;
   return { subject, html };
