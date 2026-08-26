@@ -362,6 +362,18 @@
 //    isn't them, the note files under the real trainer with the actual
 //    speaker's name kept in the note text instead. Also passes through
 //    SmartPony's own sentiment tag per quote for display.
+// 19. Daily Racing Form news (GET /drf-news) — same overall shape as job
+//    #17's HRN parser (per-article, quote-gated sections; client resolves
+//    against its own tracked list, never adds a new trainer), pointed at
+//    DRF's news sitemap instead of a listing page. DRF is fully free/
+//    unauthenticated (confirmed via each article's own JSON-LD) but never
+//    marks up a horse's name in prose the way TDN/HRN do, so horse
+//    identification here comes from each article's <meta name="keywords">
+//    tag instead of paragraph-proximity or an entries table — see
+//    fetchDrfNews()'s own comment for the full reasoning and its two known
+//    gaps (DRF_KEYWORD_TRACK_NAMES and DRF_RACE_NAME_SUFFIXES are both
+//    necessarily incomplete, so an untracked track or race name
+//    occasionally reads as a horse).
 //
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
@@ -798,6 +810,16 @@ async function handleRequest(request, env) {
         result = await fetchHrnNews();
       } catch (err) {
         return json({ error: `HRN news fetch failed: ${err.message}` }, 502);
+      }
+      return json(result, 200, { "Cache-Control": "public, max-age=900" });
+    }
+
+    if (url.pathname === "/drf-news" && request.method === "GET") {
+      let result;
+      try {
+        result = await fetchDrfNews();
+      } catch (err) {
+        return json({ error: `DRF news fetch failed: ${err.message}` }, 502);
       }
       return json(result, 200, { "Cache-Control": "public, max-age=900" });
     }
@@ -3494,6 +3516,166 @@ async function fetchHrnNews() {
   }
 
   return { source: HRN_NEWS_LIST_URL, fetchedAt: new Date().toISOString(), articles };
+}
+
+// ---------- Daily Racing Form (DRF) news parser (job #19) ----------
+// Confirmed real find 2026-08-26: DRF's site is fully scrapable (no bot
+// wall, no login/paywall — every article checked has
+// "isAccessibleForFree": true in its own JSON-LD) and genuinely carries
+// direct trainer quotes, but ONLY in post-win recap and feature articles —
+// their race-preview pieces (the majority of what /news/ publishes) are
+// DRF-staff third-person handicapping analysis with zero quoted speech,
+// verified against several real examples. Same "a real quote, not just a
+// mention" gate as job #17's HRN parser handles that distinction
+// automatically — a preview article legitimately yields zero sections.
+//
+// Article discovery uses DRF's own Google-News-style sitemap
+// (DRF_SITEMAP_NEWS_URL) rather than a listing page or /rss.xml — that
+// feed exists but mixes in betting-affiliate/promo content and doesn't
+// cover the quote-bearing news articles at all, confirmed by inspecting it
+// directly. The news sitemap is a rolling ~48-hour window of every article
+// DRF publishes, newest first, with title/link/publish-date all in clean
+// XML, no HTML parsing needed for discovery.
+//
+// Horse identification is DRF's one real weak point next to TDN/HRN: DRF
+// never hyperlinks or otherwise marks up a horse's name in article prose
+// (confirmed directly — the only in-body <a> tags are nav/footer track
+// links), so the paragraph-proximity/table techniques jobs #7 and #17 use
+// don't apply here. Instead this leans on a structural signal DRF does
+// reliably provide: every article's own <meta name="keywords"> tag, a
+// plain comma-separated list mixing the track, the trainer(s), and the
+// horse(s) the piece is about (verified against several real articles,
+// e.g. "Colonial,Lindsay Schultz,Pink Ruby,Baby Vino"). Horse candidates
+// are whatever's left in that list after removing the quoted trainer's own
+// name, anything matching DRF_KEYWORD_TRACK_NAMES, and anything whose last
+// word matches DRF_RACE_NAME_SUFFIXES (DRF tags a race's own name
+// separately from its track — a Colonial Turf Dash piece tags "Colonial"
+// AND "Turf Dash" as two different keywords, and without that second
+// filter "Turf Dash" reads as a second horse, confirmed directly). Both
+// lists are maintained but necessarily incomplete, same "verify what you
+// can, document the gap" spirit as every other source here rather than
+// pretending this is airtight. A track or race name DRF tags that isn't in
+// either list will incorrectly read as a horse; a human glancing at the
+// resulting note (same as any other auto-import) is the actual backstop.
+const DRF_SITEMAP_NEWS_URL = "https://www.drf.com/sitemap-news.xml";
+
+const DRF_KEYWORD_TRACK_NAMES = new Set([
+  "saratoga", "belmont", "belmont park", "aqueduct", "del mar", "santa anita", "santa anita park",
+  "los alamitos", "golden gate", "golden gate fields", "churchill downs", "churchill", "keeneland",
+  "ellis park", "turfway park", "kentucky downs", "gulfstream", "gulfstream park", "tampa bay downs",
+  "fair grounds", "delta downs", "louisiana downs", "evangeline downs", "oaklawn", "oaklawn park",
+  "monmouth", "monmouth park", "meadowlands", "parx", "parx racing", "penn national", "presque isle",
+  "presque isle downs", "colonial", "colonial downs", "charles town", "mountaineer", "laurel",
+  "laurel park", "pimlico", "woodbine", "woodbine mohawk park", "fort erie", "assiniboia downs",
+  "hastings racecourse", "finger lakes", "canterbury", "canterbury park", "prairie meadows",
+  "remington", "remington park", "will rogers downs", "lone star", "lone star park", "sam houston",
+  "retama park", "century downs", "century mile", "emerald downs", "turf paradise", "arizona downs",
+  "ruidoso downs", "sunland park", "zia park", "fairmount park", "fairmount", "indiana grand",
+  "horseshoe indianapolis", "belterra park", "thistledown", "mahoning valley", "northfield park",
+  "scioto downs", "hawthorne", "hawthorne race course", "arlington", "yonkers", "red mile",
+  "york", "ascot", "epsom downs", "epsom", "newmarket", "curragh", "the curragh", "longchamp",
+  "sha tin", "happy valley", "meydan",
+]);
+
+// Confirmed real gap in testing: DRF's keyword tags don't cleanly separate
+// "the track" from "the race" — a piece on the Colonial Turf Dash tags
+// both "Colonial" AND "Turf Dash" as their own separate keywords, and
+// without this, "Turf Dash" would read as a second horse. Filtering any
+// keyword whose LAST word is a common stakes-race suffix catches that
+// (and Derby/Oaks/Cup/Handicap/etc. the same way) at the acceptable cost
+// of a real horse coincidentally named e.g. "Grand Slam Dash" also getting
+// excluded — same documented-tradeoff spirit as DRF_KEYWORD_TRACK_NAMES
+// above, not a claim this is airtight.
+const DRF_RACE_NAME_SUFFIXES = new Set([
+  "stakes", "derby", "oaks", "cup", "handicap", "dash", "mile", "sprint", "futurity",
+  "debutante", "invitational", "championship", "challenge", "classic", "juvenile",
+]);
+
+function drfKeywordIsTrackOrRace(keywordLower) {
+  if (DRF_KEYWORD_TRACK_NAMES.has(keywordLower)) return true;
+  const words = keywordLower.split(/\s+/);
+  return DRF_RACE_NAME_SUFFIXES.has(words[words.length - 1]);
+}
+
+function extractDrfKeywords(html) {
+  const m = html.match(/<meta name="keywords" content="([^"]*)"/);
+  if (!m) return [];
+  return decodeEntities(m[1]).split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// Same "a real quote, not just a mention" gate as extractHrnSections() —
+// DRF's articles use actual curly quote characters in the page source (not
+// escaped entities, confirmed directly), so this matches either those or
+// plain ASCII quotes just in case.
+function extractDrfSections(html, keywords) {
+  const paras = [];
+  for (const m of html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)) {
+    const plain = decodeEntities(m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    if (plain) paras.push(plain);
+  }
+  const fullText = paras.join(" ");
+
+  const quotedLastNames = new Set();
+  for (const qm of fullText.matchAll(/[“"][^”"]{8,400}[”"]\s+([A-Z][A-Za-z'’-]+)\s+said\b/g)) {
+    quotedLastNames.add(qm[1]);
+  }
+  if (!quotedLastNames.size) return [];
+
+  const keywordsLower = keywords.map((k) => k.toLowerCase());
+  return [...quotedLastNames].map((lastName) => {
+    const horseNames = keywords.filter((k, i) => {
+      const kl = keywordsLower[i];
+      if (drfKeywordIsTrackOrRace(kl)) return false;
+      if (kl.split(/\s+/).pop() === lastName.toLowerCase()) return false; // the quoted trainer's own name
+      return true;
+    });
+    if (!horseNames.length) return null; // no identifiable horse — no guessing which one
+    // Proximity-scoped text, same idea as HRN's textForLastName() — the
+    // paragraph(s) actually mentioning this trainer's surname, not the
+    // whole article (a DRF piece can cover more than one trainer/horse).
+    const relevantParas = paras.filter((p) => new RegExp(`\\b${escapeRegExpTdn(lastName)}\\b`).test(p));
+    const text = (relevantParas.length ? relevantParas : paras).join(" ").slice(0, 1500);
+    return { trainerName: lastName, horseNames, text };
+  }).filter(Boolean);
+}
+
+async function fetchDrfNews() {
+  const sitemapRes = await fetch(DRF_SITEMAP_NEWS_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
+  if (!sitemapRes.ok) throw new Error(`DRF news sitemap returned HTTP ${sitemapRes.status}`);
+  const sitemapXml = await sitemapRes.text();
+
+  const items = [];
+  for (const m of sitemapXml.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
+    const block = m[1];
+    const link = block.match(/<loc>(.*?)<\/loc>/)?.[1];
+    const title = block.match(/<news:title>(.*?)<\/news:title>/)?.[1];
+    const pubDate = block.match(/<news:publication_date>(.*?)<\/news:publication_date>/)?.[1];
+    if (link) items.push({ link, title: title ? decodeEntities(title).trim() : null, pubDate: pubDate || null });
+  }
+
+  const articles = [];
+  for (const item of items.slice(0, MAX_ARTICLES_PER_RUN)) {
+    let articleRes;
+    try {
+      articleRes = await fetch(item.link, {
+        headers: { "User-Agent": BROWSER_UA },
+        cf: { cacheTtl: 3600, cacheEverything: true },
+      });
+    } catch (err) {
+      continue; // skip this one article, don't fail the whole batch
+    }
+    if (!articleRes.ok) continue;
+    const html = await articleRes.text();
+    const keywords = extractDrfKeywords(html);
+    const sections = extractDrfSections(html, keywords);
+    if (!sections.length) continue;
+    articles.push({ guid: item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
+  }
+
+  return { source: DRF_SITEMAP_NEWS_URL, fetchedAt: new Date().toISOString(), articles };
 }
 
 // ---------- SmartPony partner quotes (job #18) ----------

@@ -7659,6 +7659,19 @@
   }
   let stableHrnSeen = loadStableHrnSeen();
 
+  // Same per-device "seen" convention again, for job #19's Daily Racing
+  // Form source.
+  const STABLE_DRF_SEEN_KEY = "giddyupbets_stable_drf_seen_v1";
+  function loadStableDrfSeen(){
+    try { return new Set(JSON.parse(localStorage.getItem(STABLE_DRF_SEEN_KEY)) ?? []); }
+    catch { return new Set(); }
+  }
+  function saveStableDrfSeen(){
+    try { localStorage.setItem(STABLE_DRF_SEEN_KEY, JSON.stringify([...stableDrfSeen])); }
+    catch(err){ console.error("Stable DRF-seen failed to save", err); }
+  }
+  let stableDrfSeen = loadStableDrfSeen();
+
   // Same idea again, for job #18's SmartPony source — keyed by SmartPony's
   // own quote id (a real unique id, unlike TDN/HRN's composite string keys
   // built out of link+trainer+horse since those sources have no id of
@@ -7928,6 +7941,57 @@
     }
   }
 
+  // Job #19 — same shape as autoImportHrnNews() above, pointed at the
+  // worker's /drf-news route. DRF's one real quirk versus TDN/HRN: since
+  // horse identification there comes from an article's <meta name=
+  // "keywords"> tag rather than in-prose links, an occasional untracked
+  // track name can slip through and get filed as if it were a horse (see
+  // the worker's own DRF_KEYWORD_TRACK_NAMES/DRF_RACE_NAME_SUFFIXES
+  // comments) — same review-by-
+  // glancing-at-the-note backstop as any other auto-import here, not
+  // something this function tries to further filter client-side.
+  async function autoImportDrfNews(){
+    if (!stableTrainers.length) return; // nothing to match against
+    let data;
+    try{ data = await stableApiGet("/drf-news"); }
+    catch(err){ console.error("Daily Racing Form fetch failed", err); return; }
+
+    const noteItems = [];
+    for (const article of data.articles || []){
+      for (const section of article.sections || []){
+        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
+        if (!matchedTrainer) continue;
+        for (const horseName of section.horseNames || []){
+          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
+          if (stableDrfSeen.has(seenKey)) continue;
+          noteItems.push({
+            trainer: matchedTrainer,
+            horse: horseName,
+            note: section.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+          });
+          stableDrfSeen.add(seenKey);
+        }
+      }
+    }
+    if (!noteItems.length) return;
+
+    try{
+      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
+      saveStableDrfSeen();
+      const fresh = await loadStableData();
+      stableTrainers = fresh.trainers;
+      stableNotes = fresh.notes;
+      stableTrainerMeta = fresh.trainerMeta;
+      renderStableTour();
+    } catch(err){
+      console.error("Daily Racing Form import failed to save", err);
+    }
+  }
+
   // Job #18 — SmartPony partner quotes, same overall shape as the imports
   // above but simpler: the worker's /smartpony-quotes route already
   // returns one quote per horse/trainer (SmartPony did the article
@@ -8003,12 +8067,14 @@
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
+    autoImportDrfNews();
     autoImportSmartPonyQuotes();
   });
   $("stableFeedCheckBtn").addEventListener("click", () => {
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
+    autoImportDrfNews();
     autoImportSmartPonyQuotes();
   });
   // Auto-import "seen" tracking lives in THIS browser's localStorage (per
@@ -8016,7 +8082,7 @@
   // switching Worker URLs — but that means moving Stable Tour to a fresh
   // shared store (or pointing at a different Worker) leaves this device
   // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs all five auto-import checks.
+  // This clears that local memory and re-runs all six auto-import checks.
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
     stableSeenArticles = [];
     saveStableSeenArticles();
@@ -8026,12 +8092,15 @@
     saveStableTdnSeen();
     stableHrnSeen = new Set();
     saveStableHrnSeen();
+    stableDrfSeen = new Set();
+    saveStableDrfSeen();
     stableSmartPonySeen = new Set();
     saveStableSmartPonySeen();
     $("stableFeedStatus").textContent = "Import history cleared — checking now…";
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
+    autoImportDrfNews();
     autoImportSmartPonyQuotes();
     fetchNewsWire();
   });
@@ -10861,11 +10930,13 @@
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
     autoImportHrnNews(); // same reasoning
+    autoImportDrfNews(); // same reasoning
     autoImportSmartPonyQuotes(); // same reasoning
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
   setInterval(autoImportTdnNotebook, 60 * 60 * 1000); // same cadence, separate interval so one source's hiccup can't block the other
   setInterval(autoImportHrnNews, 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportDrfNews, 60 * 60 * 1000); // same cadence, separate interval too
   setInterval(autoImportSmartPonyQuotes, 60 * 60 * 1000); // same cadence, separate interval too
 
   // Refresh from the shared source periodically and whenever the tab
