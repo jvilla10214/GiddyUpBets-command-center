@@ -549,6 +549,12 @@
     min-width: 112px;
   }
   .track-condition .label{ color: var(--parchment-dim); font-size:9.5px; letter-spacing:1.5px; display:block; font-family:'IBM Plex Mono', monospace; font-weight:400; margin-bottom:3px;}
+  /* Rail tile — same family as the Dirt/Turf tiles but deliberately smaller
+     (min-width, padding, font-size all reduced) since a rail-out distance
+     ("30' Out") is far shorter than a condition word and doesn't need equal
+     billing on the photo. NYRA tracks only (Saratoga, Belmont) — no other
+     source in this app reports rail placement. */
+  .track-condition-rail{ min-width: 64px; padding: 6px 10px; font-size: 11px; }
   .track-condition .tc-value{ display:block; }
   .cond-fast{ color: var(--rail-green); }
   .cond-good{ color: var(--sky); }
@@ -2472,6 +2478,10 @@
           <span class="label">Turf Course</span>
           <span class="tc-value skel" id="turfConditionValue">—</span>
           <span class="tc-source" id="turfSourceTag" hidden></span>
+        </div>
+        <div class="track-condition track-condition-rail" id="railConditionTile" hidden>
+          <span class="label">Rail</span>
+          <span class="tc-value" id="railConditionValue">—</span>
         </div>
       </div>
 
@@ -9963,6 +9973,21 @@
         turfSourceEl.textContent = "Estimated";
         turfSourceEl.className = "tc-source tc-source-estimated";
         turfSourceEl.hidden = false;
+      }
+    }
+
+    // Rail tile — NYRA tracks only (Saratoga, Belmont). No other source in
+    // this app reports rail placement, so it stays hidden everywhere else
+    // rather than showing an empty box.
+    const railTile = $("railConditionTile");
+    if (railTile){
+      if (OFFICIAL_CONDITIONS_PROVIDER[trackId] === "nyra"){
+        railTile.hidden = false;
+        $("railConditionValue").textContent = (official?.available && official.railSettings?.length)
+          ? official.railSettings.map(r => `${r.course} ${r.label}`).join(" · ")
+          : "—";
+      } else {
+        railTile.hidden = true;
       }
     }
   }
