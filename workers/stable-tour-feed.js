@@ -375,16 +375,22 @@
 //    necessarily incomplete, so an untracked track or race name
 //    occasionally reads as a horse).
 // 20. UK odds on Saratoga entries (folded into GET /entries via
-//    enrichWithUkOdds(), not its own route) — confirmed real find
-//    2026-08-26 that Sporting Life's existing meeting-lookup pipeline
-//    (job #6's Sporting Life branch, originally built for York/Ascot/etc.)
-//    already carries the FULL Saratoga card with real UK fractional odds
-//    for every runner, not just a token stakes race — this reuses that
-//    pipeline outright rather than adding a new scrape. Attaches ukOdds to
-//    each matching horse (by name, case/whitespace-insensitive) after the
-//    primary NYRA fetch, wrapped so a Sporting Life hiccup never breaks
-//    the primary entries response. Displayed in its own native UK
-//    fractional format, never converted — fractionalOddsToDecimal() and
+//    enrichWithUkOdds(), not its own route) — pulls each horse's live Sky
+//    Bet price from Sporting Life's per-race "Live Odds" page
+//    (fetchSaratogaSkyBetOdds()), NOT the whole-card fast-cards page job
+//    #6's Sporting Life branch already uses for York/Ascot/etc. Confirmed
+//    real user finding 2026-08-26: that whole-card page's generic
+//    betting.current_odds field doesn't match what a human actually sees
+//    on Sporting Life's own site (their screenshot: "Odds by: Sky Bet") —
+//    the real per-bookmaker prices (Sky Bet, Paddy Power, Betfair
+//    Sportsbook, all present per horse) live on a separate per-race page
+//    keyed by each race's own id, not the meeting id. Real cost of that
+//    correction: one request per race (8 for a full Saratoga card)
+//    instead of one for the whole card. Attaches ukOdds to each matching
+//    horse (by name, case/whitespace-insensitive, country suffix
+//    stripped) after the primary NYRA fetch, wrapped so a Sporting Life
+//    hiccup never breaks the primary entries response. Displayed in its
+//    own native UK fractional format, never converted — fractionalOddsToDecimal() and
 //    horseIsLiveInUk() exist only to power the ukLive flag, shown
 //    client-side as a flame icon. Deliberately one-directional per
 //    explicit user reasoning 2026-08-26: this isn't "these two numbers
@@ -2692,20 +2698,19 @@ const SPORTINGLIFE_COURSE_NAME_BY_TRACK = {
   york: "York", ascot: "Ascot", epsomdowns: "Epsom Downs", newmarket: "Newmarket",
   curragh: "Curragh", longchamp: "ParisLongchamp",
   shatin: "Sha Tin", happyvalley: "Happy Valley", meydan: "Meydan",
-  // Added 2026-08-26 for job #20 (UK odds on Saratoga) — confirmed directly
-  // that Sporting Life's meeting-lookup pipeline already carries the full
-  // US Saratoga card (all 8 races that day, every runner, real UK
-  // fractional current_odds), not just a token stakes race — this isn't a
-  // new scrape, it's the exact same pipeline the UK/international tracks
-  // above already use, just pointed at one more course name.
-  saratoga: "Saratoga",
 };
 const SPORTINGLIFE_COURSE_SLUG_BY_TRACK = {
   york: "york", ascot: "ascot", epsomdowns: "epsom-downs", newmarket: "newmarket",
   curragh: "curragh", longchamp: "paris-longchamp",
   shatin: "sha-tin", happyvalley: "happy-valley", meydan: "meydan",
-  saratoga: "saratoga",
 };
+// Saratoga is deliberately NOT in the two maps above — job #20 (UK odds)
+// doesn't go through fetchSportingLifeEntriesDay()/sportingLifeMapRace() at
+// all. It was briefly added here on 2026-08-26 to reuse that pipeline's
+// generic betting.current_odds field, then removed again the same day once
+// that field turned out not to match what a human sees on Sporting Life's
+// own "Live Odds" tab — see fetchSaratogaSkyBetOdds()'s own comment for the
+// real per-bookmaker source this uses instead.
 
 // ---------- Job #20: UK odds alongside Saratoga entries ----------
 // Confirmed real ask 2026-08-26: show Sporting Life's UK fractional odds
@@ -2778,31 +2783,78 @@ function stripCountrySuffix(name) {
   return name.replace(/\s*\([A-Z]{2,4}\)\s*$/, "").trim();
 }
 
-// Fetches Sporting Life's odds for the same track+date as an already-
-// fetched primary result (NYRA, for Saratoga) and attaches ukOdds/ukLive
-// to each matching horse by name — case/whitespace-insensitive and with
-// stripCountrySuffix() applied to both sides (safe even though only NYRA
-// has been confirmed to carry the suffix, in case that's ever reversed),
-// the same forgiving match every other horse-name comparison in this file
-// uses, since the two sources don't always agree on capitalization
-// ("Atlas a Eye" vs "Atlas A Eye", confirmed directly) either. Wrapped so
-// a Sporting Life hiccup never breaks the primary entries display — the
-// worst case is just no UK odds shown that call, not a failed /entries
-// request.
-async function enrichWithUkOdds(track, date, result) {
-  if (!UK_ODDS_TRACKS.has(track)) return result;
-  const normalizeHorseName = (name) => stripCountrySuffix((name || "").trim()).toLowerCase();
-  try {
-    const ukResult = await fetchSportingLifeEntriesDay(track, date);
-    const ukByName = {};
-    for (const race of ukResult.races || []) {
-      for (const horse of race.horses || []) {
-        if (horse.name && horse.currentOdds) ukByName[normalizeHorseName(horse.name)] = horse.currentOdds;
+// SUPERSEDES an earlier version of this function that read the fast-cards
+// page's generic betting.current_odds field — confirmed real user finding
+// 2026-08-26 that number doesn't match what a human actually sees on
+// Sporting Life's own "Live Odds" tab (their screenshot: "Odds by: Sky
+// Bet"), which draws from a completely different per-race page with its
+// own per-bookmaker bookmakerOdds array (Sky Bet v2/Paddy Power/Betfair
+// Sportsbook, confirmed present per horse) — see UK_ODDS_BOOKMAKER_NAME's
+// own comment for the full story and the URL shape. Genuine cost versus
+// the old approach: one request per race (8 for a full Saratoga card)
+// instead of one for the whole card at once — confirmed acceptable
+// tradeoff for actually matching the number the user is reading.
+const UK_ODDS_BOOKMAKER_NAME = "Sky Bet v2"; // matches the "Odds by: Sky Bet" table the user is actually reading
+
+// Fetches Sporting Life's Saratoga meeting listing (same first step as
+// fetchSportingLifeEntriesDay(), reused via the same low-level
+// sportingLifeFetchJson() helper) purely to learn each race's own
+// race_summary_reference.id — a DIFFERENT id than the meeting_reference.id
+// used for the whole-card fast-cards endpoint, confirmed directly (race 3
+// was 935744, race 4 was 935745 — sequential per-race ids, not shared).
+// Then fetches each race's own live-show page for its real per-bookmaker
+// prices. A single race's fetch failing (or a horse this specific
+// bookmaker hasn't priced yet) just skips that one entry rather than
+// failing the whole lookup.
+async function fetchSaratogaSkyBetOdds(date) {
+  const oddsByHorseName = {};
+  const listing = await sportingLifeFetchJson(`/racing/racecards/${date}`);
+  const meetings = listing?.props?.pageProps?.meetings || [];
+  const meeting = meetings.find((m) => m.meeting_summary?.course?.name === "Saratoga");
+  if (!meeting || meeting.meeting_summary.date !== date) return oddsByHorseName; // not running, or not published yet
+
+  const meetingId = meeting.meeting_summary.meeting_reference.id;
+  const card = await sportingLifeFetchJson(`/racing/fast-cards/${meetingId}/${date}/saratoga`);
+  const races = card?.props?.pageProps?.meeting?.races || [];
+
+  for (const race of races) {
+    const raceId = race?.race_summary?.race_summary_reference?.id;
+    if (!raceId) continue;
+    let raceData;
+    try {
+      raceData = await sportingLifeFetchJson(`/racing/racecards/${date}/saratoga/live-show/${raceId}/race`);
+    } catch (err) {
+      continue; // one race's live-show hiccup shouldn't cost the rest of the card
+    }
+    const rides = raceData?.props?.pageProps?.race?.rides || [];
+    for (const ride of rides) {
+      const name = ride?.horse?.name;
+      const skyBet = (ride?.bookmakerOdds || []).find((b) => b.bookmakerName === UK_ODDS_BOOKMAKER_NAME);
+      if (name && skyBet?.fractionalOdds) {
+        oddsByHorseName[stripCountrySuffix(name.trim()).toLowerCase()] = skyBet.fractionalOdds;
       }
     }
+  }
+  return oddsByHorseName;
+}
+
+// Attaches ukOdds/ukLive to each matching horse in an already-fetched
+// primary result (NYRA, for Saratoga) by name — case/whitespace-
+// insensitive and with stripCountrySuffix() applied to both sides (safe
+// even though only NYRA has been confirmed to carry the suffix, in case
+// that's ever reversed), the same forgiving match every other horse-name
+// comparison in this file uses, since the two sources don't always agree
+// on capitalization ("Atlas a Eye" vs "Atlas A Eye", confirmed directly)
+// either. Wrapped so a Sporting Life hiccup never breaks the primary
+// entries display — the worst case is just no UK odds shown that call,
+// not a failed /entries request.
+async function enrichWithUkOdds(track, date, result) {
+  if (!UK_ODDS_TRACKS.has(track)) return result;
+  try {
+    const ukByName = await fetchSaratogaSkyBetOdds(date);
     for (const race of result.races || []) {
       for (const horse of race.horses || []) {
-        const ukOdds = ukByName[normalizeHorseName(horse.name)];
+        const ukOdds = ukByName[stripCountrySuffix((horse.name || "").trim()).toLowerCase()];
         if (!ukOdds) continue;
         horse.ukOdds = ukOdds;
         horse.ukLive = horseIsLiveInUk(horse.currentOdds, ukOdds);
