@@ -2484,6 +2484,7 @@
         <div class="track-condition track-condition-rail" id="railConditionTile" hidden>
           <span class="label">Rail</span>
           <span class="tc-value" id="railConditionValue">—</span>
+          <span class="tc-source" id="railSourceTag" hidden></span>
         </div>
       </div>
 
@@ -9999,6 +10000,14 @@
               return `<div class="rail-line">${escapeHtml(r.course)}: ${escapeHtml(r.label)}${escapeHtml(raceNote)}</div>`;
             }).join("")
           : "—";
+        const railSourceEl = $("railSourceTag");
+        if (official?.available && official.railSettings?.length){
+          railSourceEl.textContent = `${providerLabel}${officialTime ? " " + officialTime : ""}`;
+          railSourceEl.className = "tc-source";
+          railSourceEl.hidden = false;
+        } else {
+          railSourceEl.hidden = true;
+        }
       } else {
         railTile.hidden = true;
       }
