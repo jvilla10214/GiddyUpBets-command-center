@@ -2150,13 +2150,22 @@ async function fetchNyraResultsDay(track, date) {
 }
 
 // ---------- Del Mar (DMTC) Entries parser ----------
-// Source verified directly: unlike NYRA, dmtc.com's whole-card entries page
-// (https://www.dmtc.com/racing/entries) is one plain server-rendered HTML
-// page with every race inline — no fragment endpoint, no per-race requests.
-// It also has no date parameter: it always shows whichever day's card DMTC
-// currently has up (confirmed via its own <meta description>, which states
-// the exact date in plain text), so a request for any other date just comes
-// back empty — there's no way to ask this source for a different day.
+// Source verified directly: dmtc.com's whole-card entries page is one plain
+// server-rendered HTML page with every race inline — no fragment endpoint,
+// no per-race requests.
+// CORRECTED 2026-08-26 — confirmed real bug in the original version of this
+// comment: it claimed the entries page "has no date parameter," fetching
+// only the undated https://www.dmtc.com/racing/entries (always whichever
+// day is currently open) and discarding any request for a different date
+// as empty. That was wrong — DMTC's own page has working next/previous-day
+// links to a real dated path, /racing/entries/YYYY-MM-DD, confirmed
+// directly to return that exact day's real card (verified 3 days out,
+// including a Saturday with a full 10-race card) — the bug meant every
+// future-date request silently came back "no races" even when DMTC had
+// already posted real entries for it, exactly like NYRA's Saratoga does.
+// Fixed by building the URL per-date instead of always hitting the base
+// path; everything else about this parser (markup shape, silk-row regex,
+// scratch handling) was already correct and needed no changes.
 // Each horse row is duplicated (a "hidden-xs"/desktop version and a
 // "visible-xs" mobile version of the same data) — only the desktop version
 // is parsed, and each row's silk-color <div> class increments per horse
@@ -2167,7 +2176,7 @@ async function fetchNyraResultsDay(track, date) {
 // the client's existing NYRA-shaped rendering (struck-through row, SCR tag)
 // works unchanged. DMTC doesn't publish live tote odds anywhere on this
 // page, only morning line, so currentOdds is always null for this source.
-const DMTC_ENTRIES_URL = "https://www.dmtc.com/racing/entries";
+const DMTC_ENTRIES_URL_BASE = "https://www.dmtc.com/racing/entries";
 
 function dmtcCardDate(html) {
   const m = html.match(/race entries for (\w+),\s*(\w+)\s+(\d{1,2})\w{0,2},\s*(\d{4})/i);
@@ -2262,7 +2271,13 @@ function parseDmtcEntries(html, date) {
 }
 
 async function fetchDmtcEntriesDay(date) {
-  const res = await fetch(DMTC_ENTRIES_URL, {
+  // Fetches the requested date's own page directly (see DMTC_ENTRIES_URL_BASE's
+  // comment for why this used to always hit the undated base path instead).
+  // parseDmtcEntries() still cross-checks the returned page's own embedded
+  // date against `date` and returns no races on a mismatch — kept as a
+  // defensive check, not because it's expected to fire now, in case DMTC's
+  // dated URLs ever redirect to a fallback day instead of 404ing.
+  const res = await fetch(`${DMTC_ENTRIES_URL_BASE}/${date}`, {
     headers: { "User-Agent": BROWSER_UA },
     cf: { cacheTtl: 120, cacheEverything: true },
   });
@@ -2409,8 +2424,11 @@ async function fetchDmtcResultsDay(date) {
 // Equibase's "Changes & Scratches" feed — plain free-text notes per race
 // (temp rail distance, gelding reports, equipment/jockey changes, and
 // occasionally scratches) rather than the structured entries/results
-// tables above. No date param, same "always shows today's card" rule and
-// caveat as the entries page (see DMTC_ENTRIES_URL's own note). Each race's
+// tables above. No dated URL variant found here (unlike the entries page,
+// which DOES have one — see DMTC_ENTRIES_URL_BASE's own note — this page
+// wasn't re-checked for the same next/previous-day links, so treat "always
+// shows today's card" as this page's own unverified-further limitation,
+// not something carried over from entries). Each race's
 // note is carried as one opaque string — this page mixes several unrelated
 // note types in the same freeform sentence with no consistent sub-format to
 // parse further, so this deliberately doesn't try to classify or split them;
