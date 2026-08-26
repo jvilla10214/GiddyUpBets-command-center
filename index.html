@@ -5286,6 +5286,12 @@
       weatherHtml = `<div class="entries-weather-strip entries-weather-unknown">No forecast match for this race's post time yet.</div>`;
     }
 
+    // Feature-detected rather than hardcoded to a track id — shows
+    // whenever the worker's enrichWithUkOdds() (job #20) actually attached
+    // odds to this race, so it appears for Saratoga today and picks up
+    // Belmont automatically later without another client change, rather
+    // than coupling this render function to a specific track.
+    const hasUkOdds = race.horses.some(h => h.ukOdds);
     const rows = race.horses.map(h => {
       // Applies only to live rides (scratched horses aren't running, so a
       // rider swap for one is moot) — see saratogaJockeyChange()'s own
@@ -5295,6 +5301,11 @@
       const jockeyHtml = newJockey
         ? `<span class="entries-jockey-changed" title="Changed from ${escapeHtml(h.jockey || "—")}">${escapeHtml(newJockey)}</span>`
         : escapeHtml(h.jockey || "—");
+      // Shown in its own native UK fractional format, exactly as Sporting
+      // Life publishes it — never converted for display (the worker's
+      // fractionalOddsToDecimal() only exists to power a future
+      // discrepancy flag, not to change what's shown here).
+      const ukOddsCell = hasUkOdds ? `<td>${escapeHtml(h.ukOdds || "—")}</td>` : "";
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>
@@ -5303,9 +5314,11 @@
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
+        ${ukOddsCell}
       </tr>
     `;
     }).join("");
+    const ukOddsHeader = hasUkOdds ? "<th>UK Odds</th>" : "";
 
     // Official Results — shown above the entries/odds table, never
     // replacing it, since morning-line/final odds stay useful for review
@@ -5381,7 +5394,7 @@
         ${weatherHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
-            <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th></tr></thead>
+            <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th>${ukOddsHeader}</tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
