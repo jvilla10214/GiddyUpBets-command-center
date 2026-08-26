@@ -1808,6 +1808,7 @@
   .odds-arrow{ margin-left: 4px; font-size: 10px; font-weight: 700; }
   .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
   .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
+  .uk-odds-live{ margin-left: 5px; font-size: 12px; cursor: help; }
   .log-remove{ font-size: 14px; padding: 2px 4px; }
   .log-edit{ font-size: 13px; padding: 2px 5px; margin-right: 4px; }
   .log-remove:hover{ color: var(--silk-red); }
@@ -5303,9 +5304,13 @@
         : escapeHtml(h.jockey || "—");
       // Shown in its own native UK fractional format, exactly as Sporting
       // Life publishes it — never converted for display (the worker's
-      // fractionalOddsToDecimal() only exists to power a future
-      // discrepancy flag, not to change what's shown here).
-      const ukOddsCell = hasUkOdds ? `<td>${escapeHtml(h.ukOdds || "—")}</td>` : "";
+      // fractionalOddsToDecimal() only exists to power the ukLive flag
+      // below, not to change what's shown here). The flame is
+      // deliberately one-directional (see the worker's horseIsLiveInUk()
+      // comment) — it only ever means "UK money is already shorter on
+      // this one than the US pool reflects," never "these two disagree."
+      const ukLiveHtml = h.ukLive ? `<span class="uk-odds-live" title="Notably shorter in the UK than the US price — sharp UK money may already be on this one">🔥</span>` : "";
+      const ukOddsCell = hasUkOdds ? `<td>${escapeHtml(h.ukOdds || "—")}${ukLiveHtml}</td>` : "";
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${escapeHtml(h.postPosition || "—")}</td>

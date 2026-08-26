@@ -385,10 +385,15 @@
 //    primary NYRA fetch, wrapped so a Sporting Life hiccup never breaks
 //    the primary entries response. Displayed in its own native UK
 //    fractional format, never converted — fractionalOddsToDecimal() and
-//    ukOddsIsDiscrepant() exist only to power a future "these two
-//    disagree enough to flag" indicator (2x-ratio threshold, not yet
-//    surfaced client-side — confirmed real ask 2026-08-26 to ship the
-//    plain odds display first and add the alert icon later). Saratoga
+//    horseIsLiveInUk() exist only to power the ukLive flag, shown
+//    client-side as a flame icon. Deliberately one-directional per
+//    explicit user reasoning 2026-08-26: this isn't "these two numbers
+//    disagree," it's "sharp UK money is already on this horse before the
+//    US pool reflects it" (the two markets don't share information, so UK
+//    fixed-odds action can shorten a price well ahead of US pari-mutuel
+//    pool money catching up) — ukLive only ever fires when UK is shorter
+//    than US by UK_ODDS_LIVE_RATIO, never the reverse (a horse drifting
+//    longer in the UK isn't "live," just less backed somewhere). Saratoga
 //    only for now (UK_ODDS_TRACKS) — Belmont needs its own live-card
 //    verification once that meet reopens before being added, same rule as
 //    every other source here.
@@ -2711,15 +2716,22 @@ const SPORTINGLIFE_COURSE_SLUG_BY_TRACK = {
 // format; the conversion below exists ONLY to decide whether to flag it,
 // never for display.
 //
-// Threshold: flag when either side's decimal odds is at least 2x the
-// other (see fractionalOddsToDecimal() below for the conversion) — a
-// ratio rather than a flat point-gap so it means the same thing at every
-// price point (a 2-point gap is enormous for a 5/2 favorite and trivial
-// for a 20/1 longshot; a ratio isn't). 2x is a starting bar for "this
-// looks like more than ordinary book-to-book variance," not a
-// scientifically derived number — expected to get tuned once this has
-// actually run against a few live race days.
-const UK_ODDS_DISCREPANCY_RATIO = 2;
+// Threshold and direction refined 2026-08-26 per explicit user reasoning:
+// this isn't "these two numbers disagree," it's specifically "UK money is
+// already onto this one before the US pool reflects it" — sharp/informed
+// UK fixed-odds action can shorten a horse up well ahead of the US
+// pari-mutuel pool having any idea, since the two markets don't share
+// information. The reverse case (UK drifting a horse longer than the US
+// price) isn't the same signal at all — that's just "less backed
+// somewhere," not "live" — so this is deliberately one-directional now,
+// only ever firing when UK is shorter than US, never the other way.
+// Still a ratio rather than a flat point-gap so it means the same thing
+// at every price point (a 2-point gap is enormous for a 5/2 favorite and
+// trivial for a 20/1 longshot). 2x is a starting bar for "this looks like
+// more than ordinary book-to-book variance," not a scientifically derived
+// number — expected to get tuned once this has actually run against a
+// few live race days.
+const UK_ODDS_LIVE_RATIO = 2;
 // Tracks this enrichment runs for — deliberately NOT the same set as
 // SPORTINGLIFE_COURSE_NAME_BY_TRACK (that map also covers the UK/
 // international tracks, which don't need "their own" odds compared
@@ -2745,22 +2757,24 @@ function fractionalOddsToDecimal(str) {
   return parseFloat(m[1]) / denom + 1;
 }
 
-function ukOddsIsDiscrepant(usOddsStr, ukOddsStr) {
+// One-directional by design (see UK_ODDS_LIVE_RATIO's own comment) — only
+// true when the UK price is the SHORTER one by at least the ratio, never
+// when US is shorter than UK.
+function horseIsLiveInUk(usOddsStr, ukOddsStr) {
   const us = fractionalOddsToDecimal(usOddsStr);
   const uk = fractionalOddsToDecimal(ukOddsStr);
   if (!us || !uk) return false;
-  return Math.max(us, uk) / Math.min(us, uk) >= UK_ODDS_DISCREPANCY_RATIO;
+  return us / uk >= UK_ODDS_LIVE_RATIO;
 }
 
 // Fetches Sporting Life's odds for the same track+date as an already-
-// fetched primary result (NYRA, for Saratoga) and attaches ukOdds/
-// ukOddsDiscrepancy to each matching horse by name — case/whitespace-
-// insensitive, the same forgiving match every other horse-name comparison
-// in this file uses, since the two sources don't always agree on
-// capitalization ("Atlas a Eye" vs "Atlas A Eye", confirmed directly).
-// Wrapped so a Sporting Life hiccup never breaks the primary entries
-// display — the worst case is just no UK odds shown that call, not a
-// failed /entries request.
+// fetched primary result (NYRA, for Saratoga) and attaches ukOdds/ukLive
+// to each matching horse by name — case/whitespace-insensitive, the same
+// forgiving match every other horse-name comparison in this file uses,
+// since the two sources don't always agree on capitalization ("Atlas a
+// Eye" vs "Atlas A Eye", confirmed directly). Wrapped so a Sporting Life
+// hiccup never breaks the primary entries display — the worst case is
+// just no UK odds shown that call, not a failed /entries request.
 async function enrichWithUkOdds(track, date, result) {
   if (!UK_ODDS_TRACKS.has(track)) return result;
   try {
@@ -2776,7 +2790,7 @@ async function enrichWithUkOdds(track, date, result) {
         const ukOdds = ukByName[(horse.name || "").trim().toLowerCase()];
         if (!ukOdds) continue;
         horse.ukOdds = ukOdds;
-        horse.ukOddsDiscrepancy = ukOddsIsDiscrepant(horse.currentOdds, ukOdds);
+        horse.ukLive = horseIsLiveInUk(horse.currentOdds, ukOdds);
       }
     }
   } catch (err) {
