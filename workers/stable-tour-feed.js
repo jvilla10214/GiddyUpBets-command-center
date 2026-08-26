@@ -459,7 +459,18 @@ export default {
   // the on-demand equivalent used to test this without waiting on the
   // schedule.
   async scheduled(event, env, ctx) {
-    event.waitUntil(
+    // Confirmed real bug (2026-08-26): this was `event.waitUntil`, which
+    // doesn't exist in the module-worker syntax this file uses — waitUntil
+    // lives on `ctx` (the ExecutionContext), not the ScheduledController.
+    // Every real Cron Trigger invocation threw "event.waitUntil is not a
+    // function" immediately, which is exactly why /debug-last-run never
+    // showed a "scheduled" source entry despite the trigger firing on
+    // schedule every morning — confirmed via the Cloudflare dashboard's own
+    // error logs (Metrics -> Errors) showing the TypeError at 08:00 EDT
+    // daily, deployment version with 1 error/day. Recreating the Cron
+    // Trigger itself never could have fixed this — the trigger was working,
+    // the code calling it was wrong.
+    ctx.waitUntil(
       runEntryAlerts(env, "scheduled").catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
     );
   },
