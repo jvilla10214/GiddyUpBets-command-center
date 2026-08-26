@@ -2767,27 +2767,42 @@ function horseIsLiveInUk(usOddsStr, ukOddsStr) {
   return us / uk >= UK_ODDS_LIVE_RATIO;
 }
 
+// Strips a trailing country-of-origin suffix ("Right to Win (IRE)" ->
+// "Right to Win") before matching between sources — confirmed real gap:
+// NYRA includes it, Sporting Life's own horse.name field never does (spot
+// -checked "Right To Win" and "Unit Economics", both foreign-bred runners
+// NYRA lists with (IRE)/(GB), neither carrying it on Sporting Life's
+// side), so without this strip those two genuinely-the-same horses just
+// silently never matched.
+function stripCountrySuffix(name) {
+  return name.replace(/\s*\([A-Z]{2,4}\)\s*$/, "").trim();
+}
+
 // Fetches Sporting Life's odds for the same track+date as an already-
 // fetched primary result (NYRA, for Saratoga) and attaches ukOdds/ukLive
-// to each matching horse by name — case/whitespace-insensitive, the same
-// forgiving match every other horse-name comparison in this file uses,
-// since the two sources don't always agree on capitalization ("Atlas a
-// Eye" vs "Atlas A Eye", confirmed directly). Wrapped so a Sporting Life
-// hiccup never breaks the primary entries display — the worst case is
-// just no UK odds shown that call, not a failed /entries request.
+// to each matching horse by name — case/whitespace-insensitive and with
+// stripCountrySuffix() applied to both sides (safe even though only NYRA
+// has been confirmed to carry the suffix, in case that's ever reversed),
+// the same forgiving match every other horse-name comparison in this file
+// uses, since the two sources don't always agree on capitalization
+// ("Atlas a Eye" vs "Atlas A Eye", confirmed directly) either. Wrapped so
+// a Sporting Life hiccup never breaks the primary entries display — the
+// worst case is just no UK odds shown that call, not a failed /entries
+// request.
 async function enrichWithUkOdds(track, date, result) {
   if (!UK_ODDS_TRACKS.has(track)) return result;
+  const normalizeHorseName = (name) => stripCountrySuffix((name || "").trim()).toLowerCase();
   try {
     const ukResult = await fetchSportingLifeEntriesDay(track, date);
     const ukByName = {};
     for (const race of ukResult.races || []) {
       for (const horse of race.horses || []) {
-        if (horse.name && horse.currentOdds) ukByName[horse.name.trim().toLowerCase()] = horse.currentOdds;
+        if (horse.name && horse.currentOdds) ukByName[normalizeHorseName(horse.name)] = horse.currentOdds;
       }
     }
     for (const race of result.races || []) {
       for (const horse of race.horses || []) {
-        const ukOdds = ukByName[(horse.name || "").trim().toLowerCase()];
+        const ukOdds = ukByName[normalizeHorseName(horse.name)];
         if (!ukOdds) continue;
         horse.ukOdds = ukOdds;
         horse.ukLive = horseIsLiveInUk(horse.currentOdds, ukOdds);
