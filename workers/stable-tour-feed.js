@@ -281,9 +281,13 @@
 //    itself fires once a day around 8am Eastern (see the Deploy note below
 //    for the exact UTC expression and its DST caveat), and each run only
 //    checks TODAY's card (entryAlertTodayDate(), America/New_York) — for
-//    every track in ENTRIES_SOURCE_BY_TRACK (job #6's own map), dispatched
-//    to the same per-source fetcher that route already uses, not just
-//    Saratoga/NYRA. A horse entered five days out for a Saturday stakes race
+//    every track in ALERT_TRACKS (currently Saratoga and Del Mar; a
+//    deliberate subset of job #6's broader ENTRIES_SOURCE_BY_TRACK, which
+//    also covers Monmouth and several international/UK tracks the Entries
+//    tab supports for manual browsing but that alerts don't need to fire
+//    on — confirmed real ask 2026-08-26), dispatched to the same
+//    per-source fetcher that route already uses. A horse entered five days
+//    out for a Saturday stakes race
 //    doesn't email until Saturday morning. For every non-scratched horse
 //    whose trainer's last name matches a tracked Stable Tour trainer
 //    (readState(), same list job #1 manages) AND that already has at least
@@ -306,11 +310,21 @@
 //    a note added earlier that same race day, before the day's cron run,
 //    still gets caught. One digest per track, never combined — a day with
 //    both a matching Saratoga horse and a matching Del Mar horse sends two
-//    separate emails. NYRA's Belmont isn't in ENTRIES_SOURCE_BY_TRACK at all
-//    yet (tried and reverted — see NYRA_ENTRIES_BASE's own comment on why
-//    its dark-meet response isn't the safe no-op it looked like) so it's
-//    excluded here the same way it is from job #6; re-add both once that
-//    meet reopens and its markup is actually verified. Every run (real cron or
+//    separate emails. ALERT_TRACKS is Saratoga + Del Mar only for now — the
+//    user's explicit target list also includes Belmont, Keeneland,
+//    Churchill, and Santa Anita, added here as each becomes ready rather
+//    than all at once (confirmed real ask 2026-08-26). Belmont specifically
+//    can't go in yet even though NYRA_ENTRIES_BASE would let it: while its
+//    meet is dark, nyra.com/belmont/rdl/race/ silently serves SARATOGA's
+//    live card mislabeled as Belmont instead of an empty response (verified
+//    directly, same horses/race names side-by-side) — adding it now would
+//    double-count every Saratoga horse as also entered at Belmont. Re-add
+//    once that meet reopens (Sept 18, 2026) and its real card is verified
+//    fresh. Keeneland/Churchill/Santa Anita aren't in ALERT_TRACKS (or
+//    anywhere else in this file) yet at all — none of them have an entries
+//    scraper built, which is real future work (find each track's live
+//    entries page, verify its markup), not a one-line addition. Every run
+//    (real cron or
 //    manual) records its own outcome via recordEntryAlertsRun(), readable
 //    at GET /debug-last-run — the way to confirm the Cron Trigger is
 //    actually firing on its own, since "0 emails" alone is ambiguous (it's
@@ -1867,6 +1881,22 @@ const ENTRIES_SOURCE_BY_TRACK = {
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
 };
 
+// Tracks job #16's entry alerts actually scans — a deliberate subset of
+// ENTRIES_SOURCE_BY_TRACK above (that map stays as-is for the Entries tab,
+// which is fine showing every track it supports for manual browsing).
+// Confirmed real ask 2026-08-26: alerts should stay focused on the US
+// tracks that matter here, not fire on every international/UK track the
+// Entries tab happens to support. Belmont deliberately isn't in this list
+// yet — see NYRA_ENTRIES_BASE's own comment on why it can't be safely
+// added while its meet is dark (silently serves Saratoga's card mislabeled
+// as Belmont, not a safe no-op); re-add once that meet reopens Sept 18,
+// 2026 and its real markup is verified fresh. Keeneland, Churchill, and
+// Santa Anita aren't here either because none of them have an entries
+// scraper built anywhere in this file yet — that's real future work
+// (finding each track's live entries page and verifying its markup, same
+// as every other source here), not a one-line addition.
+const ALERT_TRACKS = ["saratoga", "delmar"];
+
 // Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
 // map (not reused from ENTRIES_SOURCE_BY_TRACK) because a track can have
 // entries wired up before its results page has actually been verified, or
@@ -3155,17 +3185,12 @@ async function runEntryAlerts(env, source = "manual") {
     }
     const trackedLastNames = new Set(state.trainers.map(lastNameKey));
     const date = entryAlertTodayDate();
-    // Scans every track ENTRIES_SOURCE_BY_TRACK supports (job #6's own map),
-    // not just the NYRA ones — confirmed real ask 2026-08-26: "all tracks
-    // should have entry alerts." Dispatches to the same per-source fetcher
-    // the /entries route uses (see its own dispatch above) so this never
-    // drifts out of sync with which parser a track actually needs. A single
-    // NY-timezone "today" is used for every track, international ones
-    // included — the 8am Eastern cron time lands well before local midnight
-    // even in the furthest-ahead zone this file scans (Hong Kong, ~8pm
-    // local), so there's no same-day/next-day ambiguity to correct for here
-    // the way londonNowParts()/nyDateWindow() exist to handle elsewhere.
-    for (const [track, sourceType] of Object.entries(ENTRIES_SOURCE_BY_TRACK)) {
+    // Scans ALERT_TRACKS (a deliberate subset of ENTRIES_SOURCE_BY_TRACK —
+    // see that constant's own comment on why), dispatched to the same
+    // per-source fetcher the /entries route uses so this never drifts out
+    // of sync with which parser a track actually needs.
+    for (const track of ALERT_TRACKS) {
+      const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
       let result;
       try {
         if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
