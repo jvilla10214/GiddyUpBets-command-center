@@ -2802,7 +2802,15 @@ async function enrichWithUkOdds(track, date, result) {
 async function sportingLifeFetchJson(path) {
   const res = await fetch(`https://www.sportinglife.com${path}`, {
     headers: { "User-Agent": BROWSER_UA },
-    cf: { cacheTtl: 120, cacheEverything: true },
+    // Shortened from 120s to 20s 2026-08-26 — confirmed real ask that UK
+    // odds (job #20) should update on every dashboard refresh, not lag
+    // behind on a stale Cloudflare-cached subrequest. The dashboard's own
+    // auto-refresh is every 5 minutes, well clear of even the old 120s
+    // window, but a manual "Refresh Now" click sooner than that could
+    // still have served a cached price — 20s comfortably clears that case
+    // too while still absorbing truly back-to-back duplicate requests
+    // (e.g. multiple open tabs hitting the same edge node at once).
+    cf: { cacheTtl: 20, cacheEverything: true },
   });
   if (!res.ok) throw new Error(`Sporting Life returned HTTP ${res.status}`);
   const html = await res.text();
