@@ -280,9 +280,10 @@
 //    continuous "email the moment I notice you" watcher: the Cron Trigger
 //    itself fires once a day around 8am Eastern (see the Deploy note below
 //    for the exact UTC expression and its DST caveat), and each run only
-//    checks TODAY's Saratoga card (entryAlertTodayDate(), America/New_York)
-//    via the same fetchNyraEntriesDay() job #6 already uses — a horse
-//    entered five days out for a Saturday stakes race
+//    checks TODAY's card (entryAlertTodayDate(), America/New_York) — for
+//    every track in ENTRIES_SOURCE_BY_TRACK (job #6's own map), dispatched
+//    to the same per-source fetcher that route already uses, not just
+//    Saratoga/NYRA. A horse entered five days out for a Saturday stakes race
 //    doesn't email until Saturday morning. For every non-scratched horse
 //    whose trainer's last name matches a tracked Stable Tour trainer
 //    (readState(), same list job #1 manages) AND that already has at least
@@ -303,10 +304,13 @@
 //    succeeds, so a failed Resend call doesn't silently mark horses as
 //    already-notified. A no-notes horse is deliberately left un-dedup'd so
 //    a note added earlier that same race day, before the day's cron run,
-//    still gets caught. Saratoga only for now — Belmont was
-//    tried and reverted (see NYRA_ENTRIES_BASE's own comment on why its
-//    dark-meet response isn't the safe no-op it looked like); re-add once
-//    that meet reopens and its markup is actually verified. Every run (real cron or
+//    still gets caught. One digest per track, never combined — a day with
+//    both a matching Saratoga horse and a matching Del Mar horse sends two
+//    separate emails. NYRA's Belmont isn't in ENTRIES_SOURCE_BY_TRACK at all
+//    yet (tried and reverted — see NYRA_ENTRIES_BASE's own comment on why
+//    its dark-meet response isn't the safe no-op it looked like) so it's
+//    excluded here the same way it is from job #6; re-add both once that
+//    meet reopens and its markup is actually verified. Every run (real cron or
 //    manual) records its own outcome via recordEntryAlertsRun(), readable
 //    at GET /debug-last-run — the way to confirm the Cron Trigger is
 //    actually firing on its own, since "0 emails" alone is ambiguous (it's
@@ -3042,6 +3046,18 @@ function escapeHtmlForEmail(str) {
 
 const NYRA_TRACK_LABEL = { saratoga: "Saratoga", belmont: "Belmont" };
 
+// Display names for every track runEntryAlerts() now scans (all of
+// ENTRIES_SOURCE_BY_TRACK, not just NYRA's) — the digest email's subject
+// and header need a clean label the same way the client's track dropdown
+// does, and this file otherwise only has NYRA_TRACK_LABEL, which doesn't
+// cover Del Mar/Monmouth/the Sporting Life tracks.
+const ENTRIES_TRACK_LABEL = {
+  saratoga: "Saratoga", delmar: "Del Mar", monmouth: "Monmouth",
+  york: "York", ascot: "Ascot", epsomdowns: "Epsom Downs", newmarket: "Newmarket",
+  curragh: "Curragh", longchamp: "Longchamp",
+  shatin: "Sha Tin", happyvalley: "Happy Valley", meydan: "Meydan",
+};
+
 function entryDigestNotesHtml(notes) {
   // Unchanged from the old per-horse email — shows both manual and
   // auto-imported notes side by side, same "(manual)" vs "(source name)"
@@ -3092,8 +3108,8 @@ async function sendEntryDigestEmail(env, trackLabel, date, raceGroups) {
   if (!res.ok) throw new Error(`Resend HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
 }
 
-// The actual job: scans NYRA_ENTRIES_BASE's tracks (Saratoga + Belmont) over
-// entryAlertDateWindow(), and for every non-scratched horse whose trainer is
+// The actual job: scans every track in ENTRIES_SOURCE_BY_TRACK for
+// entryAlertTodayDate(), and for every non-scratched horse whose trainer is
 // tracked, bundles it (at most once per horse+race — see raceNotifyKvKey())
 // into that track's single daily digest email, grouped by race, with each
 // horse's when/where/conditions plus every matching stable note. Called from
@@ -3139,10 +3155,23 @@ async function runEntryAlerts(env, source = "manual") {
     }
     const trackedLastNames = new Set(state.trainers.map(lastNameKey));
     const date = entryAlertTodayDate();
-    for (const track of Object.keys(NYRA_ENTRIES_BASE)) {
+    // Scans every track ENTRIES_SOURCE_BY_TRACK supports (job #6's own map),
+    // not just the NYRA ones — confirmed real ask 2026-08-26: "all tracks
+    // should have entry alerts." Dispatches to the same per-source fetcher
+    // the /entries route uses (see its own dispatch above) so this never
+    // drifts out of sync with which parser a track actually needs. A single
+    // NY-timezone "today" is used for every track, international ones
+    // included — the 8am Eastern cron time lands well before local midnight
+    // even in the furthest-ahead zone this file scans (Hong Kong, ~8pm
+    // local), so there's no same-day/next-day ambiguity to correct for here
+    // the way londonNowParts()/nyDateWindow() exist to handle elsewhere.
+    for (const [track, sourceType] of Object.entries(ENTRIES_SOURCE_BY_TRACK)) {
       let result;
       try {
-        result = await fetchNyraEntriesDay(track, date);
+        if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
+        else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
+        else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+        else result = await fetchMonmouthEntriesDay(date);
       } catch (err) {
         console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
         continue;
@@ -3176,7 +3205,7 @@ async function runEntryAlerts(env, source = "manual") {
         if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
       }
       if (!raceGroups.length) continue;
-      const trackLabel = NYRA_TRACK_LABEL[track] || track;
+      const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
       try {
         await sendEntryDigestEmail(env, trackLabel, date, raceGroups);
         for (const { horses } of raceGroups) {
