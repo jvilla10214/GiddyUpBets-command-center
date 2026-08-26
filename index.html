@@ -4185,7 +4185,7 @@
   // for a track that races almost daily.
   // null = defer to today in track TZ.
   const ENTRIES_DATE_PICKER_TRACKS = new Set([
-    "saratoga", "york", "ascot", "epsomdowns", "newmarket",
+    "saratoga", "delmar", "york", "ascot", "epsomdowns", "newmarket",
     "curragh", "longchamp", "shatin", "happyvalley", "meydan",
   ]);
   let selectedEntriesDate = null;
@@ -4995,8 +4995,12 @@
 
   // Small window of upcoming dates a user can jump to, mirroring NYRA's own
   // entries-page date dropdown. Shown only for tracks in
-  // ENTRIES_DATE_PICKER_TRACKS — other sources (DMTC, Monmouth) only ever
-  // expose whatever card is currently posted, no day parameter to select.
+  // ENTRIES_DATE_PICKER_TRACKS. CORRECTED 2026-08-26: DMTC (Del Mar) DOES
+  // have a real dated URL (see the worker's DMTC_ENTRIES_URL_BASE comment
+  // for the fix and verification) — the old "no day parameter to select"
+  // claim here was the same disproven assumption, now fixed on both sides.
+  // Monmouth hasn't been re-checked for the same thing, so it stays out of
+  // this set until that's actually verified rather than assumed either way.
   function entriesDateOptions(){
     const { date: today } = nowInTrackTZ();
     const opts = [];
