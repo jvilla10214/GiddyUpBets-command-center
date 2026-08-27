@@ -11061,11 +11061,11 @@
     autoImportSmartPonyQuotes(); // same reasoning
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
-  setInterval(autoImportTdnNotebook, 60 * 60 * 1000); // same cadence, separate interval so one source's hiccup can't block the other
-  setInterval(autoImportHrnNews, 60 * 60 * 1000); // same cadence, separate interval too
-  setInterval(autoImportDrfNews, 60 * 60 * 1000); // same cadence, separate interval too
-  setInterval(autoImportNyraNews, 60 * 60 * 1000); // same cadence, separate interval too
-  setInterval(autoImportSmartPonyQuotes, 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportTdnNotebook, 6 * 60 * 60 * 1000); // every 6 hours, separate interval so one source's hiccup can't block the other
+  setInterval(autoImportHrnNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportDrfNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportNyraNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportSmartPonyQuotes, 6 * 60 * 60 * 1000); // same cadence, separate interval too
 
   // Refresh from the shared source periodically and whenever the tab
   // regains focus, so a friend's changes on another device show up without
