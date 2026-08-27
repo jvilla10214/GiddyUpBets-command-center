@@ -1993,6 +1993,18 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
+  /* Site-domain badge on a note (e.g. "drf.com") — same small-badge shape
+     as .stable-source-badge, shown alongside the existing clickable
+     article-title link rather than replacing it, since the title alone
+     doesn't say which site it came from. */
+  .stable-site-badge{
+    font-size: 9px;
+    color: var(--parchment-dim);
+    background: rgba(169,164,150,0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.3px;
+  }
   .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
   .stable-trainer{
     background: var(--panel-2);
@@ -7038,11 +7050,23 @@
   // name on every row (grouping is by trainer, so horse is the missing
   // context); the horse/date views need the inverse, or both, since their
   // grouping drops one or both of those out of the header.
+  // n.source is the article's own TITLE (or "manual"/"SmartPony"), which
+  // doesn't say which site it came from — derived client-side from n.link
+  // rather than stored, since every auto-imported note already carries a
+  // real article URL (TDN/HRN/DRF/NYRA News/SmartPony all set it) and
+  // re-deriving avoids a backend change or touching already-imported notes.
+  function stableNoteSiteLabel(link){
+    if (!link) return null;
+    try { return new URL(link).hostname.replace(/^www\./, ""); }
+    catch { return null; }
+  }
+
   function renderStableNoteHtml(n, opts = {}){
     const { showHorse = true, showTrainer = false } = opts;
     const sourceHtml = n.source
       ? (n.link ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.source)}</a>` : escapeHtml(n.source))
       : "";
+    const siteLabel = stableNoteSiteLabel(n.link);
     const leadBits = [];
     if (showHorse) leadBits.push(`<strong>${escapeHtml(n.horse) || "—"}</strong>`);
     if (showTrainer) leadBits.push(`<span class="stable-note-trainer">${escapeHtml(n.trainer) || "—"}</span>`);
@@ -7051,6 +7075,7 @@
         <div class="stable-note-meta">
           ${leadBits.join(" · ")}
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
+          ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
           ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
           ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
           <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
