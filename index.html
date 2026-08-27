@@ -7874,6 +7874,8 @@
     whit: "whitworth",
     shug: "claude", // Claude "Shug" McGaughey III — confirmed real duplicate (tracked separately as both names before this)
     phil: "philip", // Phil D'Amato — confirmed real: SmartPony's own "Philip Damato" spelling wasn't recognized as the same person, letting it keep re-splitting into a duplicate tracked entry
+    ray: "raymond", // Ray Handal — confirmed real: SmartPony's own "Raymond Handal" spelling spawned a duplicate tracked entry alongside the already-tracked "Ray Handal"
+    rusty: "george", // Rusty Arnold — confirmed real (user's own ID): George Arnold goes by "Rusty," and SmartPony only ever uses the nickname
   };
   // Normalizes ONE name token (not a full name) — strips a trailing
   // initial's period ("W." -> "w"), diacritics, case, and known nicknames.
@@ -8169,33 +8171,27 @@
   // paragraph-proximity section-building to do here at all — just resolve
   // each quote's trainer against the tracked list and file it.
   //
-  // Unlike TDN/HRN/News Wire, an unmatched trainer here gets ADDED, not
-  // skipped — user's explicit request. Safe in a way prose-scanning isn't:
-  // trainerName comes straight off SmartPony's own structured field, not
-  // guessed out of free text, the same reliability tier as
-  // thisishorseracing.com's own titled Stable Tour articles (see
-  // fetchStableTourFeed() above, which already auto-adds trainers for the
-  // same reason). Still refuses a bare surname with no first name — not
-  // enough to safely create a real, distinguishable new trainer entry.
+  // Used to auto-ADD an unmatched trainer instead of skipping (unlike TDN/
+  // HRN/News Wire) — reverted after confirming real: SmartPony's own
+  // coverage is national/international (Paulick Report, TDN, King George,
+  // Fasig-Tipton sale listings — not scoped to any tracked meet at all), so
+  // auto-adding every unmatched name would have taken this from a curated
+  // ~186-trainer list to ~900+, mostly trainers with nothing to do with
+  // what's actually being tracked. Unmatched full names are now surfaced
+  // for a manual look (see the SmartPony review flow) instead of being
+  // silently added — same "skip, re-checked next poll" behavior as every
+  // other import job here.
   async function autoImportSmartPonyQuotes(){
     if (!stableTrainers.length) return; // nothing to match against
     let data;
     try{ data = await stableApiGet("/smartpony-quotes"); }
     catch(err){ console.error("SmartPony fetch failed", err); return; }
 
-    const newTrainerNames = [];
     const noteItems = [];
     for (const q of data.quotes || []){
       if (stableSmartPonySeen.has(q.quoteId)) continue;
-      let matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
-      if (!matchedTrainer){
-        const hasFullName = q.trainerName.trim().split(/\s+/).length >= 2;
-        if (!hasFullName) continue; // bare surname only — no guess, re-checked next poll
-        matchedTrainer = q.trainerName.trim();
-        if (!stableTrainers.includes(matchedTrainer) && !newTrainerNames.includes(matchedTrainer)){
-          newTrainerNames.push(matchedTrainer);
-        }
-      }
+      const matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
+      if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next poll
       noteItems.push({
         trainer: matchedTrainer,
         horse: q.horseName,
@@ -8217,11 +8213,6 @@
     if (!noteItems.length) return;
 
     try{
-      // Trainers first — a note whose trainer doesn't exist yet would
-      // otherwise be written to a pool the Stable Tour UI never renders
-      // (it only ever lists tracked trainers), even though the write
-      // itself would succeed.
-      if (newTrainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: newTrainerNames, source: "smartpony" });
       await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
       saveStableSmartPonySeen();
       const fresh = await loadStableData();
