@@ -7135,6 +7135,7 @@
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
           ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
           ${n.importedVia && n.importedVia !== siteLabel ? `<span class="stable-site-badge">${escapeHtml(n.importedVia)}</span>` : ""}
+          ${n.extraSources?.length ? `<span class="stable-site-badge" title="Also reported by: ${escapeHtml(n.extraSources.map(s => s.source || s.link).join(", "))}">+${n.extraSources.length} source${n.extraSources.length > 1 ? "s" : ""}</span>` : ""}
           ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
           ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
           <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
