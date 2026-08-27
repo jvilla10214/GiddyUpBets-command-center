@@ -413,6 +413,10 @@
   }
 
   /* ---------- Track / compass panel ---------- */
+  /* Positioning context for .track-condition-group, which sits OUTSIDE
+     .track-wrap in the markup (see its own HTML comment for why) but still
+     needs to overlay the photo on desktop the same as everything else here. */
+  .track-visual{ position: relative; }
   .track-wrap{
     position: relative;
     width: 100%;
@@ -592,6 +596,42 @@
     color: var(--parchment-dim);
     background: rgba(255,255,255,0.07);
   }
+
+  /* Confirmed real bug: on a narrow phone, .track-wrap's short aspect-ratio
+     box has nowhere near enough height for Dirt+Turf+Rail stacked as
+     overlay tiles (each needs its own row once two don't fit side by side
+     at their normal size) — the group's own overflow was getting clipped by
+     .track-wrap while what remained still covered nearly the whole photo.
+     Dropping the overlay entirely below this width and letting the tiles
+     flow in normal document order underneath the photo (see the HTML
+     comment on .track-condition-group for why it lives outside .track-wrap
+     now) gives them the vertical room they actually need instead of trying
+     to steal it from the picture. */
+  @media (max-width: 480px){
+    .track-condition-group{
+      position: static;
+      max-width: 100%;
+      margin-top: 10px;
+    }
+    .track-condition{
+      flex: 1 1 100px;
+      min-width: 100px;
+    }
+    /* Rail's own text ("INNER: SET AT 0 FT (R3, 6, 9)") is long enough that
+       it can still overflow a ~120px flex share at some widths in this
+       range even after the fix above — forcing it onto its own full-width
+       row and letting the line wrap (instead of the desktop overlay's
+       deliberate nowrap, chosen there because that tile has real room)
+       keeps it legible at every phone width, not just the ones narrow
+       enough to force a wrap on their own. */
+    .track-condition-rail{
+      flex: 1 1 100%;
+    }
+    .track-condition-rail .rail-line{
+      white-space: normal;
+    }
+  }
+
   .aqi-good{ color: var(--rail-green); }
   .aqi-moderate{ color: var(--tote-amber); }
   .aqi-usg{ color: var(--clay); }
@@ -2439,21 +2479,54 @@
   <!-- LEFT: Track + wind -->
   <div class="panel">
     <div class="panel-title"><span id="trackPanelTitle">Saratoga Race Course</span> <span class="tag" id="asOf">—</span></div>
-    <div class="track-wrap" id="trackWrap">
-      <img class="track-photo" id="trackPhoto" src="assets/track.png" alt="Aerial view of Saratoga Race Course">
-      <div class="track-photo-placeholder" id="trackPhotoPlaceholder" hidden>
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <ellipse cx="12" cy="12" rx="10" ry="6"/>
-          <ellipse cx="12" cy="12" rx="5.5" ry="2.5"/>
-        </svg>
-        <span id="trackPhotoPlaceholderText">Aerial photo coming soon</span>
+    <div class="track-visual">
+      <div class="track-wrap" id="trackWrap">
+        <img class="track-photo" id="trackPhoto" src="assets/track.png" alt="Aerial view of Saratoga Race Course">
+        <div class="track-photo-placeholder" id="trackPhotoPlaceholder" hidden>
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <ellipse cx="12" cy="12" rx="10" ry="6"/>
+            <ellipse cx="12" cy="12" rx="5.5" ry="2.5"/>
+          </svg>
+          <span id="trackPhotoPlaceholderText">Aerial photo coming soon</span>
+        </div>
+        <div class="track-map" id="trackMap" hidden></div>
+        <a class="track-map-attribution" id="trackMapAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" hidden>© OpenStreetMap contributors</a>
+        <div class="track-caption" id="trackCaption">Live aerial — Saratoga Race Course</div>
+
+        <canvas class="wind-flow-canvas" id="windFlowCanvas"></canvas>
+
+        <div class="compass-shell">
+          <svg id="compassSvg" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="46" fill="none" stroke="#2f2f2f" stroke-width="1"/>
+            <circle cx="50" cy="50" r="34" fill="none" stroke="#2f2f2f" stroke-width="1"/>
+            <text x="50" y="12" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">N</text>
+            <text x="50" y="94" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">S</text>
+            <text x="10" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">W</text>
+            <text x="90" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">E</text>
+            <g id="windArrow" class="wind-arrow" transform="rotate(0 50 50)">
+              <line x1="50" y1="50" x2="50" y2="16" stroke="#f0b429" stroke-width="3" stroke-linecap="round"/>
+              <polygon points="50,8 44,20 56,20" fill="#f0b429"/>
+              <circle cx="50" cy="50" r="3.5" fill="#ede6d3"/>
+            </g>
+          </svg>
+          <div class="wind-readout" style="position:absolute;">
+            <div class="spd skel" id="windSpeed">—</div>
+            <div class="unit">MPH</div>
+            <div class="dir skel" id="windDir">—</div>
+          </div>
+        </div>
       </div>
-      <div class="track-map" id="trackMap" hidden></div>
-      <a class="track-map-attribution" id="trackMapAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" hidden>© OpenStreetMap contributors</a>
-      <div class="track-caption" id="trackCaption">Live aerial — Saratoga Race Course</div>
 
-      <canvas class="wind-flow-canvas" id="windFlowCanvas"></canvas>
-
+      <!-- Sibling of .track-wrap (not nested inside it) so its content can
+           never be clipped by track-wrap's overflow:hidden + fixed aspect
+           ratio — confirmed real bug: on a narrow mobile card, three stacked
+           condition tiles (Dirt/Turf/Rail, the Rail one often two lines of
+           real text like "MELLON: SET AT 27 FT...") need more vertical room
+           than the short aerial-photo box has, and living inside it meant
+           the overflow got silently clipped while what remained still
+           covered nearly the whole photo. Absolutely positioned over the
+           photo on desktop (plenty of room there) but flows in normal
+           document order below it on mobile — see the max-width:480px rule. -->
       <div class="track-condition-group">
         <div class="track-condition" id="dirtConditionTile">
           <span class="label">Main Track (Dirt)</span>
@@ -2469,27 +2542,6 @@
           <span class="label">Rail</span>
           <span class="tc-value" id="railConditionValue">—</span>
           <span class="tc-source" id="railSourceTag" hidden></span>
-        </div>
-      </div>
-
-      <div class="compass-shell">
-        <svg id="compassSvg" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="46" fill="none" stroke="#2f2f2f" stroke-width="1"/>
-          <circle cx="50" cy="50" r="34" fill="none" stroke="#2f2f2f" stroke-width="1"/>
-          <text x="50" y="12" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">N</text>
-          <text x="50" y="94" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">S</text>
-          <text x="10" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">W</text>
-          <text x="90" y="53" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="8" fill="#a9a496">E</text>
-          <g id="windArrow" class="wind-arrow" transform="rotate(0 50 50)">
-            <line x1="50" y1="50" x2="50" y2="16" stroke="#f0b429" stroke-width="3" stroke-linecap="round"/>
-            <polygon points="50,8 44,20 56,20" fill="#f0b429"/>
-            <circle cx="50" cy="50" r="3.5" fill="#ede6d3"/>
-          </g>
-        </svg>
-        <div class="wind-readout" style="position:absolute;">
-          <div class="spd skel" id="windSpeed">—</div>
-          <div class="unit">MPH</div>
-          <div class="dir skel" id="windDir">—</div>
         </div>
       </div>
     </div>
@@ -7055,6 +7107,12 @@
   // rather than stored, since every auto-imported note already carries a
   // real article URL (TDN/HRN/DRF/NYRA News/SmartPony all set it) and
   // re-deriving avoids a backend change or touching already-imported notes.
+  // n.importedVia is the separate "which pipeline pulled this in" badge —
+  // SmartPony's own feed often carries the ORIGINAL article's real link/
+  // title (e.g. an actual drf.com URL), so the site badge alone would show
+  // "drf.com" with no sign SmartPony's aggregation was what actually
+  // surfaced it. The `!== siteLabel` guard just avoids ever showing the
+  // exact same text twice if a future source ever sets both to match.
   function stableNoteSiteLabel(link){
     if (!link) return null;
     try { return new URL(link).hostname.replace(/^www\./, ""); }
@@ -7076,6 +7134,7 @@
           ${leadBits.join(" · ")}
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
           ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
+          ${n.importedVia && n.importedVia !== siteLabel ? `<span class="stable-site-badge">${escapeHtml(n.importedVia)}</span>` : ""}
           ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
           ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
           <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
@@ -8145,6 +8204,12 @@
         link: q.link || "",
         autoImported: true,
         sentiment: q.sentiment || null,
+        // q.link/q.source above are often the ORIGINAL article SmartPony
+        // itself pulled from (e.g. a real drf.com URL/title) — this is the
+        // only record that SmartPony's own aggregation was what actually
+        // surfaced the note, since the site badge alone would just say
+        // "drf.com" with no sign SmartPony was involved at all.
+        importedVia: "SmartPony",
       });
       stableSmartPonySeen.add(q.quoteId);
     }
