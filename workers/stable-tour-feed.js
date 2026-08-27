@@ -297,7 +297,7 @@
 //    — a tracked horse with zero notes on file doesn't get included at all,
 //    deliberately, since the whole point is surfacing notes at entry time.
 //    Every matching horse for a track gets bundled into ONE digest email per
-//    track per day (buildEntryDigestEmail()/sendEntryDigestEmail()) —
+//    track per day (buildStyledEntryDigestEmail()/sendEntryDigestEmail()) —
 //    grouped by race number, each horse showing trainer/jockey/post plus
 //    every matching note (both manual and auto-imported) — not a separate
 //    Resend send per horse the way this originally shipped; that was too
@@ -374,11 +374,25 @@
 //    gaps (DRF_KEYWORD_TRACK_NAMES and DRF_RACE_NAME_SUFFIXES are both
 //    necessarily incomplete, so an untracked track or race name
 //    occasionally reads as a horse).
+// 20. NYRA News (GET /nyra-news) — NYRA's own Saratoga press releases
+//    (nyra.com/saratoga/news/), first-party rather than third-party
+//    coverage like #7/#17/#19. Plain static HTML, no auth, no robots.txt
+//    restriction. The real wrinkle: a single "Stakes Advance" preview
+//    routinely profiles 3+ horses, each introduced as "OWNER's HORSE NAME
+//    [post N, Jockey]" in prose with no inline horse link and no <meta
+//    keywords> tag to lean on (unlike HRN/DRF) — extractNyraBracketHorse()
+//    reads that bracket convention structurally, falling back to
+//    extractNyraTitleHorse() (the headline's own leading words) only for
+//    the article's lead horse before its own bracket appears later in the
+//    piece. stripNyraPossessivePrefix() handles both "'s "/"’s " and the
+//    bare plural "' "/"’ " an owner name can end in; stripNyraBreedingDescriptor()
+//    then strips a breeding descriptor ("Kentucky homebred", "New
+//    York-bred") that can sit between the owner and the actual horse.
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
 // for jobs #1, #3, #5, #9, #15, and #16 to work — jobs #2, #4, #6, #7, #8,
-// #10, #11, #12, #13, #14, #17, and #18 (fetch-and-parse only, no storage)
-// work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
+// #10, #11, #12, #13, #14, #17, #18, and #20 (fetch-and-parse only, no
+// storage) work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
 // secret (Worker settings -> Variables and Secrets -> Add, type "Secret") —
 // get a free key at pirateweather.net. Job #16 additionally requires a
 // RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
@@ -823,6 +837,16 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "public, max-age=900" });
     }
 
+    if (url.pathname === "/nyra-news" && request.method === "GET") {
+      let result;
+      try {
+        result = await fetchNyraNews();
+      } catch (err) {
+        return json({ error: `NYRA News fetch failed: ${err.message}` }, 502);
+      }
+      return json(result, 200, { "Cache-Control": "public, max-age=900" });
+    }
+
     if (url.pathname === "/smartpony-quotes" && request.method === "GET") {
       let quotes;
       try {
@@ -1099,6 +1123,33 @@ async function handleRequest(request, env) {
         return json({ sentTo: to, resendId: body.id || null }, 200, { "Cache-Control": "no-store" });
       } catch (err) {
         return json({ error: `Test email failed: ${err.message}` }, 500);
+      }
+    }
+
+    // One-off: sends today's REAL matched Saratoga/Belmont/Del Mar horses
+    // (same trainer/note matching as runEntryAlerts(), see
+    // collectTodaysRaceGroupsForPreview()'s own comment) through
+    // buildStyledEntryDigestEmail() with { isTest: true } — a "TEST — "
+    // subject prefix and body label, otherwise byte-for-byte the same
+    // production template — so a template tweak can be previewed against
+    // today's real content without waiting for the Cron Trigger. Never
+    // touches raceNotifyKvKey() dedup state.
+    if (url.pathname === "/debug-send-styled-test-email" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const track = url.searchParams.get("track") || "saratoga";
+      const date = url.searchParams.get("date") || entryAlertTodayDate();
+      const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : NOTIFY_EMAILS;
+      try {
+        const raceGroups = await collectTodaysRaceGroupsForPreview(env, track, date);
+        if (!raceGroups.length) {
+          return json({ sent: false, reason: "No tracked-trainer horses with notes matched for that track/date." }, 200, { "Cache-Control": "no-store" });
+        }
+        const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
+        const result = await sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to);
+        const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+        return json({ sent: true, sentTo: to, horseCount, resendId: result.id || null }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Styled test email failed: ${err.message}` }, 500);
       }
     }
 
@@ -3126,54 +3177,166 @@ const ENTRIES_TRACK_LABEL = {
   shatin: "Sha Tin", happyvalley: "Happy Valley", meydan: "Meydan",
 };
 
-function entryDigestNotesHtml(notes) {
-  // Unchanged from the old per-horse email — shows both manual and
-  // auto-imported notes side by side, same "(manual)" vs "(source name)"
-  // label either way.
-  return notes.map((n) => `<li><strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}): ${escapeHtmlForEmail(n.note)}</li>`).join("");
-}
-
 // One combined digest per track per day instead of a separate email per
 // horse (confirmed real change requested 2026-08-26 — the old version, one
-// Resend send per matched horse, was too noisy). Same per-horse fields as
-// before (Trainer/Jockey, Stable Notes with both manual and auto-imported
-// notes), just grouped under a Race N heading instead of repeated in every
-// subject line. raceGroups is already sorted by race number:
-// [{ race, horses: [{ horse, notes }] }].
-function buildEntryDigestEmail(trackLabel, date, raceGroups) {
-  const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
-  const subject = `GiddyUpQuotes — ${trackLabel} — ${horseCount} horse${horseCount === 1 ? "" : "s"} today (${date})`;
-  const racesHtml = raceGroups.map(({ race, horses }) => {
-    const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
-    const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
-    const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
-    const horsesHtml = horses.map(({ horse, notes }) => `
-      <h4>${escapeHtmlForEmail(horse.name || "Horse")}</h4>
-      <p><strong>Trainer:</strong> ${escapeHtmlForEmail(horse.trainer || "—")} &nbsp; <strong>Jockey:</strong> ${escapeHtmlForEmail(horse.jockey || "—")}${horse.postPosition ? ` &nbsp; <strong>Post:</strong> ${escapeHtmlForEmail(String(horse.postPosition))}` : ""}</p>
-      <p><strong>Stable Notes:</strong></p>
-      <ul>${entryDigestNotesHtml(notes)}</ul>
-    `).join("");
-    return `
-      <h3>Race ${race.raceNumber} — post time ${escapeHtmlForEmail(postTime)}${conditionsBits ? ` — ${escapeHtmlForEmail(conditionsBits)}` : ""}${distBits ? ` — ${escapeHtmlForEmail(distBits)}` : ""}</h3>
-      ${horsesHtml}
-    `;
-  }).join("");
-  const html = `
-    <h2>GiddyUpQuotes — ${escapeHtmlForEmail(trackLabel)}</h2>
-    <p>${date} &nbsp;&middot;&nbsp; <strong>${horseCount} tracked horse${horseCount === 1 ? "" : "s"}</strong> entered today with stable notes on file.</p>
-    ${racesHtml}
-  `;
-  return { subject, html };
-}
-
-async function sendEntryDigestEmail(env, trackLabel, date, raceGroups) {
-  const { subject, html } = buildEntryDigestEmail(trackLabel, date, raceGroups);
+// Resend send per matched horse, was too noisy). raceGroups is already
+// sorted by race number: [{ race, horses: [{ horse, notes }] }].
+//
+// The actual HTML/CSS is buildStyledEntryDigestEmail() below — chosen
+// 2026-08-26 after a design-exploration pass across 10+ styles in a
+// standalone Artifact (Style A's tote-board layout, re-skinned per track:
+// red/white for Saratoga, green/gold for Belmont, turquoise/coral for Del
+// Mar — see STYLED_DIGEST_TRACK_THEME). This replaced an earlier plain
+// <h2>/<h3>/<ul> template that shipped first.
+async function sendEntryDigestEmail(env, track, trackLabel, date, raceGroups) {
+  const { subject, html } = buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups);
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: NOTIFY_EMAILS, subject, html }),
   });
   if (!res.ok) throw new Error(`Resend HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
+}
+
+// ---------- Styled entry digest (2026-08-26 design pass) ----------
+// buildStyledEntryDigestEmail() below is the actual production template
+// sendEntryDigestEmail() uses (see that function's own comment for how it
+// got picked). sendStyledTestEmail()/the /debug-send-styled-test-email
+// route reuse the exact same builder with { isTest: true } — a "TEST — "
+// subject prefix and body label, no dedup KV writes — so a template tweak
+// can be previewed against today's real matched horses without waiting
+// for the Cron Trigger or touching raceNotifyKvKey() state. Fonts are
+// Georgia/Arial/Courier New throughout — the exact fallback stack Gmail
+// actually renders, since Gmail strips custom web fonts entirely — confirmed
+// against the artifact's own Style K, which was re-checked against this
+// same stack before it was picked as the production template.
+
+// Server-side port of index.html's SADDLECLOTH_COLORS/ppBadgeHtml (job's
+// own client-side comment explains the >12 "no dedicated color" gap the
+// same way) — duplicated here rather than shared since the worker and
+// client are separate JS runtimes with no shared module today.
+const SADDLECLOTH_COLORS_EMAIL = {
+  1: { bg: "#e21f26", fg: "#ffffff" }, 2: { bg: "#ffffff", fg: "#000000" },
+  3: { bg: "#1c4faa", fg: "#ffffff" }, 4: { bg: "#ffd400", fg: "#000000" },
+  5: { bg: "#1a7a3c", fg: "#ffffff" }, 6: { bg: "#000000", fg: "#ffd400" },
+  7: { bg: "#f7941d", fg: "#000000" }, 8: { bg: "#f2a7c3", fg: "#000000" },
+  9: { bg: "#40e0d0", fg: "#000000" }, 10: { bg: "#7b2d8e", fg: "#ffffff" },
+  11: { bg: "#9a9a9a", fg: "#c1272d" }, 12: { bg: "#9acd32", fg: "#000000" },
+};
+function ppBadgeHtmlEmail(postPosition) {
+  const n = parseInt(postPosition, 10);
+  const colors = SADDLECLOTH_COLORS_EMAIL[n];
+  if (!colors) {
+    return `<span style="display:inline-block; font-family:'Courier New',Courier,monospace; font-weight:700; font-size:12px;">${escapeHtmlForEmail(postPosition || "—")}</span>`;
+  }
+  return `<span style="display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:4px; border:1px solid rgba(0,0,0,0.35); background:${colors.bg}; color:${colors.fg}; font-family:'Courier New',Courier,monospace; font-weight:700; font-size:12px; vertical-align:middle;">${n}</span>`;
+}
+
+// Rebuilds today's real matched horses (same trainer/note matching
+// runEntryAlerts() uses) WITHOUT checking or writing raceNotifyKvKey()
+// dedup entries — so it reproduces today's actual digest content even
+// after the real cron run already marked those same horses as notified.
+// Preview-only; never called from the real Cron Trigger / runEntryAlerts()
+// path.
+async function collectTodaysRaceGroupsForPreview(env, track, date) {
+  const state = await readState(env);
+  const trackedLastNames = new Set(state.trainers.map(lastNameKey));
+  const untrackedHorseNames = new Set(
+    state.notes.filter((n) => !n.trainer && n.horse).map((n) => n.horse.trim().toLowerCase())
+  );
+  const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
+  let result;
+  if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
+  else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
+  else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+  else result = await fetchMonmouthEntriesDay(date);
+
+  const raceGroups = [];
+  for (const race of result.races || []) {
+    const matchedHorses = [];
+    for (const horse of race.horses || []) {
+      if (horse.scratched) continue;
+      const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
+      const hasUntrackedNote = untrackedHorseNames.has((horse.name || "").trim().toLowerCase());
+      if (!trainerTracked && !hasUntrackedNote) continue;
+      const notes = notesForHorse(state.notes, horse.trainer, horse.name);
+      if (!notes.length) continue;
+      matchedHorses.push({ horse, notes });
+    }
+    if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
+  }
+  return raceGroups;
+}
+
+// Per-track accent colors for the styled preview — same values used in the
+// design-exploration artifact's Style K (Saratoga)/L (Belmont)/M (Del Mar).
+const STYLED_DIGEST_TRACK_THEME = {
+  saratoga: { accent: "#a3241f", bg: "#fffdfa", ink: "#2a1c17", dim: "#8a6f68", hairline: "#ecdcd9" },
+  belmont: { accent: "#0d3b2a", bg: "#fbfdfb", ink: "#14211a", dim: "#6b8074", hairline: "#e3ede6" },
+  delmar: { accent: "#0e8a8a", bg: "#fdfaf3", ink: "#1c3a3a", dim: "#5c7a78", hairline: "#e3ddc8" },
+};
+
+// Full untruncated note text, each as its own <div> (not a <ul><li> list,
+// to match the artifact's card layout) — inline-styled throughout since
+// Gmail strips most <style>-block rules and never renders custom web fonts
+// at all, hence Georgia/Arial/Courier New everywhere instead of the
+// artifact's own Oswald/Fraunces/JetBrains Mono. isTest only changes the
+// subject prefix and the header's date line — everything else (colors,
+// layout, badges, full quotes) is identical between a real send and a
+// preview one.
+function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest = false } = {}) {
+  const theme = STYLED_DIGEST_TRACK_THEME[track] || STYLED_DIGEST_TRACK_THEME.saratoga;
+  const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${trackLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} today (${date})`;
+  const racesHtml = raceGroups.map(({ race, horses }) => {
+    const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
+    const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
+    const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
+    const raceTag = [`RACE ${race.raceNumber}`, postTime, conditionsBits, distBits].filter(Boolean).join(" · ");
+    const horsesHtml = horses.map(({ horse, notes }) => {
+      const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition) : "";
+      // Full, untruncated note text — no slicing anywhere in this path.
+      const notesHtml = notes.map((n) => `
+        <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink}; border-left:2px solid ${theme.accent}; padding-left:10px; margin:4px 0 10px;">
+          <strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}): ${escapeHtmlForEmail(n.note)}
+        </div>
+      `).join("");
+      return `
+        <div style="margin:10px 0 3px;">
+          ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
+        </div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:${theme.dim}; margin-bottom:5px;">${escapeHtmlForEmail(horse.trainer || "—")}${horse.jockey ? ` &middot; ${escapeHtmlForEmail(horse.jockey)}` : ""}</div>
+        ${notesHtml}
+      `;
+    }).join("");
+    return `
+      <div style="padding:16px 30px; border-bottom:1px solid ${theme.hairline};">
+        <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; letter-spacing:0.06em; background:${theme.accent}; color:#ffffff; padding:3px 9px; border-radius:3px; margin-bottom:10px;">${escapeHtmlForEmail(raceTag)}</span>
+        ${horsesHtml}
+      </div>
+    `;
+  }).join("");
+  const html = `
+    <div style="background:${theme.bg}; color:${theme.ink}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
+      <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double ${theme.accent};">
+        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:${theme.accent}; margin-bottom:6px;">GiddyUpQuotes &mdash; ${escapeHtmlForEmail(trackLabel)} Edition</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:${theme.dim};">${isTest ? "TEST SEND &middot; " : ""}${escapeHtmlForEmail(date)} &middot; ${horseCount} tracked horse${horseCount === 1 ? "" : "s"} today</div>
+      </div>
+      ${racesHtml}
+    </div>
+  `;
+  return { subject, html };
+}
+
+async function sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to) {
+  const { subject, html } = buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest: true });
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: RESEND_FROM_EMAIL, to, subject, html }),
+  });
+  if (!res.ok) throw new Error(`Resend HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
+  return await res.json().catch(() => ({}));
 }
 
 // The actual job: scans every track in ENTRIES_SOURCE_BY_TRACK for
@@ -3270,7 +3433,7 @@ async function runEntryAlerts(env, source = "manual") {
       if (!raceGroups.length) continue;
       const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
       try {
-        await sendEntryDigestEmail(env, trackLabel, date, raceGroups);
+        await sendEntryDigestEmail(env, track, trackLabel, date, raceGroups);
         for (const { horses } of raceGroups) {
           for (const { key } of horses) {
             await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
@@ -3692,6 +3855,224 @@ async function fetchDrfNews() {
   }
 
   return { source: DRF_SITEMAP_NEWS_URL, fetchedAt: new Date().toISOString(), articles };
+}
+
+// ---------- NYRA News (job #20) ----------
+// NYRA's own Saratoga press releases (nyra.com/saratoga/news/) — first-
+// party, not third-party coverage like TDN/HRN/DRF. Verified directly:
+// plain unauthenticated static HTML (a bare curl with no JS execution
+// already returns full article text, unlike DRF's Next.js hydration data),
+// no robots.txt restriction, and real substantial trainer quotes in the
+// site's "Stakes Advance" articles — a single preview piece can profile
+// 3+ horses, each with its own trainer and its own run of quote paragraphs.
+//
+// Horse identification is the one real wrinkle here: unlike HRN (inline
+// horse links) or DRF (a <meta keywords> tag naming every horse), NYRA's
+// prose has neither. What it DOES have, verified against a real article:
+// every horse besides the article's lead horse gets introduced as
+// "OWNER's HORSE NAME [post N, Jockey]" — extractNyraBracketHorse() below
+// leans on that bracket as a structural marker, and falls back to
+// extractNyraTitleHorse() (the article's own headline reliably leads with
+// the horse's name, e.g. "Awesome Czech looks to defend her title...") for
+// the lead horse, which never gets its own bracket until well after its
+// first quote.
+const NYRA_NEWS_LIST_URL = "https://www.nyra.com/saratoga/news/";
+const NYRA_BASE = "https://www.nyra.com";
+
+// Strips an owner's possessive prefix off the FRONT of a name run, cutting
+// at the LAST possessive marker found — an owner name is itself often
+// several comma-joined names ("Delta Squad Racing, HRH Prince Faisal...and
+// Cosmo Stables' Baby Vino"), so only the rightmost marker (closest to the
+// actual horse name) matters. Checks all four forms: a normal possessive
+// ("Stables's "/"Stables’s ") AND a bare plural possessive with no
+// trailing s ("Stables' "/"Stables’ ") — confirmed real that NYRA uses
+// both depending on whether the owner name already ends in "s".
+function stripNyraPossessivePrefix(text) {
+  const markers = ["’s ", "'s ", "’ ", "' "];
+  let bestIdx = -1, bestLen = 0;
+  for (const marker of markers) {
+    const idx = text.lastIndexOf(marker);
+    if (idx > bestIdx) { bestIdx = idx; bestLen = marker.length; }
+  }
+  return bestIdx === -1 ? text : text.slice(bestIdx + bestLen).trim();
+}
+
+// Confirmed real gap this closes: "Blue Heaven Farm's Kentucky homebred Go
+// for Launch saved ground..." — stripNyraPossessivePrefix() only removes
+// the owner's name, leaving a breeding descriptor ("Kentucky homebred",
+// "New York-bred") sitting between it and the actual horse name, which
+// then got filed as part of the horse name itself (a real functional bug,
+// not cosmetic — notesForHorse()/findHorseStableNotes() need an EXACT
+// horse-name match). ".*bred " is greedy, so it strips through the LAST
+// "*bred " in the text, i.e. past the descriptor and up to the horse's own
+// name — verified against the live article above.
+function stripNyraBreedingDescriptor(text) {
+  return text.replace(/^.*bred\s+/i, "");
+}
+
+// A headline's leading words ARE the horse's name up until the verb phrase
+// — but a real horse name can itself contain lowercase filler words ("Sail
+// With the Wind", "And One More Time"), so this can't just stop at the
+// first lowercase word. Instead it keeps consuming capitalized words, and
+// only keeps going through a lowercase word if the word right after it is
+// capitalized again (i.e. the lowercase word is bridging two more name
+// words, not starting the headline's verb). Verified against every title
+// in a real /saratoga/news/ listing pull (see the job's own commit).
+function extractNyraTitleHorse(title) {
+  const words = title.split(/\s+/);
+  const nameWords = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const isCap = /^[A-Z]/.test(w);
+    const bridgesToCap = !isCap && i + 1 < words.length && /^[A-Z]/.test(words[i + 1]);
+    if (isCap || bridgesToCap) { nameWords.push(w); continue; }
+    break;
+  }
+  // A headline that opens with the owner's possessive name before the horse
+  // ("Blue Heaven Farm's Kentucky homebred Go for Launch saved...") passes
+  // the same capitalized/bridging test as the owner name itself — strip the
+  // owner off, then any breeding descriptor between it and the actual horse
+  // name, the same two-step extractNyraBracketHorse() uses.
+  const guess = stripNyraBreedingDescriptor(stripNyraPossessivePrefix(nameWords.join(" ").trim()));
+  return guess || null;
+}
+
+// Reads the "OWNER's HORSE NAME [post N, Jockey]" bracket convention — the
+// horse name is whatever sits between the bracket and either (a) the last
+// possessive marker before it (stripping the owner's name off the front) or
+// (b) the start of the paragraph if there's no possessive in range. Capped
+// to the last 5 words as a backstop against an unrelated sentence bleeding
+// in on a paragraph with no possessive at all.
+function extractNyraBracketHorse(paragraphPlainText) {
+  const m = paragraphPlainText.match(/^[^.!?]*?\[post\s+\d+/);
+  if (!m) return null;
+  const rawPrefix = m[0].replace(/\[post\s+\d+.*/, "").trim();
+  const prefix = stripNyraBreedingDescriptor(stripNyraPossessivePrefix(rawPrefix));
+  const words = prefix.split(/\s+/).filter(Boolean);
+  const capped = words.length > 5 ? words.slice(-5).join(" ") : prefix;
+  return capped || null;
+}
+
+// One combined section per (trainer, horse) pair found in the article —
+// every paragraph naming that pair's quotes gets merged into one section's
+// text (a stakes-preview routinely gives one trainer 2-3 separate quote
+// paragraphs about the same horse; keeping those as one section instead of
+// three means the resulting note is the full, untruncated run of what that
+// trainer said, not just the first paragraph of it).
+function extractNyraSections(paragraphs, titleHorseGuess) {
+  // Step 1: which trainers does this article actually name, and under what
+  // full name — scanned up front across every paragraph, same as HRN's own
+  // quotedLastNames-first approach, so a quote attributed only by surname
+  // ("De Paz said") can still resolve to the full name ("Horacio De Paz")
+  // announced elsewhere in the piece.
+  const trainerFullNameByKey = {};
+  const trainerNamePatterns = [
+    // No literal "." in this class — confirmed real bug: "for trainer Jim
+    // Ryerson." (sentence-ending period right against the name) would
+    // otherwise swallow the period into the captured word, making
+    // lastNameKey() produce "ryerson." instead of "ryerson" and silently
+    // failing to match this trainer's own quote attributions later.
+    /Trained by ([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){1,2})/g,
+    /for trainer ([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){1,2})/g,
+  ];
+  for (const para of paragraphs) {
+    for (const re of trainerNamePatterns) {
+      for (const m of para.matchAll(re)) {
+        const fullName = m[1].trim();
+        const key = lastNameKey(fullName);
+        if (!trainerFullNameByKey[key]) trainerFullNameByKey[key] = fullName;
+      }
+    }
+  }
+  if (!Object.keys(trainerFullNameByKey).length) return [];
+
+  // Step 2: walk paragraphs in order, tracking which horse is currently
+  // "in frame" (updated by the bracket convention, seeded from the
+  // headline for the lead horse before its own bracket ever appears), and
+  // building one merged section per (trainer, horse) pair.
+  let currentHorse = titleHorseGuess;
+  const sections = {}; // `${trainerKey}|${horse}` -> { trainerName, horse, parts: [] }
+
+  for (const para of paragraphs) {
+    const bracketHorse = extractNyraBracketHorse(para);
+    if (bracketHorse) currentHorse = bracketHorse;
+    if (!currentHorse) continue;
+
+    let attributed = null;
+    const afterMatch = para.match(/\b([A-Z][A-Za-z’'-]+(?:\s[A-Z][A-Za-z’'-]+)?)\s+said\b/);
+    if (afterMatch) attributed = afterMatch[1];
+    else {
+      const beforeMatch = para.match(/\bsaid\s+([A-Z][A-Za-z’'-]+(?:\s[A-Z][A-Za-z’'-]+)?)\b/);
+      if (beforeMatch) attributed = beforeMatch[1];
+    }
+    if (!attributed) continue;
+
+    const key = lastNameKey(attributed);
+    const fullName = trainerFullNameByKey[key];
+    if (!fullName) continue; // quoted someone with no "Trained by"/"for trainer" intro anywhere — don't guess
+
+    const quoteSpans = [...para.matchAll(/[“"]([^”"]{4,600})[”"]/g)].map((m) => m[1].trim()).filter(Boolean);
+    if (!quoteSpans.length) continue;
+
+    const sectionKey = `${key}|${currentHorse}`;
+    if (!sections[sectionKey]) sections[sectionKey] = { trainerName: fullName, horse: currentHorse, parts: [] };
+    sections[sectionKey].parts.push(quoteSpans.join(" "));
+  }
+
+  return Object.values(sections).map((s) => ({
+    trainerName: s.trainerName,
+    horseNames: [s.horse],
+    text: s.parts.join(" "),
+  }));
+}
+
+async function fetchNyraNews() {
+  const listRes = await fetch(NYRA_NEWS_LIST_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 300, cacheEverything: true },
+  });
+  if (!listRes.ok) throw new Error(`NYRA News list returned HTTP ${listRes.status}`);
+  const listHtml = await listRes.text();
+
+  const items = [];
+  const seenLinks = new Set();
+  for (const m of listHtml.matchAll(/<a href="(\/saratoga\/news\/[^"]+\/)" class="block">[\s\S]*?<h2[^>]*>\s*([\s\S]*?)\s*<\/h2>[\s\S]*?<span>([^<]+)<\/span>/g)) {
+    const link = NYRA_BASE + m[1];
+    if (seenLinks.has(link)) continue;
+    seenLinks.add(link);
+    const title = decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    const dateLabel = m[3].trim(); // e.g. "Aug 26 2026"
+    const pubDate = new Date(dateLabel);
+    items.push({ link, title, pubDate: isNaN(pubDate) ? null : pubDate.toISOString() });
+  }
+
+  const articles = [];
+  for (const item of items.slice(0, MAX_ARTICLES_PER_RUN)) {
+    let articleRes;
+    try {
+      articleRes = await fetch(item.link, {
+        headers: { "User-Agent": BROWSER_UA },
+        cf: { cacheTtl: 3600, cacheEverything: true },
+      });
+    } catch (err) {
+      continue; // skip this one article, don't fail the whole batch
+    }
+    if (!articleRes.ok) continue;
+    const html = await articleRes.text();
+    const bodyIdx = html.indexOf('class="format-text"');
+    if (bodyIdx === -1) continue;
+    const bodyHtml = html.slice(bodyIdx, Math.min(bodyIdx + 20000, html.length));
+    const paragraphs = [...bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
+      .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    if (!paragraphs.length) continue;
+    const titleHorseGuess = extractNyraTitleHorse(item.title);
+    const sections = extractNyraSections(paragraphs, titleHorseGuess);
+    if (!sections.length) continue;
+    articles.push({ guid: item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
+  }
+
+  return { source: NYRA_NEWS_LIST_URL, fetchedAt: new Date().toISOString(), articles };
 }
 
 // ---------- SmartPony partner quotes (job #18) ----------
