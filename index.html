@@ -3252,6 +3252,15 @@
       photo: "assets/track.png", photoAlt: "Aerial view of Saratoga Race Course",
       tideStationId: null, tideRangeFt: null,
       entriesSource: "nyra", resultsSource: "nyra", changesSource: "nyra-conditions",
+      // NWS county UGC for Saratoga County — confirmed real gap: a tornado
+      // warning scoped to "East Central Saratoga County" never showed up
+      // here because the track's own point sits outside that specific
+      // polygon, even though the county-wide warning very much applied.
+      // Set on severeWeatherApiGet() to query the WHOLE county instead of
+      // just this one point (see the worker's own /nws-alerts comment).
+      // Confirmed via https://api.weather.gov/points/43.0731,-73.7699.
+      // User's explicit request — Saratoga only for now, not every track.
+      countyZone: "NYC091",
     },
     monmouth: {
       id: "monmouth", name: "Monmouth Park", shortName: "Monmouth",
@@ -7854,7 +7863,7 @@
   const TRAINER_FIRST_NAME_ALIASES = {
     bill: "william", billy: "william", will: "william",
     bob: "robert", bobby: "robert", rob: "robert", robbie: "robert",
-    dick: "richard", rich: "richard", richie: "richard",
+    dick: "richard", rich: "richard", richie: "richard", rick: "richard",
     jim: "james", jimmy: "james",
     mike: "michael", mickey: "michael",
     tom: "thomas", tommy: "thomas",
@@ -8534,8 +8543,14 @@
   // effect"/"ended" history entries in the alert-feed dropdown).
   let activeSevereAlerts = [];
 
-  async function severeWeatherApiGet(lat, lon){
-    const res = await fetch(stableApiUrl(`/nws-alerts?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`), { cache: "no-store" });
+  // countyZone (a track's own NWS county UGC, e.g. Saratoga's "NYC091")
+  // takes precedence over lat/lon when set — whole-county coverage instead
+  // of just the track's one point, see TRACKS.saratoga's own comment.
+  async function severeWeatherApiGet(lat, lon, countyZone){
+    const query = countyZone
+      ? `zone=${encodeURIComponent(countyZone)}`
+      : `lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
+    const res = await fetch(stableApiUrl(`/nws-alerts?${query}`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     return Array.isArray(data.alerts) ? data.alerts : [];
@@ -8591,7 +8606,7 @@
     const results = await Promise.all(TRACK_REGIONS.US.map(async (trackId) => {
       const track = TRACKS[trackId];
       try{
-        const alerts = await severeWeatherApiGet(track.lat, track.lon);
+        const alerts = await severeWeatherApiGet(track.lat, track.lon, track.countyZone);
         return { trackId, alerts: alerts.map(a => ({ ...a, trackShortName: track.shortName })) };
       } catch(err){
         console.error(`Severe weather alerts fetch failed (${track.shortName})`, err);
