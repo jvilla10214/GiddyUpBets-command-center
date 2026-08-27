@@ -7694,6 +7694,18 @@
   }
   let stableDrfSeen = loadStableDrfSeen();
 
+  // Same per-device "seen" convention again, for job #20's NYRA News source.
+  const STABLE_NYRA_NEWS_SEEN_KEY = "giddyupbets_stable_nyra_news_seen_v1";
+  function loadStableNyraNewsSeen(){
+    try { return new Set(JSON.parse(localStorage.getItem(STABLE_NYRA_NEWS_SEEN_KEY)) ?? []); }
+    catch { return new Set(); }
+  }
+  function saveStableNyraNewsSeen(){
+    try { localStorage.setItem(STABLE_NYRA_NEWS_SEEN_KEY, JSON.stringify([...stableNyraNewsSeen])); }
+    catch(err){ console.error("Stable NYRA News-seen failed to save", err); }
+  }
+  let stableNyraNewsSeen = loadStableNyraNewsSeen();
+
   // Same idea again, for job #18's SmartPony source — keyed by SmartPony's
   // own quote id (a real unique id, unlike TDN/HRN's composite string keys
   // built out of link+trainer+horse since those sources have no id of
@@ -8014,6 +8026,57 @@
     }
   }
 
+  // Job #20 — same shape as autoImportHrnNews()/autoImportDrfNews() above,
+  // pointed at the worker's /nyra-news route (NYRA's own Saratoga press
+  // releases — first-party, not third-party coverage). One real difference
+  // from HRN/DRF: NYRA's stakes-preview articles routinely profile several
+  // horses in one piece, each with its own trainer and its own run of quote
+  // paragraphs — the worker's extractNyraSections() already merges every
+  // paragraph for the same trainer+horse pair into one combined section
+  // before this ever sees it, so section.text here is already the full,
+  // untruncated run of that trainer's quotes about that one horse.
+  async function autoImportNyraNews(){
+    if (!stableTrainers.length) return; // nothing to match against
+    let data;
+    try{ data = await stableApiGet("/nyra-news"); }
+    catch(err){ console.error("NYRA News fetch failed", err); return; }
+
+    const noteItems = [];
+    for (const article of data.articles || []){
+      for (const section of article.sections || []){
+        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
+        if (!matchedTrainer) continue;
+        for (const horseName of section.horseNames || []){
+          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
+          if (stableNyraNewsSeen.has(seenKey)) continue;
+          noteItems.push({
+            trainer: matchedTrainer,
+            horse: horseName,
+            note: section.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+          });
+          stableNyraNewsSeen.add(seenKey);
+        }
+      }
+    }
+    if (!noteItems.length) return;
+
+    try{
+      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
+      saveStableNyraNewsSeen();
+      const fresh = await loadStableData();
+      stableTrainers = fresh.trainers;
+      stableNotes = fresh.notes;
+      stableTrainerMeta = fresh.trainerMeta;
+      renderStableTour();
+    } catch(err){
+      console.error("NYRA News import failed to save", err);
+    }
+  }
+
   // Job #18 — SmartPony partner quotes, same overall shape as the imports
   // above but simpler: the worker's /smartpony-quotes route already
   // returns one quote per horse/trainer (SmartPony did the article
@@ -8090,6 +8153,7 @@
     autoImportTdnNotebook();
     autoImportHrnNews();
     autoImportDrfNews();
+    autoImportNyraNews();
     autoImportSmartPonyQuotes();
   });
   $("stableFeedCheckBtn").addEventListener("click", () => {
@@ -8097,6 +8161,7 @@
     autoImportTdnNotebook();
     autoImportHrnNews();
     autoImportDrfNews();
+    autoImportNyraNews();
     autoImportSmartPonyQuotes();
   });
   // Auto-import "seen" tracking lives in THIS browser's localStorage (per
@@ -8104,7 +8169,7 @@
   // switching Worker URLs — but that means moving Stable Tour to a fresh
   // shared store (or pointing at a different Worker) leaves this device
   // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs all six auto-import checks.
+  // This clears that local memory and re-runs all seven auto-import checks.
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
     stableSeenArticles = [];
     saveStableSeenArticles();
@@ -8116,6 +8181,8 @@
     saveStableHrnSeen();
     stableDrfSeen = new Set();
     saveStableDrfSeen();
+    stableNyraNewsSeen = new Set();
+    saveStableNyraNewsSeen();
     stableSmartPonySeen = new Set();
     saveStableSmartPonySeen();
     $("stableFeedStatus").textContent = "Import history cleared — checking now…";
@@ -8123,6 +8190,7 @@
     autoImportTdnNotebook();
     autoImportHrnNews();
     autoImportDrfNews();
+    autoImportNyraNews();
     autoImportSmartPonyQuotes();
     fetchNewsWire();
   });
@@ -10964,12 +11032,14 @@
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
     autoImportHrnNews(); // same reasoning
     autoImportDrfNews(); // same reasoning
+    autoImportNyraNews(); // same reasoning
     autoImportSmartPonyQuotes(); // same reasoning
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
   setInterval(autoImportTdnNotebook, 60 * 60 * 1000); // same cadence, separate interval so one source's hiccup can't block the other
   setInterval(autoImportHrnNews, 60 * 60 * 1000); // same cadence, separate interval too
   setInterval(autoImportDrfNews, 60 * 60 * 1000); // same cadence, separate interval too
+  setInterval(autoImportNyraNews, 60 * 60 * 1000); // same cadence, separate interval too
   setInterval(autoImportSmartPonyQuotes, 60 * 60 * 1000); // same cadence, separate interval too
 
   // Refresh from the shared source periodically and whenever the tab
