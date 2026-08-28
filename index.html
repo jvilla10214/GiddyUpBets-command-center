@@ -8230,10 +8230,20 @@
   // of what this entry's trainer field says — the note stays valid even if
   // the horse switches barns before it runs. Those bypass the same-surname
   // disambiguation entirely since there's no trainer to disambiguate against.
+  // Entries sometimes carries a trailing country-of-origin suffix ("Storm
+  // Miami (IRE)") that a note filed under the plain name ("Storm Miami")
+  // would otherwise never match — confirmed real: a live entry for a
+  // foreign-bred horse showed no note indicator over exactly this mismatch.
+  // Stripped from both sides, not just the entries side, in case a note
+  // itself ever picks up the suffix too (e.g. copied from an article
+  // headline).
+  function stripHorseCountrySuffix(name){
+    return name.replace(/\s*\([a-z]{2,4}\)\s*$/i, "").trim();
+  }
   function findHorseStableNotes(trainer, horseName){
     if (!horseName) return [];
-    const wantHorse = horseName.trim().toLowerCase();
-    const horseMatches = stableNotes.filter(n => n.horse && n.horse.trim().toLowerCase() === wantHorse);
+    const wantHorse = stripHorseCountrySuffix(horseName.trim().toLowerCase());
+    const horseMatches = stableNotes.filter(n => n.horse && stripHorseCountrySuffix(n.horse.trim().toLowerCase()) === wantHorse);
     const untracked = horseMatches.filter(n => !n.trainer);
     let matchedTracked = [];
     if (trainer){
