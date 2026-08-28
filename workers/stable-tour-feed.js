@@ -278,7 +278,13 @@
 //    /raceday/dates lists which dates a track actually has a saved snapshot
 //    for (via STABLE_KV.list(), newest first, capped at 60) so the client
 //    can build a browsable date list without fetching every day's full
-//    payload just to populate it.
+//    payload just to populate it. Since the client only saves opportunis-
+//    tically (nobody has to be watching for results to go final), a day
+//    nobody had open keeps an entries-only snapshot forever — so
+//    backfillRaceDayResults() re-checks the trailing 10 days' archived
+//    snapshots on every scheduled() firing (piggybacking job #16's Cron
+//    Trigger, no new one needed) and fills in results wherever they're
+//    missing. Manual equivalent: GET /debug-backfill-raceday-results.
 //
 // 16. Tracked-horse entry alert emails (Cron Trigger -> scheduled(), plus a
 //    manual GET /debug-run-scheduled for on-demand testing without waiting
@@ -550,6 +556,9 @@ export default {
     ctx.waitUntil(
       runEntryAlerts(env, "scheduled").catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
     );
+    ctx.waitUntil(
+      backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
+    );
   },
 };
 
@@ -820,10 +829,12 @@ async function handleRequest(request, env) {
     // import source here is best-effort text extraction (DRF/TDN/HRN/
     // SmartPony), and a misattribution slipping through is a "fix this one
     // note" problem, not a "rebuild the whole pipeline" one. Same no-gate
-    // trust level as every other /notes route. Only touches the three
-    // fields actually editable client-side; everything else (source, link,
-    // date, autoImported, sentiment, importedVia, capturedAt) stays as
-    // originally captured.
+    // trust level as every other /notes route. `link` was added alongside
+    // the original three client-editable fields to fix a batch of manually-
+    // pushed notes that carried a broken drf.com/sar_... URL (a scratch-file
+    // slug that leaked into the link field) instead of the real
+    // drf.com/news/... path — everything else (source, date, autoImported,
+    // sentiment, importedVia, capturedAt) still stays as originally captured.
     if (url.pathname === "/notes" && request.method === "PATCH") {
       const body = await request.json().catch(() => ({}));
       if (!body.id) return json({ error: "Missing id" }, 400);
@@ -833,6 +844,7 @@ async function handleRequest(request, env) {
       if (typeof body.trainer === "string") note.trainer = body.trainer.trim();
       if (typeof body.horse === "string") note.horse = body.horse.trim();
       if (typeof body.note === "string") note.note = body.note.trim();
+      if (typeof body.link === "string") note.link = body.link.trim();
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
       await bumpDataVersion(env);
       return json({ note }, 200, { "Cache-Control": "no-store" });
@@ -1325,6 +1337,21 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
+    // Manual trigger for backfillRaceDayResults() — same reasoning as
+    // /debug-run-scheduled above (also runs on the real Cron Trigger
+    // already, this is just the on-demand equivalent for testing or
+    // catching up a gap right away instead of waiting for the next firing).
+    if (url.pathname === "/debug-backfill-raceday-results" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      let result;
+      try {
+        result = await backfillRaceDayResults(env);
+      } catch (err) {
+        return json({ error: `Race day results backfill failed: ${err.message}` }, 500);
+      }
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
     // Sends a real email through the Resend pipeline right now, independent
     // of runEntryAlerts()'s own matching/dedup logic — a way to confirm
     // RESEND_API_KEY, RESEND_FROM_EMAIL, and NOTIFY_EMAILS are all correct
@@ -1747,6 +1774,54 @@ function racedayKvKey(track, date) {
   return `raceday:${safeTrack}:${safeDate}`;
 }
 
+// Fills in results for already-archived race days that only ever got their
+// entries saved — confirmed real gap: saveRaceDaySnapshot() (client) only
+// ever writes when someone actually has that track/date's card open while
+// results are posting (see /raceday POST's own comment), so a day nobody
+// was watching keeps an entries-only snapshot forever with no way to
+// self-correct. Runs on every scheduled() firing (piggybacks the existing
+// entry-alerts Cron Trigger — no new trigger needed) and via
+// /debug-backfill-raceday-results for on-demand/manual use. Bounded to a
+// trailing window so a caught-up backlog doesn't re-check the same old,
+// permanently-resultless dates (rained out, canceled, etc.) every run.
+const RACEDAY_BACKFILL_LOOKBACK_DAYS = 10;
+async function backfillRaceDayResults(env) {
+  const cutoff = new Date(Date.now() - RACEDAY_BACKFILL_LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10);
+  const listed = await env.STABLE_KV.list({ prefix: "raceday:" });
+  let checked = 0;
+  let backfilled = 0;
+  for (const key of listed.keys) {
+    const m = key.name.match(/^raceday:([^:]+):(\d{4}-\d{2}-\d{2})$/);
+    if (!m) continue;
+    const [, track, date] = m;
+    if (date < cutoff) continue; // too old — not worth re-checking forever
+    const resultsSource = RESULTS_SOURCE_BY_TRACK[track];
+    if (!resultsSource) continue; // no results source wired for this track
+
+    const raw = await env.STABLE_KV.get(key.name);
+    if (!raw) continue;
+    const record = JSON.parse(raw);
+    if (Array.isArray(record.results) && record.results.length) continue; // already has results
+
+    checked++;
+    let result;
+    try {
+      result = resultsSource === "dmtc" ? await fetchDmtcResultsDay(date)
+        : resultsSource === "sportinglife" ? await fetchSportingLifeResultsDay(track, date)
+        : await fetchNyraResultsDay(track, date);
+    } catch (err) {
+      continue; // best-effort — one bad fetch shouldn't block the rest of the batch
+    }
+    const races = result?.races || [];
+    if (!races.length) continue; // still nothing to backfill — card hasn't gone final yet, or genuinely no results
+
+    await env.STABLE_KV.put(key.name, JSON.stringify({ ...record, results: races, capturedAt: new Date().toISOString() }));
+    backfilled++;
+  }
+  return { checked, backfilled };
+}
+
 // Job #16's dedup record — one KV entry per horse per race, so a horse that
 // stays entered across several cron runs (or gets rechecked on a later date
 // as its card firms up) only ever triggers one email. TTL'd (see
@@ -1794,6 +1869,22 @@ async function readState(env) {
 async function readNotes(env) {
   const raw = await env.STABLE_KV.get("notes");
   return raw ? JSON.parse(raw) : [];
+}
+
+async function readTrainers(env) {
+  const raw = await env.STABLE_KV.get("trainers");
+  return raw ? JSON.parse(raw) : [];
+}
+
+async function readNotesAndTrainers(env) {
+  const [notesRaw, trainersRaw] = await Promise.all([
+    env.STABLE_KV.get("notes"),
+    env.STABLE_KV.get("trainers"),
+  ]);
+  return {
+    notes: notesRaw ? JSON.parse(notesRaw) : [],
+    trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
+  };
 }
 
 async function readTrainersAndMeta(env) {
@@ -3524,10 +3615,21 @@ function entryAlertTodayDate() {
 // note stays valid even if the horse switches barns before it runs. Those
 // bypass the same-surname disambiguation entirely since there's no trainer
 // to disambiguate against.
+// Entries data sometimes carries a trailing country-of-origin suffix
+// ("Storm Miami (IRE)") that a note filed under the plain name ("Storm
+// Miami") would otherwise never match — confirmed real: a live entry
+// alert for a foreign-bred horse was silently missed over exactly this
+// mismatch. Stripped from both sides before comparing, not just the
+// entries side, in case a note itself ever picks up the suffix too (e.g.
+// copied straight from an article headline).
+function stripHorseCountrySuffix(name) {
+  return name.replace(/\s*\([a-z]{2,4}\)\s*$/i, "").trim();
+}
+
 function notesForHorse(notes, trainer, horseName) {
   if (!horseName) return [];
-  const wantHorse = horseName.trim().toLowerCase();
-  const horseMatches = notes.filter((n) => n.horse && n.horse.trim().toLowerCase() === wantHorse);
+  const wantHorse = stripHorseCountrySuffix(horseName.trim().toLowerCase());
+  const horseMatches = notes.filter((n) => n.horse && stripHorseCountrySuffix(n.horse.trim().toLowerCase()) === wantHorse);
   const untracked = horseMatches.filter((n) => !n.trainer);
   let matchedTracked = [];
   if (trainer) {
@@ -3641,10 +3743,10 @@ function ppBadgeHtmlEmail(postPosition) {
 // Preview-only; never called from the real Cron Trigger / runEntryAlerts()
 // path.
 async function collectTodaysRaceGroupsForPreview(env, track, date) {
-  const state = await readState(env);
+  const state = await readNotesAndTrainers(env); // trainerMeta isn't used anywhere in this function
   const trackedLastNames = new Set(state.trainers.map(lastNameKey));
   const untrackedHorseNames = new Set(
-    state.notes.filter((n) => !n.trainer && n.horse).map((n) => n.horse.trim().toLowerCase())
+    state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
   );
   const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
   let result;
@@ -3659,7 +3761,7 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
     for (const horse of race.horses || []) {
       if (horse.scratched) continue;
       const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
-      const hasUntrackedNote = untrackedHorseNames.has((horse.name || "").trim().toLowerCase());
+      const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
       if (!trainerTracked && !hasUntrackedNote) continue;
       const notes = notesForHorse(state.notes, horse.trainer, horse.name);
       if (!notes.length) continue;
@@ -3723,7 +3825,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         <div style="margin:10px 0 3px;">
           ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
         </div>
-        <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:${theme.dim}; margin-bottom:5px;">${escapeHtmlForEmail(horse.trainer || "—")}${horse.jockey ? ` &middot; ${escapeHtmlForEmail(horse.jockey)}` : ""}</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:#000000; margin-bottom:5px;">${escapeHtmlForEmail(horse.trainer || "—")}${horse.jockey ? ` &middot; ${escapeHtmlForEmail(horse.jockey)}` : ""}</div>
         ${notesHtml}
       `;
     }).join("");
@@ -3788,14 +3890,14 @@ async function runEntryAlerts(env, source = "manual") {
   let checked = 0;
   let sent = 0;
   try {
-    const state = await readState(env);
+    const state = await readNotesAndTrainers(env); // trainerMeta isn't used anywhere in this function
     // Horse names (lowercased) with at least one trainer-less note — these
     // need checking even when horse.trainer isn't a tracked trainer at all,
     // since a trainer-less note is deliberately not pinned to any trainer
     // (see /notes POST) and must still catch the horse regardless of who
     // ends up training it.
     const untrackedHorseNames = new Set(
-      state.notes.filter((n) => !n.trainer && n.horse).map((n) => n.horse.trim().toLowerCase())
+      state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
     );
     if (!state.trainers.length && !untrackedHorseNames.size) {
       const empty = { checked: 0, sent: 0 };
@@ -3833,7 +3935,7 @@ async function runEntryAlerts(env, source = "manual") {
           checked++;
           if (horse.scratched) continue;
           const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
-          const hasUntrackedNote = untrackedHorseNames.has((horse.name || "").trim().toLowerCase());
+          const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
           if (!trainerTracked && !hasUntrackedNote) continue;
           // Only worth including if there's actually a note to show — not
           // dedup-marked when skipped for this reason (see below), so a
@@ -4975,7 +5077,7 @@ async function lookupRaceEntriesByHorseId(accessToken, horseIds) {
 
 async function fetchSmartPonyQuotes(env) {
   const accessToken = await smartponyLogin(env);
-  const state = await readState(env); // trainers list — see the tracked-spelling snap below
+  const trainers = await readTrainers(env); // see the tracked-spelling snap below — this is all fetchSmartPonyQuotes() ever needs, no reason to also pull+parse the (much larger) notes blob
   // All three of SmartPony's own review states (needs_review, auto_matched,
   // verified) — originally scoped to verified-only, but that missed most
   // of what's actually on their site (confirmed real: several Chad Brown
@@ -5089,7 +5191,7 @@ async function fetchSmartPonyQuotes(env) {
     // the already-tracked "Phil D'Amato"). The tracked roster itself is the
     // more stable source of truth once a trainer's already been added
     // correctly, so it wins over both of SmartPony's own fields here.
-    const tracked = resolveTrackedTrainer(trainerName, state.trainers);
+    const tracked = resolveTrackedTrainer(trainerName, trainers);
     if (tracked) trainerName = tracked;
 
     const article = row.raw_articles || {};
@@ -5147,7 +5249,7 @@ async function lookupNyraEntriesTrainerByHorse() {
       for (const race of result.races || []) {
         for (const horse of race.horses || []) {
           if (horse.scratched || !horse.trainer || !horse.name) continue;
-          const key = horse.name.trim().toLowerCase();
+          const key = stripHorseCountrySuffix(horse.name.trim().toLowerCase());
           if (!byHorse[key]) byHorse[key] = { trainer: horse.trainer, track, date };
         }
       }
@@ -5171,8 +5273,7 @@ async function lookupNyraEntriesTrainerByHorse() {
 // reports mismatches, changes nothing itself.
 async function auditNotesAgainstSmartPony(env) {
   const accessToken = await smartponyLogin(env);
-  const state = await readState(env);
-  const notes = state.notes;
+  const notes = await readNotes(env); // trainers/trainerMeta aren't used anywhere below
 
   const horseNames = [...new Set(notes.map((n) => (n.horse || "").trim()).filter(Boolean))];
   const nameToHorseId = await lookupHorseIdsByName(accessToken, horseNames);
@@ -5184,7 +5285,7 @@ async function auditNotesAgainstSmartPony(env) {
   let checked = 0;
   for (const n of notes) {
     if (!n.trainer) continue; // deliberately trainer-less (see /notes POST) — not a mismatch, nothing to compare
-    const nyraHit = nyraByHorse[(n.horse || "").trim().toLowerCase()];
+    const nyraHit = nyraByHorse[stripHorseCountrySuffix((n.horse || "").trim().toLowerCase())];
 
     let realTrainer, realJockey, realOwner, checkedAgainst;
     if (nyraHit?.trainer) {
