@@ -3885,6 +3885,7 @@
   const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
   const TRACK_CONDITIONS_REFRESH_MS = 10 * 60 * 1000; // NYRA's own page updates far less often than that
   const PP_STATS_REFRESH_MS = 60 * 60 * 1000; // season-to-date stats, updates at most once per race day
+  const SLOW_REFRESH_MS = 20 * 60 * 1000; // for data that moves far slower than the main 5-min cadence (AQI, tide)
   const FORECAST_STEP_COUNT = 12; // + the live "now" entry = 13 points, 6 hours ahead in 30-min steps
 
   function currentApiUrl(){
@@ -6928,6 +6929,7 @@
   let stableTrainers = [];
   let stableNotes = [];
   let stableTrainerMeta = {}; // name -> { source, addedAt } — how each trainer was added
+  let stableDataVersion = null; // last-seen GET /data version tag — lets refreshStableDataIfIdle() skip the full refetch when nothing changed
   let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
   let stableEditingNoteId = null; // note.id currently showing its inline edit form, or null — UI state only, not persisted
 
@@ -7079,10 +7081,11 @@
         trainers: Array.isArray(data.trainers) ? data.trainers : [],
         notes: Array.isArray(data.notes) ? data.notes : [],
         trainerMeta: (data.trainerMeta && typeof data.trainerMeta === "object") ? data.trainerMeta : {},
+        version: data.version || null,
       };
     } catch(err){
       stableApiError("load shared data", err);
-      return { trainers: [], notes: [], trainerMeta: {} };
+      return { trainers: [], notes: [], trainerMeta: {}, version: null };
     }
   }
 
@@ -7958,6 +7961,7 @@
         stableTrainers = fresh.trainers;
         stableNotes = fresh.notes;
         stableTrainerMeta = fresh.trainerMeta;
+        stableDataVersion = fresh.version;
         renderStableTour();
       }
 
@@ -8251,6 +8255,7 @@
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
       stableTrainerMeta = fresh.trainerMeta;
+      stableDataVersion = fresh.version;
       renderStableTour();
     } catch(err){
       console.error("TDN Saratoga Notebook import failed to save", err);
@@ -8298,6 +8303,7 @@
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
       stableTrainerMeta = fresh.trainerMeta;
+      stableDataVersion = fresh.version;
       renderStableTour();
     } catch(err){
       console.error("Horse Racing Nation import failed to save", err);
@@ -8349,6 +8355,7 @@
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
       stableTrainerMeta = fresh.trainerMeta;
+      stableDataVersion = fresh.version;
       renderStableTour();
     } catch(err){
       console.error("Daily Racing Form import failed to save", err);
@@ -8400,6 +8407,7 @@
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
       stableTrainerMeta = fresh.trainerMeta;
+      stableDataVersion = fresh.version;
       renderStableTour();
     } catch(err){
       console.error("NYRA News import failed to save", err);
@@ -8461,6 +8469,7 @@
       stableTrainers = fresh.trainers;
       stableNotes = fresh.notes;
       stableTrainerMeta = fresh.trainerMeta;
+      stableDataVersion = fresh.version;
       renderStableTour();
     } catch(err){
       console.error("SmartPony import failed to save", err);
@@ -11357,6 +11366,7 @@
     stableTrainers = data.trainers;
     stableNotes = data.notes;
     stableTrainerMeta = data.trainerMeta;
+    stableDataVersion = data.version;
     renderStableTour();
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
@@ -11383,10 +11393,21 @@
   }
   async function refreshStableDataIfIdle(){
     if (stableHasUnsavedInput()) return;
+    // Cheap check first — GET /data/version is a single small KV read, vs.
+    // /data's full trainers+notes+trainerMeta payload (multiple MB at real
+    // data volume). Only pulls and re-renders the full dataset when the
+    // version tag actually moved since the last successful load. Any
+    // failure here (network hiccup, older worker without the route) just
+    // falls through to the full fetch, same as before this existed.
+    try{
+      const { version } = await stableApiGet("/data/version");
+      if (version && stableDataVersion && version === stableDataVersion) return;
+    } catch(err){ /* fall through to the full fetch below */ }
     const data = await loadStableData();
     stableTrainers = data.trainers;
     stableNotes = data.notes;
     stableTrainerMeta = data.trainerMeta;
+    stableDataVersion = data.version;
     renderStableTour();
   }
   setInterval(refreshStableDataIfIdle, 5 * 60 * 1000);
@@ -11516,8 +11537,8 @@
   setInterval(refreshRaceChanges, REFRESH_MS); // DMTC posts these "several times per hour" per its own page copy — same cadence is plenty
   setInterval(refreshPpStats, PP_STATS_REFRESH_MS);
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
-  setInterval(fetchAirQuality, REFRESH_MS); // same cadence as the main weather fetch
-  setInterval(fetchTideData, REFRESH_MS); // same cadence; no-ops for non-tide tracks
+  setInterval(fetchAirQuality, SLOW_REFRESH_MS); // AQI doesn't move fast enough to justify the main 5-min cadence
+  setInterval(fetchTideData, SLOW_REFRESH_MS); // same reasoning; no-ops for non-tide tracks
   setInterval(loadRainNowcast, REFRESH_MS); // same cadence — per-minute data doesn't need faster than the rest of the dashboard
 })();
 </script>

@@ -172,18 +172,24 @@
 //    is surfaced as its own standalone panel rather than folded into Dirt
 //    Bias/Turf Bias. Only Del Mar is wired up (DMTC_PP_STATS_URL_BY_TRACK).
 //
-// 11. Severe weather alerts (GET /nws-alerts?lat=<lat>&lon=<lon>) — proxies
-//    api.weather.gov's active-alerts-by-point endpoint, filtered server-
-//    side to exactly "Severe Thunderstorm Warning", "Tornado Warning", and
-//    "Flash Flood Warning" (not Watches, not Advisories, not any other
-//    alert type) — Flash Flood Warning added alongside the original two
-//    since it's directly relevant to whether a track can run at all, same
-//    bar as the other two (an active, in-progress WARNING, not a lower-
-//    confidence Watch/Advisory). Free, keyless, official government
-//    source. This is the one job in this file that a browser could never
-//    do directly even though the API itself is CORS-open — NWS documents a
-//    descriptive User-Agent as required, and fetch() is spec-forbidden
-//    from setting its own User-Agent header, so this has to go through a
+// 11. Severe weather alerts (GET /nws-alerts?lat=<lat>&lon=<lon> or
+//    ?zone=<countyUGC>) — proxies api.weather.gov's active-alerts endpoint,
+//    filtered server-side to exactly "Severe Thunderstorm Warning",
+//    "Tornado Warning", and "Flash Flood Warning" (not Watches, not
+//    Advisories, not any other alert type) — Flash Flood Warning added
+//    alongside the original two since it's directly relevant to whether a
+//    track can run at all, same bar as the other two (an active, in-
+//    progress WARNING, not a lower-confidence Watch/Advisory). `zone` (an
+//    NWS county UGC code) takes precedence over lat/lon when both are
+//    given — confirmed real gap: point-based lookup only ever catches an
+//    alert whose polygon happens to cover that ONE coordinate, missing a
+//    warning scoped to a different part of the same county (Saratoga only
+//    for now — see its countyZone in TRACKS). Free, keyless, official
+//    government source. This is the one job in this file that a browser
+//    could never do directly even though the API itself is CORS-open — NWS
+//    documents a descriptive User-Agent as required, and fetch() is spec-
+//    forbidden from setting its own User-Agent header, so this has to go
+//    through a
 //    server-side context. See NWS_USER_AGENT above.
 //    Called once per US track (client-side, see index.html's
 //    refreshSevereWeatherAlerts()) — every US track's own coordinates, not
@@ -365,15 +371,26 @@
 // 19. Daily Racing Form news (GET /drf-news) — same overall shape as job
 //    #17's HRN parser (per-article, quote-gated sections; client resolves
 //    against its own tracked list, never adds a new trainer), pointed at
-//    DRF's news sitemap instead of a listing page. DRF is fully free/
+//    THREE merged, deduped, round-robined DRF listings instead of a plain
+//    listing page: the news sitemap, /news/all-news page 1 (added
+//    2026-08-27 to widen coverage past the sitemap's own ~48-hour window),
+//    and the Saratoga track hub page (added same day, specifically for
+//    deep Saratoga-only coverage — 70+ articles spanning the whole meet in
+//    one fetch, by far the richest of the three). DRF is fully free/
 //    unauthenticated (confirmed via each article's own JSON-LD) but never
 //    marks up a horse's name in prose the way TDN/HRN do, so horse
 //    identification here comes from each article's <meta name="keywords">
 //    tag instead of paragraph-proximity or an entries table — see
-//    fetchDrfNews()'s own comment for the full reasoning and its two known
-//    gaps (DRF_KEYWORD_TRACK_NAMES and DRF_RACE_NAME_SUFFIXES are both
-//    necessarily incomplete, so an untracked track or race name
-//    occasionally reads as a horse).
+//    extractDrfSections()'s own comments for the full reasoning, including
+//    a real per-paragraph speaker-attribution fix and a global horse-
+//    ownership map added 2026-08-27 after scanning the Saratoga source's
+//    full backlog surfaced several genuine multi-person misattributions
+//    (a rival horse praised by name read as the quoted trainer's own; a
+//    trainer's quote mentioning a jockey by name credited the jockey
+//    instead). Two known remaining gaps: DRF_KEYWORD_TRACK_NAMES and
+//    DRF_RACE_NAME_SUFFIXES/DRF_BARE_RACE_NAMES are all necessarily
+//    incomplete, so an untracked track or race name occasionally still
+//    reads as a horse.
 // 20. NYRA News (GET /nyra-news) — NYRA's own Saratoga press releases
 //    (nyra.com/saratoga/news/), first-party rather than third-party
 //    coverage like #7/#17/#19. Plain static HTML, no auth, no robots.txt
@@ -454,6 +471,16 @@ const DMTC_PP_STATS_URL_BY_TRACK = { delmar: "https://www.dmtc.com/handicapping/
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
 const MAX_ARTICLES_PER_RUN = 8; // caps subrequests/runtime per poll
+// DRF specifically gets a higher cap (job #19) since it now merges THREE
+// listing sources (the news sitemap, /news/all-news page 1, and the
+// Saratoga track hub page — see each URL constant's own comment),
+// round-robined one-from-each rather than concatenated. Raised from 24 to
+// 36 (= 12 full rounds of 3) when the Saratoga source was added — it alone
+// can have 70+ articles spanning the whole meet, easily the largest of the
+// three, so it needs real headroom to make progress across runs. Still
+// well within a Worker's subrequest budget (36 articles + 3 listing
+// fetches).
+const DRF_MAX_ARTICLES_PER_RUN = 36;
 // A UA that identifies itself as a bot gets a flat 403 from this site's WAF
 // on individual article pages (confirmed directly: identical request,
 // bot-labeled UA -> 403, a real browser's UA -> 200) — the feed endpoint
@@ -538,6 +565,17 @@ async function handleRequest(request, env) {
       return json(state, 200, { "Cache-Control": "no-store" });
     }
 
+    // Cheap "did anything change" check — one small KV read instead of the
+    // full trainers+notes+trainerMeta blob. Polled every 5 minutes (and on
+    // every tab refocus) by the client's refreshStableDataIfIdle(); a
+    // mismatch is what triggers the real GET /data fetch + re-render, so
+    // the overwhelming majority of polls (nothing changed since last time)
+    // cost a few bytes instead of the full dataset.
+    if (url.pathname === "/data/version" && request.method === "GET") {
+      const version = (await env.STABLE_KV.get("dataVersion")) || "0";
+      return json({ version }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/trainers" && request.method === "POST") {
       // No passphrase gate — this Worker's URL isn't public, only the small
       // team using this site has it, same trust level /biaslog and
@@ -554,7 +592,7 @@ async function handleRequest(request, env) {
       // future one that forgets to) still gets a sensible value rather than
       // undefined.
       const source = (body.source || "manual").trim();
-      const state = await readState(env);
+      const state = await readTrainersAndMeta(env);
       const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
       if (!exists) {
         state.trainers.push(name);
@@ -566,6 +604,7 @@ async function handleRequest(request, env) {
       state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
       await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
       if (!exists) await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await bumpDataVersion(env);
       return json({ trainers: state.trainers, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
     }
 
@@ -574,11 +613,17 @@ async function handleRequest(request, env) {
       const names = Array.isArray(body.names) ? body.names.map(n => (n || "").trim()).filter(Boolean) : [];
       if (!names.length) return json({ error: "Missing names" }, 400);
       const source = (body.source || "manual").trim();
-      const state = await readState(env);
+      const state = await readTrainersAndMeta(env);
       let addedAny = false;
       // One KV write for the whole batch instead of one per name — KV write
       // quota is a hard daily cap (free tier: 1,000/day, account-wide), and
       // a 100-name bulk-add used to cost 100+ writes on its own.
+      // Confirmed real contributor to that same cap: this used to write
+      // `trainers` UNCONDITIONALLY even when every name in the batch already
+      // existed (the overwhelmingly common case once a job's caught up) —
+      // five auto-import jobs each calling this on every page load AND every
+      // 6 hours adds up fast when every single one of those calls is a
+      // guaranteed write regardless of whether anything actually changed.
       for (const name of names) {
         const exists = state.trainers.some(t => t.toLowerCase() === name.toLowerCase());
         if (!exists) {
@@ -587,9 +632,12 @@ async function handleRequest(request, env) {
           addedAny = true;
         }
       }
-      state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
-      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
-      if (addedAny) await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      if (addedAny) {
+        state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+        await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+        await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+        await bumpDataVersion(env);
+      }
       return json({ trainers: state.trainers, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
     }
 
@@ -603,7 +651,71 @@ async function handleRequest(request, env) {
       await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
       await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await bumpDataVersion(env);
       return json({ trainers, notes, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Same cascade as /trainers DELETE above, one KV write for the whole
+    // batch instead of one per name — added specifically to undo the
+    // SmartPony auto-add flood (see autoImportSmartPonyQuotes()'s own
+    // comment) in one call instead of hundreds, but kept general since any
+    // future bulk trainer cleanup needs exactly this same primitive.
+    if (url.pathname === "/trainers/bulk-delete" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const names = new Set(Array.isArray(body.names) ? body.names : []);
+      if (!names.size) return json({ error: "Missing names" }, 400);
+      const state = await readState(env);
+      const trainers = state.trainers.filter(t => !names.has(t));
+      const notes = state.notes.filter(n => !names.has(n.trainer));
+      for (const name of names) delete state.trainerMeta[name];
+      await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await bumpDataVersion(env);
+      return json({
+        removedTrainers: state.trainers.length - trainers.length,
+        removedNotes: state.notes.length - notes.length,
+        trainers,
+      }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Merges two tracked-trainer entries that are really the same person
+    // under a different spelling — confirmed real and recurring: SmartPony's
+    // own trainer_name_raw/trainer_name fields sometimes spell a first name
+    // differently (a nickname, an extra middle initial) than this app's
+    // already-tracked spelling, and resolveTrackedTrainer()'s strict
+    // same-first-name-token match correctly refuses to guess they're the
+    // same person — which is the right call for MATCHING an incoming quote,
+    // but leaves a genuine duplicate sitting in the tracked list once
+    // SmartPony's own auto-add path creates one (e.g. "Whit Beckman" next to
+    // a freshly-added "D Whitworth Beckman"). Reassigns every note from
+    // `from` to `to`, then removes `from` entirely — a person decision this
+    // app deliberately never makes on its own, hence its own dedicated route
+    // rather than folding it into the auto-import path.
+    if (url.pathname === "/trainers/merge" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const from = (body.from || "").trim();
+      const to = (body.to || "").trim();
+      if (!from || !to || from === to) return json({ error: "Need distinct from/to names" }, 400);
+      const state = await readState(env);
+      if (!state.trainers.includes(from)) return json({ error: `Trainer not found: ${from}` }, 404);
+      if (!state.trainers.includes(to)) return json({ error: `Trainer not found: ${to}` }, 404);
+      let reassigned = 0;
+      for (const n of state.notes) {
+        if (n.trainer === from) {
+          n.trainer = to;
+          reassigned++;
+        }
+      }
+      const trainers = state.trainers.filter(t => t !== from);
+      delete state.trainerMeta[from];
+      await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
+      await env.STABLE_KV.put("notes", JSON.stringify(state.notes));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await bumpDataVersion(env);
+      return json({ reassigned, trainers }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/notes" && request.method === "POST") {
@@ -617,12 +729,12 @@ async function handleRequest(request, env) {
       // note instead matches purely on horse name in notesForHorse() below,
       // valid regardless of which barn the horse ends up in.
       if (!body.horse || !body.note) return json({ error: "Missing required fields" }, 400);
-      const state = await readState(env);
+      const notes = await readNotes(env);
       // Multiple devices independently auto-importing the same article would
       // otherwise each file a duplicate note — dedupe on (trainer, horse,
       // link) when a link is present, which auto-imported notes always have.
       if (body.link) {
-        const dup = state.notes.find(n => n.trainer === body.trainer && n.horse === body.horse && n.link === body.link);
+        const dup = notes.find(n => n.trainer === body.trainer && n.horse === body.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(body.link));
         if (dup) return json({ note: dup, duplicate: true }, 200, { "Cache-Control": "no-store" });
       }
       const note = {
@@ -635,10 +747,18 @@ async function handleRequest(request, env) {
         link: body.link || "",
         autoImported: !!body.autoImported,
         sentiment: body.sentiment || null, // optional — currently only SmartPony (job #18) supplies this
+        // Which auto-import pipeline actually pulled this note in, separate
+        // from `link`'s own domain — confirmed real need: SmartPony's feed
+        // often carries the ORIGINAL article's own link/title (e.g. a real
+        // drf.com URL), so the site badge correctly says "drf.com" but
+        // nothing showed that SmartPony's own aggregation was what actually
+        // surfaced it. Only SmartPony (job #18) sets this today.
+        importedVia: body.importedVia || null,
         capturedAt: new Date().toISOString(),
       };
-      state.notes.push(note);
-      await env.STABLE_KV.put("notes", JSON.stringify(state.notes));
+      notes.push(note);
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
       return json({ note }, 200, { "Cache-Control": "no-store" });
     }
 
@@ -646,12 +766,21 @@ async function handleRequest(request, env) {
       const body = await request.json().catch(() => ({}));
       const items = Array.isArray(body.notes) ? body.notes : [];
       if (!items.length) return json({ error: "Missing notes" }, 400);
-      const state = await readState(env);
+      const notes = await readNotes(env);
       const results = [];
+      // Confirmed real contributor to the account-wide 1,000-write/day KV
+      // cap: this used to write `notes` UNCONDITIONALLY even when every item
+      // in the batch turned out to already exist — which, once a job is
+      // caught up, is the normal outcome on most polls. Five auto-import
+      // jobs each hitting this on every page load AND every 6 hours means
+      // that used to be a guaranteed write per job per poll regardless of
+      // whether anything new actually showed up. Only writes if at least one
+      // note in the batch was genuinely new.
+      let addedAny = false;
       for (const item of items) {
         if (!item.trainer || !item.horse || !item.note) continue;
         if (item.link) {
-          const dup = state.notes.find(n => n.trainer === item.trainer && n.horse === item.horse && n.link === item.link);
+          const dup = notes.find(n => n.trainer === item.trainer && n.horse === item.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
           if (dup) { results.push({ note: dup, duplicate: true }); continue; }
         }
         const note = {
@@ -664,21 +793,106 @@ async function handleRequest(request, env) {
           link: item.link || "",
           autoImported: !!item.autoImported,
           sentiment: item.sentiment || null, // optional — currently only SmartPony (job #18) supplies this
+          importedVia: item.importedVia || null, // see /notes POST's own comment above
           capturedAt: new Date().toISOString(),
         };
-        state.notes.push(note);
+        notes.push(note);
         results.push({ note });
+        addedAny = true;
       }
-      await env.STABLE_KV.put("notes", JSON.stringify(state.notes)); // one write for the whole batch
+      if (addedAny) {
+        await env.STABLE_KV.put("notes", JSON.stringify(notes)); // one write for the whole batch
+        await bumpDataVersion(env);
+      }
       return json({ results }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/notes" && request.method === "DELETE") {
       const body = await request.json().catch(() => ({}));
-      const state = await readState(env);
-      const notes = state.notes.filter(n => n.id !== body.id);
+      const notes = (await readNotes(env)).filter(n => n.id !== body.id);
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
       return json({ notes }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Lets a wrong horse/trainer/quote get corrected in place instead of a
+    // delete-and-recreate round trip — confirmed real need: every auto-
+    // import source here is best-effort text extraction (DRF/TDN/HRN/
+    // SmartPony), and a misattribution slipping through is a "fix this one
+    // note" problem, not a "rebuild the whole pipeline" one. Same no-gate
+    // trust level as every other /notes route. Only touches the three
+    // fields actually editable client-side; everything else (source, link,
+    // date, autoImported, sentiment, importedVia, capturedAt) stays as
+    // originally captured.
+    if (url.pathname === "/notes" && request.method === "PATCH") {
+      const body = await request.json().catch(() => ({}));
+      if (!body.id) return json({ error: "Missing id" }, 400);
+      const notes = await readNotes(env);
+      const note = notes.find(n => n.id === body.id);
+      if (!note) return json({ error: "Note not found" }, 404);
+      if (typeof body.trainer === "string") note.trainer = body.trainer.trim();
+      if (typeof body.horse === "string") note.horse = body.horse.trim();
+      if (typeof body.note === "string") note.note = body.note.trim();
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+      return json({ note }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // One-time (and safe to re-run) cleanup for notes that are really the
+    // same quote filed twice — confirmed real and split into two distinct
+    // causes: (1) the SAME article re-fetched with a "#disqus_thread"
+    // anchor or different URL-path casing used to dodge the old exact-
+    // string link dedup (now fixed above via normalizeLinkForDedup, so this
+    // shouldn't recur going forward, but the copies it already created
+    // needed cleaning up) — those are pure re-import noise with nothing
+    // extra to say, so the newer copy is just deleted; (2) the identical
+    // quote text genuinely reported by a SECOND, different source (e.g. a
+    // stable-tour PDF digest and a separate HRN recap both quoting a
+    // trainer verbatim) — real, distinct coverage worth keeping a record
+    // of, so instead of deleting it the second source is folded into the
+    // kept note's new `extraSources` array (rendered client-side as a
+    // "+N sources" badge) rather than thrown away. Groups on (trainer,
+    // horse, exact note text) and keeps the EARLIEST-captured note in each
+    // group as the one survivors merge into.
+    if (url.pathname === "/debug-merge-duplicate-notes" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const allNotes = await readNotes(env);
+      const groups = new Map();
+      for (const n of allNotes) {
+        const key = `${n.trainer}|${n.horse}|${(n.note || "").trim()}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(n);
+      }
+      const toDelete = new Set();
+      let mergedWithExtraSource = 0;
+      let deletedPureDupes = 0;
+      for (const rows of groups.values()) {
+        if (rows.length < 2) continue;
+        rows.sort((a, b) => (a.capturedAt || "").localeCompare(b.capturedAt || ""));
+        const primary = rows[0];
+        const seenLinks = new Set([normalizeLinkForDedup(primary.link)]);
+        for (const dupe of rows.slice(1)) {
+          const normLink = normalizeLinkForDedup(dupe.link);
+          if (!seenLinks.has(normLink) && (dupe.source || dupe.link)) {
+            if (!primary.extraSources) primary.extraSources = [];
+            primary.extraSources.push({ source: dupe.source || "", link: dupe.link || "" });
+            seenLinks.add(normLink);
+            mergedWithExtraSource++;
+          } else {
+            deletedPureDupes++;
+          }
+          toDelete.add(dupe.id);
+        }
+      }
+      const notes = allNotes.filter(n => !toDelete.has(n.id));
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      if (toDelete.size) await bumpDataVersion(env);
+      return json({
+        groupsWithDuplicates: [...groups.values()].filter(r => r.length > 1).length,
+        deletedPureDupes,
+        mergedWithExtraSource,
+        totalRemoved: toDelete.size,
+      }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/weatherlog" && request.method === "GET") {
@@ -951,9 +1165,18 @@ async function handleRequest(request, env) {
 
       if (parsed.available && parsed.cardDate) {
         // Persist so this date's conditions survive past the live page
-        // rolling over to the next day's card — see job #9's comment.
+        // rolling over to the next day's card — see job #9's comment. Only
+        // written when the value actually changed since last time — this
+        // route is polled every 10 minutes per open tab (nominally a GET),
+        // and writing unconditionally here was a large, easy-to-miss drain
+        // on the daily KV write quota for no benefit most of the time.
         try {
-          await env.STABLE_KV.put(trackConditionsKvKey(track, parsed.cardDate), JSON.stringify(parsed));
+          const key = trackConditionsKvKey(track, parsed.cardDate);
+          const serialized = JSON.stringify(parsed);
+          const existing = await env.STABLE_KV.get(key);
+          if (existing !== serialized) {
+            await env.STABLE_KV.put(key, serialized);
+          }
         } catch (err) {
           // best-effort — don't fail the request over a cache write
         }
@@ -1041,13 +1264,26 @@ async function handleRequest(request, env) {
       const track = (body.track || "").trim();
       const date = body.date || "";
       if (!track || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing track or invalid date" }, 400);
-      const record = {
-        track, date,
-        entries: Array.isArray(body.entries) ? body.entries : [],
-        results: Array.isArray(body.results) ? body.results : [],
-        capturedAt: new Date().toISOString(),
-      };
-      await env.STABLE_KV.put(racedayKvKey(track, date), JSON.stringify(record));
+      const entries = Array.isArray(body.entries) ? body.entries : [];
+      const results = Array.isArray(body.results) ? body.results : [];
+      const key = racedayKvKey(track, date);
+      // Called from two independent 5-minute polling loops (post-entries-load
+      // and post-results-poll — see index.html's saveRaceDaySnapshot()), so
+      // writing unconditionally here meant re-archiving an identical snapshot
+      // hundreds of times a day. Only write when entries/results actually
+      // changed — capturedAt is excluded from that comparison since it
+      // changes on every call and would otherwise defeat the check.
+      const existingRaw = await env.STABLE_KV.get(key);
+      const existing = existingRaw ? JSON.parse(existingRaw) : null;
+      const unchanged = existing
+        && JSON.stringify(existing.entries) === JSON.stringify(entries)
+        && JSON.stringify(existing.results) === JSON.stringify(results);
+      const record = unchanged
+        ? existing
+        : { track, date, entries, results, capturedAt: new Date().toISOString() };
+      if (!unchanged) {
+        await env.STABLE_KV.put(key, JSON.stringify(record));
+      }
       return json({ available: true, ...record }, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1186,6 +1422,46 @@ async function handleRequest(request, env) {
       return json({ cleared }, 200, { "Cache-Control": "no-store" });
     }
 
+    // One-time backfill for notes that predate the importedVia field (see
+    // /notes POST's own comment on why it exists). Originally keyed off
+    // `sentiment` presence as a stand-in for "came through SmartPony" — but
+    // that's SmartPony's OWN per-quote field and is null on plenty of their
+    // real quotes too, so it only ever caught a fraction of the actual
+    // SmartPony-sourced notes already sitting in KV (confirmed real: a
+    // direct reconciliation against a fresh SmartPony fetch found several
+    // hundred more matching notes than the sentiment-only count did).
+    // Re-fetches SmartPony's quotes fresh (same trainer-resolution the live
+    // import itself uses) and matches on (trainer, horse, link) instead —
+    // the same identity the live import's own dedup already keys on, so
+    // this always agrees with "would the live import consider this the same
+    // note." Same passphrase gate as every other route that mutates shared
+    // state; safe to re-run (a no-op once nothing left qualifies).
+    if (url.pathname === "/debug-backfill-importedvia" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const notes = await readNotes(env);
+      let quotes;
+      try {
+        quotes = await fetchSmartPonyQuotes(env);
+      } catch (err) {
+        return json({ error: `SmartPony fetch failed: ${err.message}` }, 502);
+      }
+      const smartPonyKeys = new Set(quotes.map((q) => `${q.trainerName}|${q.horseName}|${q.link || ""}`));
+      let updated = 0;
+      for (const n of notes) {
+        if (n.importedVia) continue;
+        const key = `${n.trainer}|${n.horse}|${n.link || ""}`;
+        if (smartPonyKeys.has(key)) {
+          n.importedVia = "SmartPony";
+          updated++;
+        }
+      }
+      if (updated) {
+        await env.STABLE_KV.put("notes", JSON.stringify(notes));
+        await bumpDataVersion(env);
+      }
+      return json({ updated, smartPonyQuotesSeen: quotes.length }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/pp-stats" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const pageUrl = DMTC_PP_STATS_URL_BY_TRACK[track];
@@ -1206,12 +1482,25 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/nws-alerts" && request.method === "GET") {
+      // Confirmed real gap: point-based lookup only catches an alert whose
+      // polygon happens to cover that EXACT coordinate — a tornado warning
+      // scoped to "East Central Saratoga County" never showed here because
+      // the track's own point sits just outside that specific polygon, even
+      // though the county-wide warning very much applied. `zone` (an NWS
+      // county UGC code, e.g. "NYC091" for Saratoga County) queries every
+      // active alert for the WHOLE county regardless of which sub-area a
+      // given polygon covers — takes precedence over point when both are
+      // given. lat/lon stays the default for tracks with no county set.
       const lat = url.searchParams.get("lat");
       const lon = url.searchParams.get("lon");
-      if (!lat || !lon) return json({ error: "Missing lat/lon" }, 400);
+      const zone = url.searchParams.get("zone");
+      if (!zone && (!lat || !lon)) return json({ error: "Missing lat/lon or zone" }, 400);
+      const nwsUrl = zone
+        ? `https://api.weather.gov/alerts/active?zone=${encodeURIComponent(zone)}`
+        : `https://api.weather.gov/alerts/active?point=${lat},${lon}`;
       let res;
       try {
-        res = await fetch(`https://api.weather.gov/alerts/active?point=${lat},${lon}`, {
+        res = await fetch(nwsUrl, {
           headers: { "User-Agent": NWS_USER_AGENT, "Accept": "application/geo+json" },
           cf: { cacheTtl: 60, cacheEverything: true },
         });
@@ -1336,6 +1625,19 @@ function stripDiacritics(str) {
   return str.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/['‘’ʼʻ]/g, "");
 }
 
+// Confirmed real bug behind a wave of "duplicate" notes: the (trainer,
+// horse, link) dedup check in /notes and /notes/bulk does a plain string
+// compare, so the exact same article re-fetched with a "#disqus_thread"
+// anchor or a different URL-path casing ("Go-for-Launch" vs
+// "go-for-launch") reads as a NEW link every time, quietly recreating the
+// same note over and over. Strips the fragment and lowercases the whole
+// thing before comparing — good enough for "is this the same page,"
+// without needing a full URL-equivalence library.
+function normalizeLinkForDedup(link) {
+  if (!link) return "";
+  return link.split("#")[0].toLowerCase();
+}
+
 // Trainers sort by last name — the last whitespace-separated token, which
 // holds even for hyphenated last names ("Ramirez-Rodriguez" stays one
 // token) and names with an unstripped leading initial ("W. Bret Calhoun"
@@ -1357,7 +1659,7 @@ function lastNameKey(fullName) {
 const TRAINER_FIRST_NAME_ALIASES = {
   bill: "william", billy: "william", will: "william",
   bob: "robert", bobby: "robert", rob: "robert", robbie: "robert",
-  dick: "richard", rich: "richard", richie: "richard",
+  dick: "richard", rich: "richard", richie: "richard", rick: "richard",
   jim: "james", jimmy: "james",
   mike: "michael", mickey: "michael",
   tom: "thomas", tommy: "thomas",
@@ -1377,6 +1679,11 @@ const TRAINER_FIRST_NAME_ALIASES = {
   whit: "whitworth",
   shug: "claude", // Claude "Shug" McGaughey III — confirmed real duplicate (tracked separately as both names before this)
   phil: "philip", // Phil D'Amato — confirmed real: SmartPony's own "Philip Damato" spelling wasn't recognized as the same person, letting it keep re-splitting into a duplicate tracked entry
+  ray: "raymond", // Ray Handal — confirmed real: SmartPony's own "Raymond Handal" spelling spawned a duplicate tracked entry alongside the already-tracked "Ray Handal"
+  rusty: "george", // Rusty Arnold — confirmed real (user's own ID): George Arnold goes by "Rusty," and SmartPony only ever uses the nickname
+  charlie: "charles", // Charlie Appleby — confirmed real: SmartPony spelled his formal first name out ("Charles Appleby") and spawned a duplicate alongside the already-tracked "Charlie Appleby"
+  gus: "gustavo", // Gus Rodriguez — confirmed real (user's own ID): same person as the already-tracked "Gustavo Rodriguez," separate from "Rudy Rodriguez"
+  phillip: "philip", // General double-L/single-L spelling variant — confirmed real for Capuano ("Phillip" vs the already-tracked "Phil"), same category of gap "phil" above already covers for the single-L spelling
 };
 // Normalizes ONE name token — see index.html's normalizeNameToken() for why
 // this checks every token of a tracked name, not just its own first token
@@ -1459,10 +1766,11 @@ async function readBiasLog(env, track) {
 }
 
 async function readState(env) {
-  const [trainersRaw, notesRaw, trainerMetaRaw] = await Promise.all([
+  const [trainersRaw, notesRaw, trainerMetaRaw, versionRaw] = await Promise.all([
     env.STABLE_KV.get("trainers"),
     env.STABLE_KV.get("notes"),
     env.STABLE_KV.get("trainerMeta"),
+    env.STABLE_KV.get("dataVersion"),
   ]);
   return {
     trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
@@ -1472,13 +1780,50 @@ async function readState(env) {
     // add time, never overwritten by a later re-add of the same name, so
     // it reflects genuine provenance rather than most-recent-touch.
     trainerMeta: trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {},
+    version: versionRaw || "0",
   };
+}
+
+// Narrower reads for routes that only ever touch one slice of the state —
+// added because every route used to call readState() and pull the full
+// trainers+notes+trainerMeta blob (notes alone is multiple MB at real
+// data volume) even when it only needed, say, the notes array. Doesn't
+// change what gets WRITTEN (still one blob per key — see readState's own
+// comment on why that's not being redesigned), just avoids the wasted
+// read+parse of the other two keys on routes that never touch them.
+async function readNotes(env) {
+  const raw = await env.STABLE_KV.get("notes");
+  return raw ? JSON.parse(raw) : [];
+}
+
+async function readTrainersAndMeta(env) {
+  const [trainersRaw, trainerMetaRaw] = await Promise.all([
+    env.STABLE_KV.get("trainers"),
+    env.STABLE_KV.get("trainerMeta"),
+  ]);
+  return {
+    trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
+    trainerMeta: trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {},
+  };
+}
+
+// Bumped once per mutating call to trainers/notes/trainerMeta, right
+// alongside the write(s) that actually happen — lets the client check
+// GET /data/version (one tiny KV read) instead of re-pulling the full
+// dataset on every 5-minute poll just to find out nothing changed.
+async function bumpDataVersion(env) {
+  try {
+    await env.STABLE_KV.put("dataVersion", Date.now().toString());
+  } catch (err) {
+    // best-effort — a missed bump just costs one extra full client refetch
+    // next time, not stale data (the client still has its old copy either way)
+  }
 }
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Stable-Key",
   };
 }
@@ -3009,7 +3354,14 @@ function extractTdnSections(bodyHtml) {
     // Trade-off: a trainer credited with a period-bearing initial ("H. Graham
     // Motion") won't capture past the initial — accepted, matches this file's
     // "good enough for a known source" bar rather than full name-parsing.
-    const trainerMatch = inner.match(/\b[Tt]rainer\s+([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/);
+    // Also matches "trained by" (not just "trainer") — confirmed real: TDN's
+    // own "Trained by Hall of Famer Steve Asmussen, Powerline is..." never
+    // registered a trainer name at all under "trainer"-only, so Asmussen's
+    // own horses had nothing to attach to and drifted onto whichever OTHER
+    // trainer happened to be nearby. The optional "Hall of Famer/Fame"
+    // skip is its own confirmed-real fix — without it, "Hall" itself (from
+    // "Hall of Famer Steve Asmussen") got captured as a bogus trainer name.
+    const trainerMatch = inner.match(/\b(?:[Tt]rainer|[Tt]rained by)\s+(?:Hall of Famer?\s+)?([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})/);
     if (trainerMatch) {
       // Strips a trailing possessive ("trainer Cherie DeVaux's assistant...")
       // — verified against a real article where this happened. The 's isn't
@@ -3031,7 +3383,30 @@ function extractTdnSections(bodyHtml) {
     mentionsByTrainer[name] = paras.map((_, i) => i).filter((i) => new RegExp(`\\b${escapeRegExpTdn(lastName)}\\b`).test(paras[i].plain));
   }
 
-  const byTrainer = {}; // name -> { horseNames: [], paraIdx: Set }
+  // Confirmed real bug this whole block fixes: a TDN Notebook article
+  // bundles several unrelated mini-stories into one page (a trainer's own
+  // horse, then a jockey milestone, then a completely different trainer's
+  // horse), and the old code accumulated EVERY horse ever proximity-matched
+  // to a trainer into one shared bucket, then filed that bucket's full
+  // combined text under EACH horse — "Chad Summers" ended up credited with
+  // both his own Napoleon Solo AND rival Baby Vino (mentioned only as "the
+  // horse that caught him"), verbatim identical text under both. Neither
+  // rival paragraph even named the trainer it got glued to; that's the
+  // actual signal used below to tell a trainer's own additional horse
+  // ("Rodriguez ALSO gave an update on HIS 2-year-old Flight Command" —
+  // names him directly) apart from a horse merely mentioned nearby while
+  // discussing someone else's.
+  const rivalPhraseRe = new RegExp(
+    [
+      "face the likes of", "horses that will get plenty of play are",
+      "\\bcaught by\\b", "who is also running", "\\bbeat\\b", "\\bbeaten by\\b",
+      "\\brival\\b", "\\bagainst\\b.{0,20}\\bin the\\b",
+      "\\bby\\s+[\\w./ ]{0,15}\\s*lengths?\\s+over\\b",
+    ].join("|"),
+    "i"
+  );
+
+  const assigned = {}; // name -> [{ idx, horseNames }] in paragraph order
   for (let i = 0; i < paras.length; i++) {
     if (!paras[i].horseNames.length) continue;
     let best = null, bestDist = Infinity, tie = false;
@@ -3042,16 +3417,43 @@ function extractTdnSections(bodyHtml) {
       else if (dist === bestDist && name !== best) { tie = true; }
     }
     if (!best || tie) continue; // out of range, or two trainers equally close — no guess
-    if (!byTrainer[best]) byTrainer[best] = { horseNames: [], paraIdx: new Set() };
-    for (const h of paras[i].horseNames) if (!byTrainer[best].horseNames.includes(h)) byTrainer[best].horseNames.push(h);
-    byTrainer[best].paraIdx.add(i);
+    if (!assigned[best]) assigned[best] = [];
+    assigned[best].push({ idx: i, horseNames: paras[i].horseNames });
   }
 
-  return Object.entries(byTrainer).map(([trainerName, v]) => ({
-    trainerName,
-    horseNames: v.horseNames,
-    text: [...v.paraIdx].sort((a, b) => a - b).map((i) => paras[i].plain).join(" ").slice(0, 1500),
-  }));
+  const sections = [];
+  for (const [trainerName, entries] of Object.entries(assigned)) {
+    const lastName = trainerName.split(/\s+/).pop();
+    // Rival-listing paragraphs are never trusted, whether they're the
+    // first paragraph proximity-matched to this trainer or a later one —
+    // confirmed real: a trainer's own horse can sit too far away (outside
+    // TDN_PROXIMITY_WINDOW) for this pass to ever reach at all, leaving
+    // only a rival-comparison paragraph in range; better to credit this
+    // trainer with nothing here than with someone else's horse.
+    const cleanEntries = entries.filter((e) => !rivalPhraseRe.test(paras[e.idx].plain));
+    if (!cleanEntries.length) continue;
+    const claimed = new Set(cleanEntries[0].horseNames);
+    const keptIdx = [cleanEntries[0].idx];
+    for (const { idx, horseNames } of cleanEntries.slice(1)) {
+      const newHorses = horseNames.filter((h) => !claimed.has(h));
+      if (!newHorses.length) { keptIdx.push(idx); continue; }
+      // A later paragraph introducing a genuinely NEW horse is only
+      // trusted as this trainer's own if it names the trainer directly —
+      // proximity to some OTHER paragraph that happened to mention him
+      // isn't enough (that's exactly how Baby Vino/Golden Tempo/Renegade/
+      // Sea Strike got glued onto the wrong trainer originally).
+      if (new RegExp(`\\b${escapeRegExpTdn(lastName)}\\b`).test(paras[idx].plain)) {
+        for (const h of newHorses) claimed.add(h);
+        keptIdx.push(idx);
+      }
+    }
+    sections.push({
+      trainerName,
+      horseNames: [...claimed],
+      text: keptIdx.sort((a, b) => a - b).map((i) => paras[i].plain).join(" ").slice(0, 1500),
+    });
+  }
+  return sections;
 }
 
 function escapeRegExpTdn(str) {
@@ -3276,6 +3678,16 @@ const STYLED_DIGEST_TRACK_THEME = {
   delmar: { accent: "#0e8a8a", bg: "#fdfaf3", ink: "#1c3a3a", dim: "#5c7a78", hairline: "#e3ddc8" },
 };
 
+// Site-domain tag on a note (e.g. "drf.com") — derived from the note's own
+// stored link, same as index.html's stableNoteSiteLabel(). Only ever a
+// display addition; never stored, so it stays in sync automatically if a
+// note's link ever changes.
+function siteLabelForEmail(link) {
+  if (!link) return null;
+  try { return new URL(link).hostname.replace(/^www\./, ""); }
+  catch { return null; }
+}
+
 // Full untruncated note text, each as its own <div> (not a <ul><li> list,
 // to match the artifact's card layout) — inline-styled throughout since
 // Gmail strips most <style>-block rules and never renders custom web fonts
@@ -3296,11 +3708,17 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     const horsesHtml = horses.map(({ horse, notes }) => {
       const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition) : "";
       // Full, untruncated note text — no slicing anywhere in this path.
-      const notesHtml = notes.map((n) => `
+      const notesHtml = notes.map((n) => {
+        const siteLabel = siteLabelForEmail(n.link);
+        const siteTag = siteLabel
+          ? ` <span style="display:inline-block; font-size:9px; font-family:'Courier New',Courier,monospace; color:${theme.dim}; background:rgba(0,0,0,0.06); padding:1px 5px; border-radius:3px;">${escapeHtmlForEmail(siteLabel)}</span>`
+          : "";
+        return `
         <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink}; border-left:2px solid ${theme.accent}; padding-left:10px; margin:4px 0 10px;">
-          <strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}): ${escapeHtmlForEmail(n.note)}
+          <strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")})${siteTag}: ${escapeHtmlForEmail(n.note)}
         </div>
-      `).join("");
+      `;
+      }).join("");
       return `
         <div style="margin:10px 0 3px;">
           ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
@@ -3648,6 +4066,17 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
     }
     const horseNames = horsesByTrainerFromProse[lastName] || [];
     if (!horseNames.length) return []; // no identifiable horse — no guessing which one
+    // Confirmed real bug (same root cause as job #7's TDN one): with no
+    // entries table to fall back on, every horse proximity-matched to this
+    // trainer anywhere in the article shares ONE combined text, which then
+    // gets filed under EACH of them — a real Chad Brown note ended up
+    // identically duplicated under both Ways and Means and Fully
+    // Subscribed. HRN's prose here doesn't reliably re-name the horse per
+    // paragraph the way DRF's does (see textForLastName's own comment), so
+    // there's no reliable way to scope the text to just one of several —
+    // safer to drop this trainer's fallback section entirely than credit
+    // every horse found nearby with the same words.
+    if (horseNames.length > 1) return [];
     return [{ trainerName: lastName, horseNames, text: textForLastName(lastName) }];
   });
 }
@@ -3709,12 +4138,22 @@ async function fetchHrnNews() {
 // automatically — a preview article legitimately yields zero sections.
 //
 // Article discovery uses DRF's own Google-News-style sitemap
-// (DRF_SITEMAP_NEWS_URL) rather than a listing page or /rss.xml — that
-// feed exists but mixes in betting-affiliate/promo content and doesn't
-// cover the quote-bearing news articles at all, confirmed by inspecting it
-// directly. The news sitemap is a rolling ~48-hour window of every article
-// DRF publishes, newest first, with title/link/publish-date all in clean
-// XML, no HTML parsing needed for discovery.
+// (DRF_SITEMAP_NEWS_URL) rather than /rss.xml — that feed exists but mixes
+// in betting-affiliate/promo content and doesn't cover the quote-bearing
+// news articles at all, confirmed by inspecting it directly. The news
+// sitemap is a rolling ~48-hour window of every article DRF publishes,
+// newest first, with title/link/publish-date all in clean XML, no HTML
+// parsing needed for discovery.
+//
+// Second discovery source added 2026-08-27 (requested to widen coverage
+// "as much as possible"): DRF's own /news/all-news listing (page 1 only —
+// see DRF_ALL_NEWS_LIST_URL's own comment), merged with the sitemap and
+// deduped by link. Confirmed real that this catches genuine articles
+// already rolled off the sitemap's tighter 48-hour window (e.g. a real
+// Phil D'Amato/Jeff Mullins feature found this way during setup). DRF gets
+// its own higher DRF_MAX_ARTICLES_PER_RUN rather than sharing
+// MAX_ARTICLES_PER_RUN with every other source, since two merged listings
+// need more headroom than one to both actually contribute most runs.
 //
 // Horse identification is DRF's one real weak point next to TDN/HRN: DRF
 // never hyperlinks or otherwise marks up a horse's name in article prose
@@ -3737,9 +4176,46 @@ async function fetchHrnNews() {
 // either list will incorrectly read as a horse; a human glancing at the
 // resulting note (same as any other auto-import) is the actual backstop.
 const DRF_SITEMAP_NEWS_URL = "https://www.drf.com/sitemap-news.xml";
+// Second discovery source (requested 2026-08-27 to widen DRF coverage
+// beyond the sitemap's own rolling ~48-hour window) — DRF's own "Latest
+// Horse Racing News" listing at /news/all-news, paginated (?page=N; its own
+// embedded data reports over 20,000 pages, i.e. DRF's entire archive back
+// years — nowhere near relevant to Stable Tour, so this only ever reads
+// page 1, just enough to catch anything just outside the sitemap's tighter
+// window, e.g. a real find during setup: a Cherie DeVaux feature that had
+// already rolled off the sitemap but was still on page 1 here). Article
+// pages themselves are identical either way this file discovers them, so
+// they flow through the exact same extractDrfKeywords()/extractDrfSections()
+// pipeline below regardless of which listing found the link.
+//
+// The page ships this listing as Next.js RSC stream data, NOT plain HTML —
+// confirmed real: no <a>/<h3> markup pairs a title with its link the way a
+// normal listing page would. Each item shows up instead as an escaped JSON
+// object mid-stream: \"titleSlug\":\"news/SLUG\",\"newsTitle\":\"Title\"
+// ...\"postDate\":\"1787765220\" (a Unix-seconds timestamp) — parseDrfAllNewsListing()
+// below regexes straight for those three fields rather than trying to
+// parse the streaming format properly.
+const DRF_ALL_NEWS_LIST_URL = "https://www.drf.com/news/all-news";
+const DRF_BASE_URL = "https://www.drf.com";
+
+// Third discovery source (requested 2026-08-27, specifically for Saratoga):
+// DRF's own track hub page at /horse-racing-tracks/saratoga. Confirmed
+// real: this is a MUCH deeper, track-filtered feed than either the sitemap
+// or /news/all-news — a single fetch surfaced 70+ Saratoga-specific
+// articles spanning the whole meet (Race Preview/Race Recap/Track Notes
+// categories), not just the last day or two. Same RSC-stream escaped-JSON
+// shipping as /news/all-news, but a different, richer shape: a
+// "component":"tracks_news_section" block containing
+// "news_configuration":{"articleList":[{...}, {...}]} — parseDrf
+// TrackNewsListing() below splits on each object's own leading \"id\":N
+// field rather than chaining field-to-field regexes across the whole
+// blob, since some objects have fields in a different order than others
+// (confirmed real: naive field-chaining paired titles with the WRONG
+// article's slug on the first attempt).
+const DRF_SARATOGA_TRACK_URL = "https://www.drf.com/horse-racing-tracks/saratoga";
 
 const DRF_KEYWORD_TRACK_NAMES = new Set([
-  "saratoga", "belmont", "belmont park", "aqueduct", "del mar", "santa anita", "santa anita park",
+  "saratoga", "saratoga race course", "belmont", "belmont park", "aqueduct", "del mar", "santa anita", "santa anita park",
   "los alamitos", "golden gate", "golden gate fields", "churchill downs", "churchill", "keeneland",
   "ellis park", "turfway park", "kentucky downs", "gulfstream", "gulfstream park", "tampa bay downs",
   "fair grounds", "delta downs", "louisiana downs", "evangeline downs", "oaklawn", "oaklawn park",
@@ -3770,8 +4246,21 @@ const DRF_RACE_NAME_SUFFIXES = new Set([
   "debutante", "invitational", "championship", "challenge", "classic", "juvenile",
 ]);
 
+// Confirmed real gap on top of the suffix check above: some marquee stakes
+// races get tagged by their bare popular name with no suffix word at all —
+// a Castellano profile piece tagged the race he's riding in that Saturday
+// as just "Travers" (not "Travers Stakes"), which read as a horse until
+// this was added. Necessarily incomplete like the two sets above — a real
+// horse coincidentally sharing one of these names would get excluded too —
+// grown only as a real case turns up, same as DRF_KEYWORD_TRACK_NAMES.
+const DRF_BARE_RACE_NAMES = new Set([
+  "travers", "bolton landing", "hall of fame", "haskell", "pegasus", "statue of liberty",
+  "skidmore",
+]);
+
 function drfKeywordIsTrackOrRace(keywordLower) {
   if (DRF_KEYWORD_TRACK_NAMES.has(keywordLower)) return true;
+  if (DRF_BARE_RACE_NAMES.has(keywordLower)) return true;
   const words = keywordLower.split(/\s+/);
   return DRF_RACE_NAME_SUFFIXES.has(words[words.length - 1]);
 }
@@ -3793,29 +4282,258 @@ function extractDrfSections(html, keywords) {
     if (plain) paras.push(plain);
   }
   const fullText = paras.join(" ");
+  // Every comparison in this file runs through stripDiacritics() (removes
+  // accents AND apostrophes) rather than plain .toLowerCase() — confirmed
+  // real bug: DRF's own <meta keywords> tag spells a trainer with a
+  // straight apostrophe ("Phil D'Amato") while the article's prose quotes
+  // him with a curly one ("D'Amato said"), and a plain string compare
+  // never matched the two.
+  const fullTextNorm = stripDiacritics(fullText);
 
+  // Quote + its speaker in one match — captures BOTH so a paragraph can
+  // later be checked for "who is ACTUALLY speaking here" rather than just
+  // "does this paragraph mention this trainer's name anywhere" (see
+  // paraSpeakerKey below for why that distinction matters). The optional
+  // non-capturing first-name group lets a FULL name ("George Weaver said")
+  // resolve to the surname the same way a bare surname ("Cox said")
+  // already did — confirmed real gap: nothing sat directly after the
+  // closing quote but "George", not "Weaver", so the surname was never
+  // reached before this. Also recognizes "wrote" alongside "said" — a real
+  // trainer quote given by text message ("Morley wrote in a text") was
+  // invisible entirely before this, since only "said" was ever checked
+  // for.
+  const quoteWithSpeakerRe = /[“"]([^”"]{4,600})[”"]\s+(?:[A-Z][A-Za-z'’-]+\s+)?([A-Z][A-Za-z'’-]+)\s+(?:said|wrote)\b/g;
   const quotedLastNames = new Set();
-  for (const qm of fullText.matchAll(/[“"][^”"]{8,400}[”"]\s+([A-Z][A-Za-z'’-]+)\s+said\b/g)) {
-    quotedLastNames.add(qm[1]);
-  }
+  for (const qm of fullText.matchAll(quoteWithSpeakerRe)) quotedLastNames.add(qm[2]);
   if (!quotedLastNames.size) return [];
+  const quotedKeys = new Set([...quotedLastNames].map((n) => stripDiacritics(n).toLowerCase()));
 
-  const keywordsLower = keywords.map((k) => k.toLowerCase());
-  return [...quotedLastNames].map((lastName) => {
-    const horseNames = keywords.filter((k, i) => {
-      const kl = keywordsLower[i];
-      if (drfKeywordIsTrackOrRace(kl)) return false;
-      if (kl.split(/\s+/).pop() === lastName.toLowerCase()) return false; // the quoted trainer's own name
-      return true;
+  // Confirmed real bug: DRF's own keywords tag doesn't always include the
+  // article's actual subject horse at all — "Wood Island captures Skidmore
+  // in turf debut" tagged "Jackie's Warrior" (mentioned exactly once, as
+  // "the sire Jackie's Warrior") but never tagged "Wood Island" itself,
+  // despite Wood Island being the horse in every other paragraph. With no
+  // real candidate available, the sire's own name was the only thing left
+  // to fall back to. Scans for the "the sire NAME" / "sired by NAME"
+  // construct specifically and excludes any keyword that matches — doesn't
+  // help recover the untagged real horse (nothing to fall back to for
+  // that), but stops the sire from being mistaken for it.
+  const sireKeys = new Set();
+  for (const sm of fullTextNorm.matchAll(/\b(?:the sire|sired by)\s+([A-Z][\w'’.-]+(?:\s+[A-Z][\w'’.-]+){0,2})/g)) {
+    sireKeys.add(stripDiacritics(sm[1]).toLowerCase());
+  }
+
+  const candidateHorsesGlobal = keywords.filter((k) => {
+    if (drfKeywordIsTrackOrRace(k.toLowerCase())) return false;
+    const keyNorm = stripDiacritics(k).toLowerCase();
+    if (sireKeys.has(keyNorm)) return false;
+    const lastWordKey = keyNorm.split(/\s+/).pop();
+    // Excludes EVERY quoted person's own name found anywhere in the
+    // article, not just "the current trainer" — confirmed real bug: a
+    // multi-person DRF piece lists every quoted person's full name in the
+    // same shared keywords tag, and only excluding one at a time let each
+    // OTHER one slip through as if they were a horse.
+    return !quotedKeys.has(lastWordKey);
+  });
+  if (!candidateHorsesGlobal.length) return [];
+
+  // Confirmed real bug: a trainer's OWN quote that happens to mention a
+  // jockey/other quoted person BY NAME ("Manny rode him brilliantly...")
+  // was making that whole paragraph look like it belonged to the mentioned
+  // person too, crediting them with words they never said. paraSpeakerKey
+  // records who the attribution regex ACTUALLY resolves to for each
+  // individual paragraph, so a quote only ever gets attached to its real
+  // speaker — a paragraph mentioning someone's name in passing no longer
+  // counts as "their" paragraph for quote-attachment purposes.
+  const quoteWithSpeakerReSingle = new RegExp(quoteWithSpeakerRe.source); // same pattern, no /g — .match() returns capture groups directly
+  const paraSpeakerKey = new Map();
+  for (let i = 0; i < paras.length; i++) {
+    const m = paras[i].match(quoteWithSpeakerReSingle);
+    if (m) paraSpeakerKey.set(i, stripDiacritics(m[2]).toLowerCase());
+  }
+
+  // Global horse ownership — "Trainer NAME ... HORSE" / "Trained by NAME,
+  // HORSE" anywhere in the article (prose OR a photo caption, both use
+  // this construct). Used two ways below: positively, to anchor a trainer
+  // to his own horse when a quote paragraph names no horse of its own;
+  // negatively, to exclude a horse already confirmed as someone ELSE's.
+  // Confirmed real bug this catches: a recap tagging only the RACE
+  // WINNER'S horse as a keyword left a losing trainer's own quote (about
+  // his own, untagged horse) with nothing to resolve to but the winner's
+  // name mentioned nearby — explicit ownership evidence stops that guess.
+  // NOTE: deliberately NOT using the /i flag here — it would make the
+  // [A-Z] character classes below match lowercase too (confirmed real:
+  // this silently turned "trainer Todd Pletcher and jockey..." into a
+  // 3-word capture ending in "and"), so "trainer"/"trained by" are spelled
+  // out in both cases explicitly instead.
+  const horseOwner = new Map();
+  for (const om of fullTextNorm.matchAll(/(?:[Tt]rainer|[Tt]rained by)\s+([A-Z][\w'’.-]+(?:\s+[A-Z][\w'’.-]+){0,2})/g)) {
+    // A byline glued directly onto the end of a headline with no space
+    // ("...trainer PletcherDavid Grening|Aug 01, 2026") can let the
+    // byline's own second name leak into the captured group — confirmed
+    // real: this produced a bogus owner key that excluded a horse from
+    // literally every trainer in the piece, its real trainer included. A
+    // real byline always has "|Mon DD, YYYY" right after; if a "|" shows
+    // up within a few chars of the match, it's corrupted — skip it.
+    if (fullTextNorm.slice(om.index + om[0].length, om.index + om[0].length + 40).includes("|")) continue;
+    const nameKey = stripDiacritics(om[1]).toLowerCase().split(/\s+/).pop();
+    const window = fullTextNorm.slice(om.index + om[0].length, om.index + om[0].length + 80);
+    for (const horse of candidateHorsesGlobal) {
+      if (!horseOwner.has(horse) && new RegExp(`\\b${escapeRegExpTdn(stripDiacritics(horse))}\\b`, "i").test(window)) {
+        horseOwner.set(horse, nameKey);
+      }
+    }
+  }
+
+  // Rival-mention detector — a horse that's only ever framed as "beaten by
+  // X"/"facing X"/"beat X"/"against X"/"impressed with X when he/she won"/
+  // "rival X" anywhere in the article is likely someone ELSE's horse being
+  // praised or compared, not the quoted trainer's own (confirmed real: "I
+  // was very impressed with Renegade when he won the Arkansas Derby,"
+  // Casse said — about HIS OWN horse, referred to only as "him", not about
+  // Renegade at all). A horseOwner match already handles the case where
+  // that rival's real trainer is named in THIS article; this catches it
+  // even when no owner is ever stated for it here.
+  const isOpponentMentioned = (horse) => {
+    const h = escapeRegExpTdn(stripDiacritics(horse));
+    return [
+      new RegExp(`beaten[^.]{0,30}\\bby\\s+${h}\\b`, "i"),
+      new RegExp(`\\bfacing\\s+${h}\\b`, "i"),
+      new RegExp(`\\bbeat\\s+${h}\\b`, "i"),
+      new RegExp(`\\bagainst\\s+${h}\\b`, "i"),
+      new RegExp(`\\bimpressed with\\s+${h}\\b`, "i"),
+      new RegExp(`\\brival\\s+${h}\\b`, "i"),
+      new RegExp(`\\brun down[^.]{0,15}\\bby\\s+${h}\\b`, "i"),
+    ].some((re) => re.test(fullTextNorm));
+  };
+
+  // One note per (trainer, horse) — not one note per trainer covering
+  // every horse he's associated with anywhere in the piece. Confirmed real
+  // complaint: a DRF stakes-preview covering several of the same trainer's
+  // horses was producing ONE combined blob of every quote about every one
+  // of his horses, then filing that SAME incoherent blob under EACH
+  // horse's name.
+  const sections = [];
+  for (const lastName of quotedLastNames) {
+    const ownKey = stripDiacritics(lastName).toLowerCase();
+    const ownParagraphs = [...paraSpeakerKey.entries()].filter(([, spk]) => spk === ownKey).map(([i]) => i);
+    if (!ownParagraphs.length) continue;
+
+    const candidateHorses = candidateHorsesGlobal.filter((h) => stripDiacritics(h).toLowerCase() !== ownKey);
+    if (!candidateHorses.length) continue;
+    const ownAnchors = new Set([...horseOwner.entries()].filter(([h, owner]) => owner === ownKey && candidateHorses.includes(h)).map(([h]) => h));
+
+    // Broader "mentions this trainer's name anywhere" set, for the
+    // prev-paragraph horse-fallback below only (NOT for deciding whose
+    // quote a paragraph's own text belongs to — that's paraSpeakerKey).
+    const nameRe = new RegExp(`\\b${escapeRegExpTdn(ownKey)}\\b`, "i");
+
+    const textByHorse = {};
+    for (const i of ownParagraphs) {
+      const quoteSpansHere = [...paras[i].matchAll(/[“"]([^”"]{4,600})[”"]/g)].map((m) => m[1].trim());
+      if (!quoteSpansHere.length) continue;
+      const ownParaNorm = stripDiacritics(paras[i]);
+      const horsesInOwnPara = candidateHorses.filter((horse) =>
+        new RegExp(`\\b${escapeRegExpTdn(stripDiacritics(horse))}\\b`, "i").test(ownParaNorm)
+      );
+      let horsesForThisQuote = horsesInOwnPara;
+      // Confirmed real bug: "Trainer Lindsay Schultz said 'it was Paco's
+      // horse before it was Jorge's horse.'" — Schultz's own quote paragraph
+      // names no candidate horse (just two jockeys' possessive "horse"), so
+      // the prev-paragraph fallback below kicked in and grabbed "Napoleon
+      // Solo" — the only TAGGED horse mentioned there — even though the
+      // paragraph's real subject (Baby Vino, the horse actually being
+      // discussed) was never a DRF keyword at all and so was invisible as a
+      // candidate. A quote phrased as "[Name]'s horse/mount" is inherently
+      // about someone else's horse by name, not a horse to guess from
+      // surrounding narrative — skip the fallback entirely rather than risk
+      // crediting the wrong one.
+      const namesThirdPartyMount = /\b[A-Z][a-z]+['’]s\s+(?:horse|mount)\b/.test(paras[i]);
+      if (!horsesForThisQuote.length && i > 0 && !namesThirdPartyMount) {
+        // Fall back to the paragraph right before — but ONLY when it
+        // names exactly one candidate horse. Confirmed real bug: a
+        // background-summary paragraph mentioning THREE horses in passing
+        // sat right before a generic quote with no horse of its own —
+        // every one of those three horses incorrectly got the same
+        // generic quote. Ambiguous means don't guess.
+        const prevParaNorm = stripDiacritics(paras[i - 1]);
+        const horsesInPrevPara = candidateHorses.filter((horse) =>
+          new RegExp(`\\b${escapeRegExpTdn(stripDiacritics(horse))}\\b`, "i").test(prevParaNorm)
+        );
+        if (horsesInPrevPara.length === 1) horsesForThisQuote = horsesInPrevPara;
+      }
+
+      const filtered = horsesForThisQuote.filter((horse) => {
+        const owner = horseOwner.get(horse);
+        if (owner && owner !== ownKey) return false; // confirmed someone else's horse
+        if (isOpponentMentioned(horse) && !ownAnchors.has(horse)) return false; // framed as a rival, not confirmed as his own
+        return true;
+      });
+      // If filtering left nothing but this trainer has exactly one
+      // confirmed horse in the whole article, attribute the quote to that
+      // one rather than losing it — it clearly is about his own horse,
+      // just referred to as "he"/"it" in this specific paragraph.
+      horsesForThisQuote = filtered.length ? filtered : (ownAnchors.size === 1 ? [...ownAnchors] : []);
+
+      for (const horse of horsesForThisQuote) {
+        if (!textByHorse[horse]) textByHorse[horse] = [];
+        textByHorse[horse].push(...quoteSpansHere);
+      }
+    }
+
+    for (const [horse, spans] of Object.entries(textByHorse)) {
+      sections.push({ trainerName: lastName, horseNames: [horse], text: spans.join(" ").slice(0, 600) });
+    }
+  }
+  return sections;
+}
+
+// Regexes for the ESCAPED quotes (\") the RSC stream ships, not plain JSON
+// — this is inside a JS string literal (self.__next_f.push(["..."])), so
+// every quote in the actual payload is backslash-escaped. Confirmed
+// directly against a real fetch of page 1: titleSlug/newsTitle always
+// appear adjacent in that order, postDate follows within a few hundred
+// characters (author/teaser/image fields sit between them).
+function parseDrfAllNewsListing(html) {
+  const items = [];
+  const itemRe = /\\"titleSlug\\":\\"(news\/[^\\]+)\\",\\"newsTitle\\":\\"([^\\]*)\\"/g;
+  for (const m of html.matchAll(itemRe)) {
+    const slug = m[1];
+    const title = decodeEntities(m[2]).trim();
+    const window = html.slice(m.index, m.index + 800);
+    const dateMatch = window.match(/\\"postDate\\":\\"(\d+)\\"/);
+    const pubDate = dateMatch ? new Date(parseInt(dateMatch[1], 10) * 1000).toISOString() : null;
+    items.push({ link: `${DRF_BASE_URL}/${slug}`, title, pubDate });
+  }
+  return items;
+}
+
+// See DRF_SARATOGA_TRACK_URL's own comment for why this splits into
+// individual article objects (on each one's own leading \"id\":N field)
+// instead of chasing three fields across the whole blob the way
+// parseDrfAllNewsListing() does — this feed's objects don't reliably keep
+// newsSlug/newsTitle/listed_at in the same relative order every time.
+function parseDrfTrackNewsListing(html) {
+  const idx = html.indexOf("articleList");
+  if (idx === -1) return [];
+  const chunk = html.slice(idx, idx + 200000);
+  const objStarts = [...chunk.matchAll(/\\"id\\":\d+/g)].map((m) => m.index);
+  objStarts.push(chunk.length);
+
+  const items = [];
+  for (let i = 0; i < objStarts.length - 1; i++) {
+    const obj = chunk.slice(objStarts[i], objStarts[i + 1]);
+    const slugMatch = obj.match(/\\"newsSlug\\":\\"([^\\]+)\\"/);
+    const titleMatch = obj.match(/\\"newsTitle\\":\\"([^\\]*)\\"/);
+    const listedMatch = obj.match(/\\"listed_at\\":\\"([^\\]+)\\"/);
+    if (!slugMatch || !titleMatch) continue;
+    items.push({
+      link: `${DRF_BASE_URL}/${slugMatch[1]}`,
+      title: decodeEntities(titleMatch[1]).trim(),
+      pubDate: listedMatch ? listedMatch[1] : null,
     });
-    if (!horseNames.length) return null; // no identifiable horse — no guessing which one
-    // Proximity-scoped text, same idea as HRN's textForLastName() — the
-    // paragraph(s) actually mentioning this trainer's surname, not the
-    // whole article (a DRF piece can cover more than one trainer/horse).
-    const relevantParas = paras.filter((p) => new RegExp(`\\b${escapeRegExpTdn(lastName)}\\b`).test(p));
-    const text = (relevantParas.length ? relevantParas : paras).join(" ").slice(0, 1500);
-    return { trainerName: lastName, horseNames, text };
-  }).filter(Boolean);
+  }
+  return items;
 }
 
 async function fetchDrfNews() {
@@ -3826,17 +4544,78 @@ async function fetchDrfNews() {
   if (!sitemapRes.ok) throw new Error(`DRF news sitemap returned HTTP ${sitemapRes.status}`);
   const sitemapXml = await sitemapRes.text();
 
-  const items = [];
+  const sitemapItems = [];
+  const seenLinks = new Set();
   for (const m of sitemapXml.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
     const block = m[1];
     const link = block.match(/<loc>(.*?)<\/loc>/)?.[1];
     const title = block.match(/<news:title>(.*?)<\/news:title>/)?.[1];
     const pubDate = block.match(/<news:publication_date>(.*?)<\/news:publication_date>/)?.[1];
-    if (link) items.push({ link, title: title ? decodeEntities(title).trim() : null, pubDate: pubDate || null });
+    if (!link) continue;
+    seenLinks.add(link);
+    sitemapItems.push({ link, title: title ? decodeEntities(title).trim() : null, pubDate: pubDate || null });
+  }
+
+  // Second and third sources (page 1 of /news/all-news, and the Saratoga
+  // track hub page — see each URL constant's own comment) — both
+  // best-effort, so a hiccup fetching or parsing either just means falling
+  // back to whatever else succeeded this run, not failing the whole job.
+  const allNewsItems = [];
+  try {
+    const allNewsRes = await fetch(DRF_ALL_NEWS_LIST_URL, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    if (allNewsRes.ok) {
+      const allNewsHtml = await allNewsRes.text();
+      for (const item of parseDrfAllNewsListing(allNewsHtml)) {
+        if (seenLinks.has(item.link)) continue;
+        seenLinks.add(item.link);
+        allNewsItems.push(item);
+      }
+    }
+  } catch (err) {
+    console.error("DRF all-news listing fetch failed", err.message);
+  }
+
+  const saratogaTrackItems = [];
+  try {
+    const saratogaRes = await fetch(DRF_SARATOGA_TRACK_URL, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 900, cacheEverything: true },
+    });
+    if (saratogaRes.ok) {
+      const saratogaHtml = await saratogaRes.text();
+      for (const item of parseDrfTrackNewsListing(saratogaHtml)) {
+        if (seenLinks.has(item.link)) continue;
+        seenLinks.add(item.link);
+        saratogaTrackItems.push(item);
+      }
+    }
+  } catch (err) {
+    console.error("DRF Saratoga track-page fetch failed", err.message);
+  }
+
+  // Interleaved, not concatenated — confirmed real that the sitemap alone
+  // usually has 20-30 items (mostly harness/wagering/analysis content with
+  // zero quotes, per this job's own top comment), which would fill the
+  // entire DRF_MAX_ARTICLES_PER_RUN budget before the other sources ever
+  // got a turn if the lists were just appended one after another.
+  // Round-robining one-from-each list means all three actually get
+  // processed most runs regardless of how many the sitemap alone has (the
+  // Saratoga track page alone can have 70+ articles spanning the whole
+  // meet, easily the largest of the three).
+  const sourceLists = [sitemapItems, allNewsItems, saratogaTrackItems];
+  const items = [];
+  const maxLen = Math.max(...sourceLists.map((l) => l.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const list of sourceLists) {
+      if (list[i]) items.push(list[i]);
+    }
   }
 
   const articles = [];
-  for (const item of items.slice(0, MAX_ARTICLES_PER_RUN)) {
+  for (const item of items.slice(0, DRF_MAX_ARTICLES_PER_RUN)) {
     let articleRes;
     try {
       articleRes = await fetch(item.link, {
@@ -4206,17 +4985,44 @@ async function fetchSmartPonyQuotes(env) {
   // human-reviewed queue — this file's usual "don't guess" standard is
   // about horse/trainer identification, which SmartPony has already done
   // for us, not about their internal review-workflow status.
+  // Confirmed real bug: a flat &limit=500 with no pagination silently
+  // capped this at SmartPony's 500 MOST RECENT quotes forever, no matter
+  // how many older ones existed beneath that — with their own backlog past
+  // 800 and growing, several hundred quotes older than the current top-500
+  // were permanently invisible to this whole pipeline, not just slow to
+  // arrive. Paginates via PostgREST's offset/limit until a page comes back
+  // short (the standard "that was the last page" signal), so the true
+  // total gets pulled every run regardless of how large the backlog gets.
+  //
+  // Also confirmed real, discovered the moment pagination above actually
+  // worked: with NO bound at all, SmartPony's full table goes back years —
+  // 3,188 rows total, not the ~800 on their own current-season view — and
+  // this app auto-adds any unmatched full-name trainer as a new tracked
+  // trainer (see the loop below), so an unbounded fetch would have silently
+  // flooded the tracked list with ~700 mostly-historical, mostly-irrelevant
+  // trainers on the very next import run. A stable-tour app only ever cares
+  // about the CURRENT meet, so bounding to a trailing window is the correct
+  // fix here, not just a stopgap — pick something a full season plus buffer
+  // comfortably fits inside.
+  const SMARTPONY_LOOKBACK_DAYS = 120;
+  const lookbackCutoff = new Date(Date.now() - SMARTPONY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const query = "select=id,quote_text,trainer_name_raw,trainer_name,mentioned_horse_name,sentiment,created_at,matched_horse_id,raw_articles(url,title,source,published_at)"
-    + "&status=in.(needs_review,auto_matched,verified)&order=created_at.desc&limit=500";
-  const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}`, {
-    headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
-    cf: { cacheTtl: 300, cacheEverything: false }, // per-user auth header — never a shared cache key
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.message || `SmartPony quotes fetch returned HTTP ${res.status}`);
+    + `&status=in.(needs_review,auto_matched,verified)&created_at=gte.${lookbackCutoff}&order=created_at.desc`;
+  const SMARTPONY_QUOTES_PAGE_SIZE = 1000;
+  const rows = [];
+  for (let offset = 0; ; offset += SMARTPONY_QUOTES_PAGE_SIZE) {
+    const res = await fetch(`${SMARTPONY_SUPABASE_URL}/rest/v1/trainer_quotes?${query}&limit=${SMARTPONY_QUOTES_PAGE_SIZE}&offset=${offset}`, {
+      headers: { apikey: SMARTPONY_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+      cf: { cacheTtl: 300, cacheEverything: false }, // per-user auth header — never a shared cache key
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || `SmartPony quotes fetch returned HTTP ${res.status}`);
+    }
+    const page = await res.json();
+    rows.push(...page);
+    if (page.length < SMARTPONY_QUOTES_PAGE_SIZE) break; // short page — that was the last one
   }
-  const rows = await res.json();
 
   // Cross-references against SmartPony's own race_entries table (real
   // trainer/jockey/owner per horse, from their own past-performance data —
