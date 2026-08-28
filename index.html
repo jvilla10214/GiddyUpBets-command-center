@@ -2216,6 +2216,28 @@
   .stable-note-save:hover{ opacity:0.85; }
   .stable-note-cancel{ background:none; border:1px solid var(--panel-border); color: var(--parchment-dim); }
   .stable-note-cancel:hover{ color: var(--parchment); border-color: var(--parchment-dim); }
+  .stable-autocomplete-dropdown{
+    position: fixed;
+    z-index: 500;
+    max-height: 220px;
+    overflow-y: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+  }
+  .stable-autocomplete-dropdown[hidden]{ display:none; }
+  .stable-autocomplete-option{
+    padding: 7px 10px;
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    color: var(--parchment);
+    cursor: pointer;
+  }
+  .stable-autocomplete-option:hover, .stable-autocomplete-option.active{
+    background: rgba(240,180,41,0.14);
+    color: var(--tote-amber);
+  }
   .stable-extract-results{ display:flex; flex-direction:column; gap:10px; margin-bottom: 14px; }
   .stable-extract-item{
     background: var(--panel-2);
@@ -3125,10 +3147,10 @@
       <div class="bias-form" id="stableQuickAddForm">
         <div class="bias-form-row">
           <label>Trainer (optional)
-            <input type="text" id="stableQuickAddTrainer" list="stableTrainerDatalist" placeholder="Leave blank if unknown or might change" autocomplete="off">
+            <input type="text" id="stableQuickAddTrainer" class="stable-autocomplete-trainer" placeholder="Leave blank if unknown or might change" autocomplete="off">
           </label>
           <label>Horse
-            <input type="text" id="stableQuickAddHorse" class="stableHorseInput" placeholder="Horse name">
+            <input type="text" id="stableQuickAddHorse" class="stableHorseInput stable-autocomplete-horse" placeholder="Horse name" autocomplete="off">
           </label>
           <label>Date
             <input type="date" id="stableQuickAddDate">
@@ -3145,7 +3167,13 @@
           <button type="button" id="stableQuickAddCancelBtn">Cancel</button>
         </div>
       </div>
-      <datalist id="stableTrainerDatalist"></datalist>
+      <!-- Shared floating dropdown for the trainer/horse autocomplete below —
+           one element, repositioned and repopulated per-field on input,
+           rather than a native <datalist> (silently renders no dropdown UI
+           at all in Safari, confirmed real — this works identically in
+           every browser since it's plain DOM/CSS, not delegated to the
+           browser's own inconsistent implementation). -->
+      <div class="stable-autocomplete-dropdown" id="stableAutocompleteDropdown" hidden></div>
 
       <div class="stable-trainer-list" id="stableTrainerList">
         <div class="log-empty">No trainers added yet — add one below to get started.</div>
@@ -3153,7 +3181,7 @@
 
       <div class="stable-setup-section">
         <div class="log-controls">
-          <input type="text" id="stableTrainerInput" placeholder="Trainer name (e.g. Todd Pletcher)">
+          <input type="text" id="stableTrainerInput" class="stable-autocomplete-trainer" placeholder="Trainer name (e.g. Todd Pletcher)" autocomplete="off">
           <button type="button" id="addTrainerBtn">+ Add Trainer</button>
           <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableAutoimportPanel" title="Shared data source setup">⚙</button>
         </div>
@@ -7209,8 +7237,8 @@
       return `
         <div class="stable-note stable-note-editing">
           <div class="stable-note-edit-row">
-            <label>Trainer<input type="text" class="stable-edit-trainer" value="${escapeHtml(n.trainer || "")}"></label>
-            <label>Horse<input type="text" class="stable-edit-horse" value="${escapeHtml(n.horse || "")}"></label>
+            <label>Trainer<input type="text" class="stable-edit-trainer stable-autocomplete-trainer" autocomplete="off" value="${escapeHtml(n.trainer || "")}"></label>
+            <label>Horse<input type="text" class="stable-edit-horse stable-autocomplete-horse" autocomplete="off" value="${escapeHtml(n.horse || "")}"></label>
           </div>
           <label class="stable-note-edit-quote-label">Quote<textarea class="stable-edit-quote" rows="3">${escapeHtml(n.note || "")}</textarea></label>
           <div class="stable-note-edit-actions">
@@ -7244,6 +7272,94 @@
   }
   const sortNotesNewestFirst = (notes) => notes.slice()
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+
+  // Always computed fresh from current data rather than cached — cheap
+  // (runs once per keystroke, not once per render) and guarantees a newly
+  // added trainer/horse shows up in suggestions immediately.
+  function stableKnownHorseNames(){
+    return [...new Set(stableNotes.map(n => n.horse).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }
+
+  // ---------- Trainer/horse autocomplete ----------
+  // Custom, not a native <datalist> — confirmed real: Safari renders no
+  // dropdown UI at all for <datalist>, even when it's correctly wired up
+  // (verified the underlying <option>s were populated correctly; the
+  // browser just never shows anything). One shared `position:fixed`
+  // dropdown reused across every trainer/horse field (the edit form's
+  // included, even though it renders on demand) rather than one per input,
+  // both simpler to manage and immune to any parent's overflow/z-index
+  // clipping a per-field dropdown could otherwise run into.
+  let stableAutocompleteInput = null; // the field currently showing suggestions, or null
+  let stableAutocompleteIndex = -1;   // which suggestion is keyboard-highlighted, -1 = none
+
+  function stableAutocompleteSourceFor(el){
+    if (el.classList.contains("stable-autocomplete-trainer")) return stableTrainers;
+    if (el.classList.contains("stable-autocomplete-horse")) return stableKnownHorseNames();
+    return null;
+  }
+  function stableAutocompleteHide(){
+    $("stableAutocompleteDropdown").hidden = true;
+    stableAutocompleteInput = null;
+    stableAutocompleteIndex = -1;
+  }
+  function stableAutocompleteShow(el){
+    const source = stableAutocompleteSourceFor(el);
+    const query = el.value.trim().toLowerCase();
+    if (!source || !query){ stableAutocompleteHide(); return; }
+    const matches = source.filter(name => name.toLowerCase().includes(query)).slice(0, 8);
+    if (!matches.length){ stableAutocompleteHide(); return; }
+    stableAutocompleteInput = el;
+    stableAutocompleteIndex = -1;
+    const dropdown = $("stableAutocompleteDropdown");
+    dropdown.innerHTML = matches.map(name => `<div class="stable-autocomplete-option" data-value="${escapeHtml(name)}">${escapeHtml(name)}</div>`).join("");
+    const rect = el.getBoundingClientRect();
+    dropdown.style.left = `${rect.left}px`;
+    dropdown.style.top = `${rect.bottom}px`;
+    dropdown.style.width = `${rect.width}px`;
+    dropdown.hidden = false;
+  }
+  function stableAutocompleteHighlight(delta){
+    const options = [...$("stableAutocompleteDropdown").querySelectorAll(".stable-autocomplete-option")];
+    if (!options.length) return;
+    stableAutocompleteIndex = (stableAutocompleteIndex + delta + options.length) % options.length;
+    options.forEach((o, i) => o.classList.toggle("active", i === stableAutocompleteIndex));
+  }
+  function stableIsAutocompleteField(el){
+    return !!el?.classList?.contains && (el.classList.contains("stable-autocomplete-trainer") || el.classList.contains("stable-autocomplete-horse"));
+  }
+  // Delegated on document (not a specific container) since these fields
+  // live in three different places — the Quick Add form, the standalone
+  // "+Add Trainer" input, and per-trainer panels rendered inside
+  // #stableTrainerList — one listener covers all of them, present or not
+  // yet rendered.
+  document.addEventListener("input", (e) => { if (stableIsAutocompleteField(e.target)) stableAutocompleteShow(e.target); });
+  document.addEventListener("focusin", (e) => { if (stableIsAutocompleteField(e.target) && e.target.value.trim()) stableAutocompleteShow(e.target); });
+  // Delayed so a mousedown on a dropdown option (below) has already run
+  // and repopulated the field before this hides it out from under the click.
+  document.addEventListener("focusout", (e) => { if (stableIsAutocompleteField(e.target)) setTimeout(stableAutocompleteHide, 150); });
+  document.addEventListener("keydown", (e) => {
+    if (!stableAutocompleteInput || e.target !== stableAutocompleteInput) return;
+    if (e.key === "ArrowDown"){ e.preventDefault(); stableAutocompleteHighlight(1); }
+    else if (e.key === "ArrowUp"){ e.preventDefault(); stableAutocompleteHighlight(-1); }
+    else if (e.key === "Enter" && stableAutocompleteIndex >= 0){
+      e.preventDefault();
+      const options = [...$("stableAutocompleteDropdown").querySelectorAll(".stable-autocomplete-option")];
+      const chosen = options[stableAutocompleteIndex];
+      if (chosen){ stableAutocompleteInput.value = chosen.dataset.value; stableAutocompleteHide(); }
+    } else if (e.key === "Escape"){
+      stableAutocompleteHide();
+    }
+  });
+  // mousedown, not click — fires before the input's own blur/focusout, so
+  // the value gets set before stableAutocompleteHide() runs and clears
+  // stableAutocompleteInput out from under it.
+  $("stableAutocompleteDropdown").addEventListener("mousedown", (e) => {
+    const opt = e.target.closest(".stable-autocomplete-option");
+    if (!opt || !stableAutocompleteInput) return;
+    e.preventDefault();
+    stableAutocompleteInput.value = opt.dataset.value;
+    stableAutocompleteHide();
+  });
 
   function renderStableTour(){
     const list = $("stableTrainerList");
@@ -7506,7 +7622,7 @@
             <div class="stable-extract-results">${extractResultsHtml}</div>
             <div class="bias-form open">
               <div class="bias-form-row">
-                <label>Horse <input type="text" class="stableHorseInput" placeholder="Horse name"></label>
+                <label>Horse <input type="text" class="stableHorseInput stable-autocomplete-horse" placeholder="Horse name" autocomplete="off"></label>
                 <label>Date <input type="date" class="stableDateInput"></label>
                 <label>Source (optional) <input type="text" class="stableSourceInput" placeholder="e.g. BloodHorse, 7/24"></label>
               </div>
@@ -7556,7 +7672,6 @@
   // whenever that horse+trainer combo eventually shows up in a real entry —
   // no separate "watchlist" needed, this is the exact same mechanism.
   function openStableQuickAddForm(){
-    $("stableTrainerDatalist").innerHTML = stableTrainers.map(t => `<option value="${escapeHtml(t)}"></option>`).join("");
     $("stableQuickAddTrainer").value = "";
     $("stableQuickAddHorse").value = "";
     $("stableQuickAddSource").value = "";
