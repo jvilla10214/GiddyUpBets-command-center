@@ -3008,6 +3008,7 @@
 
       <div class="log-controls">
         <button type="button" id="addBiasBtn">+ Add Bias Note</button>
+        <select id="biasMonthSelect" aria-label="Month"></select>
       </div>
 
       <div class="bias-trends" id="biasTrends">
@@ -4302,6 +4303,12 @@
   let biasLog = [];
   // Same reasoning as weatherLogLoaded above, for the Bias Tracker.
   let biasLogLoaded = false;
+  // "YYYY-MM" of whichever month is selected in the Bias Tracker's own month
+  // dropdown — same convention as selectedLogMonth (Daily Log) and
+  // selectedArchiveMonth (Race Day Archive): null means "not yet
+  // initialized," resolved to the current month by renderBiasTable(), reset
+  // to null on a track switch.
+  let selectedBiasMonth = null;
   // Whether backfillDailyLogFromNyra() has already run for the current
   // track load — it fetches a wide Archive API date range in one request,
   // not something worth redoing on every 5-minute weather refresh. Reset on
@@ -5682,8 +5689,36 @@
     });
   }
 
+  // Groups the Bias Tracker by month, same reasoning and pattern as the
+  // Daily Log's renderLogTable() (see its own comment) — a track with a
+  // long meet's worth of bias notes shouldn't dump every one on screen at
+  // once. monthKeyOf()/monthLabelOf() are shared helpers defined alongside
+  // renderLogTable() below.
   function renderBiasTable(){
     const tbody = $("biasTableBody");
+    const select = $("biasMonthSelect");
+
+    const { date: todayStr } = nowInTrackTZ();
+    const currentMonthKey = monthKeyOf(todayStr);
+    if (!selectedBiasMonth) selectedBiasMonth = currentMonthKey;
+
+    // Every month that actually has an entry, plus the current month always
+    // available even before it has any — same "this month never looks
+    // missing" reasoning as the Daily Log dropdown.
+    const monthKeys = new Set(biasLog.map(e => monthKeyOf(e.date)));
+    monthKeys.add(currentMonthKey);
+    const sortedMonths = [...monthKeys].sort((a, b) => b.localeCompare(a));
+    if (!sortedMonths.includes(selectedBiasMonth)) selectedBiasMonth = currentMonthKey;
+
+    select.innerHTML = "";
+    sortedMonths.forEach(key => {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = key === currentMonthKey ? `${monthLabelOf(key)} (current)` : monthLabelOf(key);
+      select.appendChild(opt);
+    });
+    select.value = selectedBiasMonth;
+
     tbody.innerHTML = "";
     if (!biasLogLoaded){
       tbody.innerHTML = `
@@ -5693,11 +5728,16 @@
       `;
       return;
     }
-    if (!biasLog.length){
-      tbody.innerHTML = `<tr><td colspan="7" class="log-empty">No bias notes yet — click "Add Bias Note" after a card wraps up.</td></tr>`;
+    const monthEntries = biasLog.filter(e => monthKeyOf(e.date) === selectedBiasMonth);
+    if (!monthEntries.length){
+      tbody.innerHTML = `<tr><td colspan="7" class="log-empty">${
+        selectedBiasMonth === currentMonthKey
+          ? `No bias notes yet this month — click "Add Bias Note" after a card wraps up.`
+          : `No bias notes logged for ${monthLabelOf(selectedBiasMonth)}.`
+      }</td></tr>`;
       return;
     }
-    biasLog.forEach(entry => {
+    monthEntries.forEach(entry => {
       // NYRA-imported rows carry their own reported dirt/turf condition
       // (parseNyraTrackCondition() off the official Track Trends page) —
       // that's the real stewards' call for that date, so it takes priority
@@ -11075,6 +11115,7 @@
     });
     biasLog = []; // clear immediately so the table doesn't show the old track's rows while this loads
     biasLogLoaded = false; // same reasoning as weatherLogLoaded above
+    selectedBiasMonth = null; // default back to this track's own current month, not whatever was being browsed before
     renderBiasTable();
     renderBiasTrends();
     loadBiasLog().then(entries => {
@@ -11251,6 +11292,10 @@
   $("logMonthSelect").addEventListener("change", (e) => {
     selectedLogMonth = e.target.value;
     renderLogTable();
+  });
+  $("biasMonthSelect").addEventListener("change", (e) => {
+    selectedBiasMonth = e.target.value;
+    renderBiasTable();
   });
   $("archiveMonthSelect").addEventListener("change", (e) => {
     selectedArchiveMonth = e.target.value;
