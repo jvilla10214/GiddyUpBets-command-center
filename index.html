@@ -2159,6 +2159,63 @@
   }
   .stable-note-meta strong{ color: var(--parchment); font-family:'IBM Plex Sans', sans-serif; font-size:13px; }
   .stable-note-text{ color: var(--parchment); font-size: 13px; line-height:1.5; white-space: pre-wrap; }
+  .stable-note-edit, .stable-note-remove{
+    background:none;
+    border:none;
+    color: var(--parchment-dim);
+    font-size: 13px;
+    padding: 2px 5px;
+    cursor:pointer;
+    line-height:1;
+  }
+  .stable-note-edit:hover{ color: var(--sky); }
+  .stable-note-remove:hover{ color: var(--silk-red); }
+  /* Inline edit form replaces the note card in place (same .stable-note
+     shell, so it doesn't jump around in the list) — trainer/horse side by
+     side since they're both short, quote gets its own full-width row since
+     it's the field most likely to need real editing room. */
+  .stable-note-editing{ display:flex; flex-direction:column; gap:8px; }
+  .stable-note-edit-row{ display:flex; gap:10px; }
+  .stable-note-edit-row label, .stable-note-edit-quote-label{
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing:0.5px;
+    text-transform:uppercase;
+    color: var(--parchment-dim);
+    flex:1;
+  }
+  .stable-note-edit-row input, .stable-note-edit-quote-label textarea{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 5px;
+    padding: 6px 8px;
+    color: var(--parchment);
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    resize: vertical;
+  }
+  .stable-note-edit-row input:focus, .stable-note-edit-quote-label textarea:focus{
+    outline: 1px solid var(--sky);
+    border-color: var(--sky);
+  }
+  .stable-note-edit-actions{ display:flex; gap:8px; justify-content:flex-end; }
+  .stable-note-save, .stable-note-cancel{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 5px;
+    cursor:pointer;
+  }
+  .stable-note-save{ background: var(--sky); border:1px solid var(--sky); color: var(--panel); }
+  .stable-note-save:hover{ opacity:0.85; }
+  .stable-note-cancel{ background:none; border:1px solid var(--panel-border); color: var(--parchment-dim); }
+  .stable-note-cancel:hover{ color: var(--parchment); border-color: var(--parchment-dim); }
   .stable-extract-results{ display:flex; flex-direction:column; gap:10px; margin-bottom: 14px; }
   .stable-extract-item{
     background: var(--panel-2);
@@ -6844,6 +6901,7 @@
   let stableNotes = [];
   let stableTrainerMeta = {}; // name -> { source, addedAt } — how each trainer was added
   let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
+  let stableEditingNoteId = null; // note.id currently showing its inline edit form, or null — UI state only, not persisted
 
   function escapeHtml(str){
     const div = document.createElement("div");
@@ -7035,6 +7093,19 @@
       renderStableTour();
     } catch(err){ stableApiError("remove note", err); }
   }
+  // Corrects a wrong horse/trainer/quote in place — every auto-import
+  // source here is best-effort text extraction, so an occasional
+  // misattribution slipping through needs a "fix this one note" path that
+  // doesn't mean deleting and hand-typing a replacement from scratch.
+  async function editStableNote(id, fields){
+    try{
+      const data = await stableApiWrite("PATCH", "/notes", { id, ...fields });
+      const i = stableNotes.findIndex(n => n.id === id);
+      if (i !== -1) stableNotes[i] = data.note;
+      stableEditingNoteId = null;
+      renderStableTour();
+    } catch(err){ stableApiError("edit note", err); }
+  }
 
   function fmtStableDate(dateStr){
     if (!dateStr) return "—";
@@ -7130,6 +7201,24 @@
 
   function renderStableNoteHtml(n, opts = {}){
     const { showHorse = true, showTrainer = false } = opts;
+    if (n.id === stableEditingNoteId){
+      // Same trainer/horse/quote fields the worker's PATCH /notes route
+      // accepts — everything else (source, link, date, badges) stays as
+      // originally captured, so this is deliberately just "fix what was
+      // misread," not a full re-edit of where the note came from.
+      return `
+        <div class="stable-note stable-note-editing">
+          <div class="stable-note-edit-row">
+            <label>Trainer<input type="text" class="stable-edit-trainer" value="${escapeHtml(n.trainer || "")}"></label>
+            <label>Horse<input type="text" class="stable-edit-horse" value="${escapeHtml(n.horse || "")}"></label>
+          </div>
+          <label class="stable-note-edit-quote-label">Quote<textarea class="stable-edit-quote" rows="3">${escapeHtml(n.note || "")}</textarea></label>
+          <div class="stable-note-edit-actions">
+            <button type="button" class="stable-note-save" data-id="${n.id}">Save</button>
+            <button type="button" class="stable-note-cancel">Cancel</button>
+          </div>
+        </div>`;
+    }
     const sourceHtml = n.source
       ? (n.link ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.source)}</a>` : escapeHtml(n.source))
       : "";
@@ -7147,6 +7236,7 @@
           ${n.extraSources?.length ? `<span class="stable-site-badge" title="Also reported by: ${escapeHtml(n.extraSources.map(s => s.source || s.link).join(", "))}">+${n.extraSources.length} source${n.extraSources.length > 1 ? "s" : ""}</span>` : ""}
           ${n.autoImported ? `<span class="stable-auto-badge">Auto</span>` : ""}
           ${n.sentiment ? `<span class="stable-sentiment-badge stable-sentiment-${escapeHtml(n.sentiment.toLowerCase())}">${escapeHtml(n.sentiment)}</span>` : ""}
+          <button type="button" class="stable-note-edit" data-id="${n.id}" title="Edit note">✎</button>
           <button type="button" class="stable-note-remove" data-id="${n.id}" title="Remove note">×</button>
         </div>
         <div class="stable-note-text">${escapeHtml(n.note)}</div>
@@ -7597,6 +7687,31 @@
     const removeNoteBtn = e.target.closest(".stable-note-remove");
     if (removeNoteBtn){
       removeStableNote(removeNoteBtn.dataset.id);
+      return;
+    }
+    const editNoteBtn = e.target.closest(".stable-note-edit");
+    if (editNoteBtn){
+      stableEditingNoteId = editNoteBtn.dataset.id;
+      renderStableTour();
+      return;
+    }
+    const cancelEditBtn = e.target.closest(".stable-note-cancel");
+    if (cancelEditBtn){
+      stableEditingNoteId = null;
+      renderStableTour();
+      return;
+    }
+    const saveEditBtn = e.target.closest(".stable-note-save");
+    if (saveEditBtn){
+      const row = saveEditBtn.closest(".stable-note-editing");
+      const trainer = row.querySelector(".stable-edit-trainer").value.trim();
+      const horse = row.querySelector(".stable-edit-horse").value.trim();
+      const note = row.querySelector(".stable-edit-quote").value.trim();
+      if (!horse || !note){
+        stableApiError("edit note", new Error("Horse and quote can't be empty"));
+        return;
+      }
+      editStableNote(saveEditBtn.dataset.id, { trainer, horse, note });
       return;
     }
     const extractBtn = e.target.closest(".stable-extract-btn");
