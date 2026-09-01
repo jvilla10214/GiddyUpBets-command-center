@@ -2891,6 +2891,7 @@
       <div class="panel-title" style="margin-bottom:10px;">
         Radar &amp; Storm Forecast — <span id="radarPanelTrackName">Saratoga</span>
         <span class="tag" id="radarModeTag">NOW · RADAR</span>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="radarReadingInfo" title="How to read this radar">ⓘ</button>
       </div>
       <div class="radar-mode-toggle">
         <button type="button" class="radar-mode-btn active" data-mode="radar">Now — Radar</button>
@@ -2906,6 +2907,19 @@
       </div>
       <div class="futurecast-readout" id="radarModeReadout">
         Live weather radar — the most accurate view of what's happening right now, but it doesn't look far ahead.
+      </div>
+      <div class="info-disclosure" id="radarReadingInfo">
+        Color = intensity, not just yes/no rain: green/blue is light, yellow/orange is moderate, red is heavy,
+        purple/pink is extreme (often hail-bearing). A wide, uniform patch drifting steadily is a stratiform
+        rain band — the kind the model above times well. Small, isolated, brightly colored blobs are convective
+        cells — they can spin up in 15–20 minutes with almost no lead time, which is exactly what Rain
+        Nowcast's model can miss. If one of those is closing in and Rain Nowcast still says "no rain expected,"
+        trust the radar over the model.<br><br>
+        Watch it move, not just one frame: step through a few refreshes (or use the embed's own play control)
+        to see which way storms are tracking — a cell has to be heading toward the track, not just nearby, to
+        matter. A gap between cells in an approaching line is usually a lull, not a clearance. Switch to
+        "Forecast — Storms" for a multi-day outlook (ECMWF model data, not live observation) when you need to
+        see further ahead than radar's real-time-only view allows.
       </div>
     </div>
   </div>
@@ -3973,6 +3987,22 @@
     80:"Light showers",81:"Showers",82:"Violent showers",
     85:"Snow showers",86:"Heavy snow showers",
     95:"Thunderstorm",96:"Thunderstorm w/ hail",99:"Thunderstorm w/ hail"
+  };
+  // Same WMO codes as above, mapped to an emoji instead of text — used only
+  // for the track-picker dropdown (see refreshAllTracksWeather()), where a
+  // native <select>'s <option> list can't render actual CSS/color, so an
+  // emoji is the only way to show at-a-glance condition per track.
+  const WMO_EMOJI = {
+    0:"☀️",1:"🌤️",2:"⛅",3:"☁️",
+    45:"🌫️",48:"🌫️",
+    51:"🌦️",53:"🌦️",55:"🌦️",
+    56:"🌧️",57:"🌧️",
+    61:"🌧️",63:"🌧️",65:"🌧️",
+    66:"🌧️",67:"🌧️",
+    71:"🌨️",73:"🌨️",75:"🌨️",77:"🌨️",
+    80:"🌦️",81:"🌧️",82:"🌧️",
+    85:"🌨️",86:"🌨️",
+    95:"⛈️",96:"⛈️",99:"⛈️"
   };
 
   function compassPoint(deg){
@@ -9521,6 +9551,20 @@
     };
   }
 
+  // Direction of the headwind/tailwind bias flipped 2026-09-01 after this app
+  // originally shipped the opposite call (headwind favors closers, tailwind
+  // favors speed) on the "hot fractions come back" energy-cost theory alone.
+  // Checked both directions against real results: pulled every Saratoga day
+  // (2023-2026, 165 days) where NYRA's own Andy Serling reported both a wind
+  // reading and a same-day bias call in Track Trends, and computed each
+  // day's actual stretch headwind/tailwind component. Headwind days favored
+  // Speed over Closer more than 2.5:1 (10 vs 4, out of 101 headwind days);
+  // tailwind days never produced a single Closer-favoring call (0 of 25).
+  // The single strongest headwind day in the whole sample (Jul 29 2023,
+  // 15-25 mph) came back Mixed, not Closer-favoring. That matches the other
+  // real theory found in handicapping literature — it's mechanically harder
+  // to pass a horse into a headwind, so whoever's in front tends to stay
+  // there — rather than the pace-collapse theory this app started with.
   function describeStretchWind(headwind, crosswind){
     const absHead = Math.abs(headwind);
     const absCross = Math.abs(crosswind);
@@ -9531,10 +9575,10 @@
       const strength = absHead < 5 ? "light" : absHead < 10 ? "moderate" : "strong";
       if (headwind > 0){
         return { kind: "headwind", strength, mag: absHead,
-          text: `a ${strength} headwind (~${absHead.toFixed(0)} mph into the field). Hot early fractions tend to come back faster than normal here — that favors horses rating off the pace over lone-speed types trying to wire the field.` };
+          text: `a ${strength} headwind (~${absHead.toFixed(0)} mph into the field). It's hard to make up ground against the wind here — that favors need-to-lead / early-speed types, who are tougher to run down, over deep closers.` };
       }
       return { kind: "tailwind", strength, mag: absHead,
-        text: `a ${strength} tailwind (~${absHead.toFixed(0)} mph). Speed that gets loose on the lead is harder to reel in here — that tends to favor need-to-lead / early-speed types over deep closers.` };
+        text: `a ${strength} tailwind (~${absHead.toFixed(0)} mph). Hot early fractions tend to come back faster than normal here, and a closing kick gets a boost from behind — that favors horses rating off the pace over lone-speed types trying to wire the field.` };
     }
     const strength = absCross < 5 ? "light" : absCross < 10 ? "moderate" : "strong";
     return { kind: "crosswind", strength, mag: absCross,
@@ -9566,9 +9610,9 @@
     let homeSentence = `<strong>Final stretch:</strong> Down the last straightaway into the wire, ${homeDesc.text}`;
 
     const wet = condLabel === "SLOPPY / WET" || condLabel === "MUDDY";
-    if (wet && homeDesc.kind === "tailwind"){
-      homeSentence += " A wet track already tends to favor speed, so the tailwind reinforces that — expect the speed bias to run stronger than a dry-track tailwind alone.";
-    } else if (wet && homeDesc.kind === "headwind"){
+    if (wet && homeDesc.kind === "headwind"){
+      homeSentence += " A wet track already tends to favor speed, so the headwind reinforces that — expect the speed bias to run stronger than a dry-track headwind alone.";
+    } else if (wet && homeDesc.kind === "tailwind"){
       homeSentence += " That cuts against the surface's usual wet-track speed bias, so the two effects partially cancel out — lean on the pace scenario race-by-race rather than a blanket bias call.";
     }
 
@@ -9626,15 +9670,18 @@
 
   // Walks the same forecast-scrubber steps used for the Wind Forecast Scrubber to
   // find the first future point (if any) where the homestretch wind component
-  // turns into at least a moderate headwind — i.e. an actual data-backed clock
-  // time, not a guessed one.
-  function findFutureHeadwindOnset(steps){
+  // turns into at least a moderate TAILWIND — i.e. an actual data-backed clock
+  // time, not a guessed one. Tailwind, not headwind, is the onset worth
+  // flagging here since a stretch tailwind is what erodes front-end speed's
+  // edge (see describeStretchWind()'s own comment on the empirical basis for
+  // this direction).
+  function findFutureTailwindOnset(steps){
     for (let i = 1; i < steps.length; i++){
       const step = steps[i];
       if (step.wind == null || step.dir == null) continue;
       const { headwind, crosswind } = windComponents(step.wind, step.dir, activeTrack.heading.homestretch);
       const desc = describeStretchWind(headwind, crosswind);
-      if (desc.kind === "headwind" && desc.strength !== "light"){
+      if (desc.kind === "tailwind" && desc.strength !== "light"){
         return { step, desc };
       }
     }
@@ -9668,10 +9715,10 @@
     const home = windComponents(speed, dir, activeTrack.heading.homestretch);
     const homeDesc = describeStretchWind(home.headwind, home.crosswind);
 
-    // Only look for a future onset if wind isn't already a moderate+ headwind —
-    // otherwise "becoming a headwind" would misstate conditions that already exist.
-    const onset = (windTrend.label === "increasing" && (homeDesc.kind !== "headwind" || homeDesc.strength === "light"))
-      ? findFutureHeadwindOnset(forecastSteps)
+    // Only look for a future onset if wind isn't already a moderate+ tailwind —
+    // otherwise "becoming a tailwind" would misstate conditions that already exist.
+    const onset = (windTrend.label === "increasing" && (homeDesc.kind !== "tailwind" || homeDesc.strength === "light"))
+      ? findFutureTailwindOnset(forecastSteps)
       : null;
 
     // ---- Headline: wind vs. stretch geometry, plus what shape it favors —
@@ -9679,11 +9726,11 @@
     // below is optional). ----
     let headline;
     if (onset){
-      headline = `${compass} winds are building and should turn into a stretch headwind by around ${fmtTime(onset.step.time)}, likely costing front-end speed late.`;
+      headline = `${compass} winds are building and should turn into a stretch tailwind by around ${fmtTime(onset.step.time)}, likely costing front-end speed late.`;
     } else if (homeDesc.kind === "headwind" && homeDesc.strength !== "light"){
-      headline = `${compass} winds (${Math.round(speed)} mph) are producing a ${homeDesc.strength} stretch headwind — favors horses rating off the pace over lone-speed types.`;
+      headline = `${compass} winds (${Math.round(speed)} mph) are producing a ${homeDesc.strength} stretch headwind — speed that gets loose on the lead will be tough to run down.`;
     } else if (homeDesc.kind === "tailwind" && homeDesc.strength !== "light"){
-      headline = `${compass} winds (${Math.round(speed)} mph) are producing a ${homeDesc.strength} stretch tailwind — speed that gets loose on the lead will be tough to run down.`;
+      headline = `${compass} winds (${Math.round(speed)} mph) are producing a ${homeDesc.strength} stretch tailwind — favors horses rating off the pace over lone-speed types.`;
     } else {
       headline = `Wind (${compass}, ${Math.round(speed)} mph) is a minimal factor through the stretch right now; conditions are holding ${dirtLabel.toLowerCase()} (dirt) / ${turfLabel.toLowerCase()} (turf).`;
     }
@@ -9764,9 +9811,9 @@
     // secondary one next to the headline's own stretch-wind read.
     if (backDesc.kind !== "calm" && backDesc.kind !== homeDesc.kind){
       if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){
-        secondary.push({ tier: 3, text: `Wind flips from a backstretch headwind to a stretch tailwind — shields closers early and helps them finish.` });
+        secondary.push({ tier: 3, text: `Wind flips from a backstretch headwind to a stretch tailwind — pace that survives the backstretch push can still get run down late, since the tailwind gives a closing kick a boost.` });
       } else if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){
-        secondary.push({ tier: 3, text: `Wind flips from a backstretch tailwind to a stretch headwind — an aided pace early runs into more resistance late.` });
+        secondary.push({ tier: 3, text: `Wind flips from a backstretch tailwind to a stretch headwind — any speed that's loose early will be tough to catch, since it's hard to close ground against a headwind late.` });
       }
     }
 
@@ -9823,13 +9870,13 @@
     const home = windComponents(speed, dir, activeTrack.heading.homestretch);
     const homeDesc = describeStretchWind(home.headwind, home.crosswind);
     const PUSH = { light: 0.8, moderate: 1.6, strong: 2.5 };
-    if (homeDesc.kind === "tailwind"){ score += PUSH[homeDesc.strength]; totalPush += PUSH[homeDesc.strength]; } // loose leader, hard to reel in
-    if (homeDesc.kind === "headwind"){ score -= PUSH[homeDesc.strength]; totalPush += PUSH[homeDesc.strength]; } // hot fractions come back
+    if (homeDesc.kind === "headwind"){ score += PUSH[homeDesc.strength]; totalPush += PUSH[homeDesc.strength]; } // hard to make up ground into the wind, loose leader hard to reel in
+    if (homeDesc.kind === "tailwind"){ score -= PUSH[homeDesc.strength]; totalPush += PUSH[homeDesc.strength]; } // hot fractions come back, closing kick gets a boost
 
     const back = windComponents(speed, dir, activeTrack.heading.backstretch);
     const backDesc = describeStretchWind(back.headwind, back.crosswind);
-    if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){ score -= 1.0; totalPush += 1.0; } // shields closers early, helps them finish
-    if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){ score -= 0.5; totalPush += 0.5; } // early aid runs into late resistance
+    if (backDesc.kind === "headwind" && homeDesc.kind === "tailwind"){ score -= 1.0; totalPush += 1.0; } // pace survives the backstretch push, but a stretch tailwind still lets a closer run it down
+    if (backDesc.kind === "tailwind" && homeDesc.kind === "headwind"){ score += 0.5; totalPush += 0.5; } // conditions ease early, but a stretch headwind makes it hard to close ground late
 
     if (dirtLabel === "SLOPPY / WET"){ score += 1.5; totalPush += 1.5; } // wet track already favors speed
     else if (dirtLabel === "MUDDY"){ score += 0.8; totalPush += 0.8; }
@@ -10987,6 +11034,11 @@
     $("tideTile").hidden = !track.tideStationId;
   }
 
+  // trackId -> current-conditions emoji, filled in by refreshAllTracksWeather()
+  // below. Empty until that first resolves, so early renders just show the
+  // track name/flag with no emoji rather than a placeholder.
+  let trackWeatherEmoji = {};
+
   function buildOptgroup(label, ids){
     const group = document.createElement("optgroup");
     group.label = label;
@@ -10996,15 +11048,21 @@
       const opt = document.createElement("option");
       opt.value = t.id;
       // Flag only set on UK/International tracks — US tracks are left
-      // unmarked since the country's assumed for them.
-      opt.textContent = t.flag ? `${t.flag} ${t.name}` : t.name;
+      // unmarked since the country's assumed for them. Weather emoji (if
+      // loaded yet) goes first, same left-to-right reading order as the flag.
+      opt.textContent = [trackWeatherEmoji[t.id], t.flag, t.name].filter(Boolean).join(" ");
       group.appendChild(opt);
     });
     return group;
   }
 
-  function populateTrackSelect(){
+  // Rebuilds just the <option> list — safe to call repeatedly (see
+  // refreshAllTracksWeather()'s periodic re-render below), unlike
+  // populateTrackSelect() itself, which also attaches the change listener
+  // and must only ever run once.
+  function renderTrackSelectOptions(){
     const select = $("trackSelect");
+    const prevValue = select.value || activeTrack.id;
     select.innerHTML = "";
     // US split into one optgroup per state (native <select> can't nest
     // optgroups, so this is the flattest way to show state grouping) —
@@ -11013,8 +11071,36 @@
     buildUsTrackGroups().forEach(({ label, ids }) => select.appendChild(buildOptgroup(label, ids)));
     select.appendChild(buildOptgroup("UK", TRACK_REGIONS.UK));
     select.appendChild(buildOptgroup("International", TRACK_REGIONS.International));
-    select.value = activeTrack.id;
-    select.addEventListener("change", () => switchTrack(select.value));
+    select.value = prevValue;
+  }
+
+  function populateTrackSelect(){
+    renderTrackSelectOptions();
+    $("trackSelect").addEventListener("change", () => switchTrack($("trackSelect").value));
+  }
+
+  // One batched Open-Meteo call for every tracked track's current weather
+  // code (Open-Meteo supports comma-separated lat/lon lists, returning one
+  // result object per location in the same order) — 21 tracks in a single
+  // request instead of 21 separate ones. Purely client-side, straight to
+  // Open-Meteo like every other weather call in this app: no worker, no KV,
+  // so this costs nothing beyond one free API call every 20 minutes.
+  async function refreshAllTracksWeather(){
+    const ids = Object.keys(TRACKS);
+    const lats = ids.map(id => TRACKS[id].lat).join(",");
+    const lons = ids.map(id => TRACKS[id].lon).join(",");
+    try{
+      const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=weather_code`);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      ids.forEach((id, i) => {
+        const code = data[i]?.current?.weather_code;
+        trackWeatherEmoji[id] = code != null ? (WMO_EMOJI[code] ?? "") : "";
+      });
+      renderTrackSelectOptions();
+    } catch(err){
+      console.error("All-tracks weather fetch failed", err);
+    }
   }
 
   async function switchTrack(trackId){
@@ -11398,6 +11484,8 @@
   // already resolves to the right storage key.
   activeTrack = TRACKS[localStorage.getItem(ACTIVE_TRACK_KEY)] ?? TRACKS[DEFAULT_TRACK_ID];
   populateTrackSelect();
+  refreshAllTracksWeather();
+  setInterval(refreshAllTracksWeather, SLOW_REFRESH_MS);
   renderStaticTrackChrome(activeTrack);
 
   loadWeatherLog().then(entries => {
