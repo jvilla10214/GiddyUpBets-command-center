@@ -773,6 +773,7 @@
   .rain-intensity-light{ background: rgba(111,168,201,0.15); color: var(--sky); }
   .rain-intensity-moderate{ background: rgba(240,180,41,0.12); color: var(--tote-amber); }
   .rain-intensity-heavy{ background: rgba(224,82,82,0.12); color: #e05252; }
+  .rain-intensity-extreme{ background: rgba(200,80,220,0.15); color: #c850dc; }
 
   /* ---------- Racing News Wire ---------- */
   .news-wire-list{
@@ -8633,7 +8634,7 @@
   const ALERT_LAST_SEEN_KEY = "giddyupbets_alert_last_seen";
   const ALERT_FEED_MAX = 50;
   let alertFeed = [];
-  let alertState = { initialized: false, windTier: null, rainActive: null, rainTotalTier: null, dirtTier: null };
+  let alertState = { initialized: false, windTier: null, rainActive: null, rainTotalTier: null, dirtTier: null, radarInitialized: false, radarIntensity: null };
   let alertLastSeen = localStorage.getItem(ALERT_LAST_SEEN_KEY);
 
   function loadAlertFeed(){
@@ -8808,7 +8809,33 @@
       }
     }
 
-    alertState = { initialized: true, windTier, rainActive, rainTotalTier, dirtTier: dirtLabel };
+    alertState = { ...alertState, initialized: true, windTier, rainActive, rainTotalTier, dirtTier: dirtLabel };
+    saveAlertState();
+  }
+
+  // Cross-checks a real radar observation (see fetchRadarObservedAt(), Rain
+  // Nowcast section below) against the model-only alerts above. This is the
+  // one thing detectWeatherAlerts() can't do on its own: catch a fast-forming
+  // convective cell that's already showing up on radar before the forecast
+  // model has caught up to it — exactly the blind spot the Radar panel's own
+  // "how to read this" guide warns about. Deliberately its own transition-
+  // gated flag (radarInitialized/radarIntensity) rather than reusing
+  // detectWeatherAlerts()'s `initialized`/`rainActive` fields — radar samples
+  // resolve on their own ~10-min cadence, independent of the 5-min weather
+  // fetch, so tying them to the same flag could suppress or misfire either
+  // one depending on which happens to resolve first after a reload. Silent
+  // whenever radar and the model already agree — this only ever speaks up
+  // about what the model missed, not a duplicate of the existing rain alerts.
+  function detectRadarAlert(result){
+    const intensity = result?.intensity ?? null;
+    if (alertState.radarInitialized && intensity !== alertState.radarIntensity){
+      if (intensity && !alertState.radarIntensity){
+        pushAlert(makeAlert("weather", `Radar shows ${intensity} rain over the track — the forecast model hasn't caught it yet`));
+      } else if (!intensity && alertState.radarIntensity){
+        pushAlert(makeAlert("weather", "Radar-observed rain over the track has cleared"));
+      }
+    }
+    alertState = { ...alertState, radarInitialized: true, radarIntensity: intensity };
     saveAlertState();
   }
 
@@ -9241,7 +9268,28 @@
       `;
     }
 
-    body.innerHTML = forwardHtml;
+    body.innerHTML = forwardHtml + radarCheckLine();
+  }
+
+  // Small addendum line under the model-based Rain Nowcast readout above,
+  // sourced from an actual radar observation (see fetchRadarObservedAt()
+  // below) rather than another model. Only calls out radar/model
+  // *disagreement* with a highlighted tag — when they already agree, a dim
+  // one-line confirmation is enough; no need to shout about it.
+  function radarCheckLine(){
+    if (!radarObservedLoaded) return "";
+    const intensity = lastRadarObserved?.intensity ?? null;
+    const modelSaysActive = lastRainNowcastResult?.current?.active ?? false;
+    if (intensity && !modelSaysActive){
+      return `<div class="rain-nowcast-detail" style="margin-top:8px;">
+        <span class="tag rain-intensity-${intensity}">RADAR</span>
+        <span>Showing ${escapeHtml(intensity)} rain over the track right now — the model above hasn't caught this yet.</span>
+      </div>`;
+    }
+    if (intensity){
+      return `<div class="rain-nowcast-detail-dim">Radar confirms ${escapeHtml(intensity)} rain over the track right now.</div>`;
+    }
+    return `<div class="rain-nowcast-detail-dim">Radar: clear over the track right now.</div>`;
   }
 
   async function loadRainNowcast(){
@@ -9260,6 +9308,127 @@
     if (tag) tag.textContent = "LIVE · PIRATE WEATHER";
     rainNowcastLoaded = true;
     renderRainNowcast(analyzeRainNowcast(minutely));
+  }
+
+  // ---------- Radar-Observed Precipitation (RainViewer) ----------
+  // A second, independent read on "is it raining right now" — not another
+  // forecast model, but an actual sampled pixel from real radar data at the
+  // track's exact coordinates. Uses RainViewer's free public API (no key,
+  // open CORS — same underlying radar most consumer weather apps and the
+  // Windy embed in the panel above are built on) purely as a data source:
+  // fetch its latest tile, read the one pixel over the track, and decode
+  // that color back into an actual reflectivity (dBZ) reading via the exact
+  // color table RainViewer itself publishes for this color scheme — not a
+  // guessed/approximate bucket. This is what lets Rain Nowcast's own
+  // "verify with radar" caveat above actually be acted on by the app
+  // itself instead of just telling the human to go look.
+  //
+  // RAINVIEWER_DBZ_TABLE: [dBZ, r, g, b, a] rows for RainViewer's color
+  // scheme id 2 (the id used in fetchRadarObservedAt()'s tile URL below),
+  // covering dBZ -32..95 — copied byte-for-byte from RainViewer's own
+  // published color table (rainviewer.com/api/color-schemes.html) and
+  // verified against a live sample tile (a currently-clear point came back
+  // fully transparent, matching this table's own dBZ 0 row exactly).
+  const RAINVIEWER_DBZ_TABLE=[[-32,0,0,0,0],[-31,1,1,1,255],[-30,2,2,2,255],[-29,3,3,3,255],[-28,4,4,4,255],[-27,5,5,5,255],[-26,6,6,6,255],[-25,7,7,7,255],[-24,8,8,8,255],[-23,9,9,9,255],[-22,10,10,10,255],[-21,11,11,11,255],[-20,12,12,12,255],[-19,13,13,13,255],[-18,14,14,14,255],[-17,15,15,15,255],[-16,16,16,16,255],[-15,17,17,17,255],[-14,18,18,18,255],[-13,19,19,19,255],[-12,20,20,20,255],[-11,21,21,21,255],[-10,22,22,22,255],[-9,23,23,23,255],[-8,24,24,24,255],[-7,25,25,25,255],[-6,26,26,26,255],[-5,27,27,27,255],[-4,28,28,28,255],[-3,29,29,29,255],[-2,30,30,30,255],[-1,31,31,31,255],[0,130,123,105,73],[1,133,125,106,79],[2,137,128,108,86],[3,141,131,110,92],[4,146,134,112,99],[5,150,136,113,106],[6,155,139,115,112],[7,159,142,117,119],[8,164,145,119,125],[9,169,148,121,132],[10,206,192,135,150],[11,207,193,135,152],[12,208,195,136,154],[13,209,196,136,156],[14,210,197,137,158],[15,211,199,138,161],[16,212,200,139,163],[17,213,201,139,165],[18,214,203,140,167],[19,215,204,141,169],[20,0,163,224,255],[21,17,143,205,255],[22,34,124,187,255],[23,51,105,168,255],[24,68,86,150,255],[25,0,119,170,255],[26,0,113,163,255],[27,0,107,156,255],[28,0,101,149,255],[29,0,95,142,255],[30,0,85,136,255],[31,0,80,132,255],[32,0,75,128,255],[33,0,70,124,255],[34,0,65,120,255],[35,255,238,0,255],[36,255,228,0,255],[37,255,218,0,255],[38,255,208,0,255],[39,255,198,0,255],[40,255,170,0,255],[41,255,161,0,255],[42,255,151,0,255],[43,255,142,0,255],[44,255,132,0,255],[45,255,68,0,255],[46,255,63,0,255],[47,255,57,0,255],[48,255,51,0,255],[49,255,46,0,255],[50,193,0,0,255],[51,187,0,0,255],[52,182,0,0,255],[53,176,0,0,255],[54,171,0,0,255],[55,255,170,255,255],[56,255,163,255,255],[57,255,155,255,255],[58,255,148,255,255],[59,255,140,255,255],[60,255,119,255,255],[61,255,111,255,255],[62,255,103,255,255],[63,255,94,255,255],[64,255,86,255,255],[65,255,255,255,255],[66,255,255,255,255],[67,255,255,255,255],[68,255,255,255,255],[69,255,255,255,255],[70,255,255,255,255],[71,255,255,255,255],[72,255,255,255,255],[73,255,255,255,255],[74,255,255,255,255],[75,0,255,0,255],[76,0,255,0,255],[77,0,255,0,255],[78,0,255,0,255],[79,0,255,0,255],[80,0,255,0,255],[81,0,255,0,255],[82,0,255,0,255],[83,0,255,0,255],[84,0,255,0,255],[85,0,255,0,255],[86,0,255,0,255],[87,0,255,0,255],[88,0,255,0,255],[89,0,255,0,255],[90,0,255,0,255],[91,0,255,0,255],[92,0,255,0,255],[93,0,255,0,255],[94,0,255,0,255],[95,0,255,0,255]];
+
+  // Nearest-color match (squared distance over r,g,b,a) against the table
+  // above — RainViewer's tiles are compressed PNGs, so a sampled pixel won't
+  // exactly equal a table row even when it's the same dBZ bucket underneath.
+  // Alpha near 0 (RainViewer's own "no signal" encoding) short-circuits to
+  // null before doing any color math, both as a cheap fast-path and because
+  // matching a near-transparent pixel against the table's own faint low-dBZ
+  // rows is exactly the kind of near-tie a distance metric handles worst.
+  function nearestDbzForPixel(r, g, b, a){
+    if (a < 20) return null;
+    let best = null, bestDist = Infinity;
+    for (const [dbz, tr, tg, tb, ta] of RAINVIEWER_DBZ_TABLE){
+      const dist = (r - tr) ** 2 + (g - tg) ** 2 + (b - tb) ** 2 + (a - ta) ** 2;
+      if (dist < bestDist){ bestDist = dist; best = dbz; }
+    }
+    return best;
+  }
+
+  // Same NWS-style dBZ bands referenced in the Radar panel's own "how to
+  // read this" guide (see radarReadingInfo) — kept consistent so the app's
+  // own classification never contradicts the advice it's giving the human
+  // reading the map right next to it.
+  function classifyDbz(dbz){
+    if (dbz == null || dbz < 20) return null;
+    if (dbz < 40) return "light";
+    if (dbz < 50) return "moderate";
+    if (dbz < 65) return "heavy";
+    return "extreme";
+  }
+
+  // RainViewer only publishes a new frame every ~10 minutes (see
+  // RADAR_OBSERVED_REFRESH_MS below) — caching the frame-list fetch avoids
+  // hitting weather-maps.json on every poll when nothing's actually changed.
+  let rainviewerFrameCache = { path: null, fetchedAt: 0 };
+  async function latestRainviewerFramePath(){
+    if (rainviewerFrameCache.path && Date.now() - rainviewerFrameCache.fetchedAt < 5 * 60 * 1000){
+      return rainviewerFrameCache.path;
+    }
+    const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const frames = data?.radar?.past;
+    if (!frames?.length) return null;
+    const path = data.host + frames[frames.length - 1].path;
+    rainviewerFrameCache = { path, fetchedAt: Date.now() };
+    return path;
+  }
+
+  // RainViewer's lat/lon tile endpoint returns a 256x256 tile CENTERED on
+  // the given coordinates (no manual Web Mercator tile math needed, unlike
+  // the Esri satellite tiles elsewhere in this app) — so the one pixel this
+  // needs is always exactly the image's center. Zoom 7 is RainViewer's own
+  // max for this endpoint; each pixel covers roughly a couple of km, which
+  // is in the same ballpark as real radar's native resolution anyway.
+  // Color id "2" is the specific scheme RAINVIEWER_DBZ_TABLE above was
+  // copied from — pairing a different id with that table would silently
+  // decode every pixel wrong.
+  async function fetchRadarObservedAt(lat, lon){
+    const framePath = await latestRainviewerFramePath();
+    if (!framePath) return null;
+    const url = `${framePath}/256/7/${lat}/${lon}/2/0_0.png`;
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        try{
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          const cx = Math.floor(canvas.width / 2), cy = Math.floor(canvas.height / 2);
+          const [r, g, b, a] = ctx.getImageData(cx, cy, 1, 1).data;
+          const dbz = nearestDbzForPixel(r, g, b, a);
+          resolve({ dbz, intensity: classifyDbz(dbz) });
+        } catch(err){ reject(err); }
+      };
+      img.onerror = () => reject(new Error("radar tile failed to load"));
+      img.src = url;
+    });
+  }
+
+  const RADAR_OBSERVED_REFRESH_MS = 10 * 60 * 1000; // matches RainViewer's own ~10-min frame cadence — polling faster wouldn't see anything new
+  let lastRadarObserved = null;
+  let radarObservedLoaded = false; // distinguishes "hasn't loaded yet" from "loaded, confirmed clear" — same reasoning as rainNowcastLoaded above
+
+  async function loadRadarObserved(){
+    const trackId = activeTrack.id;
+    let result;
+    try{ result = await fetchRadarObservedAt(activeTrack.lat, activeTrack.lon); }
+    catch(err){
+      console.error("Radar-observed fetch failed", err);
+      return; // leave the panel showing whatever it last had — a transient RainViewer hiccup shouldn't blank a working readout
+    }
+    if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+    lastRadarObserved = result;
+    radarObservedLoaded = true;
+    detectRadarAlert(result);
+    renderRainNowcastPanel();
   }
 
   // ---------- Racing News Wire ----------
@@ -11233,6 +11402,9 @@
     fetchAirQuality();
     fetchTideData(); // no-ops internally for tracks without tideStationId
     loadRainNowcast();
+    lastRadarObserved = null;
+    radarObservedLoaded = false; // this track's own radar sample hasn't resolved yet — same "show loading, not stale/wrong" reasoning as rainNowcastLoaded
+    loadRadarObserved();
   }
 
   // ---------- Sidebar page navigation ----------
@@ -11674,6 +11846,7 @@
   fetchAirQuality();
   fetchTideData(); // no-ops internally for tracks without tideStationId
   loadRainNowcast();
+  loadRadarObserved();
   refreshAllSevereWeatherAlerts(); // independent of which track is active — see its own comment
   setInterval(tickClock, 1000);
   setInterval(fetchWeather, REFRESH_MS);
@@ -11689,6 +11862,7 @@
   setInterval(fetchAirQuality, SLOW_REFRESH_MS); // AQI doesn't move fast enough to justify the main 5-min cadence
   setInterval(fetchTideData, SLOW_REFRESH_MS); // same reasoning; no-ops for non-tide tracks
   setInterval(loadRainNowcast, REFRESH_MS); // same cadence — per-minute data doesn't need faster than the rest of the dashboard
+  setInterval(loadRadarObserved, RADAR_OBSERVED_REFRESH_MS);
 })();
 </script>
 </body>
