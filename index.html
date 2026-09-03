@@ -2792,11 +2792,11 @@
         <div class="skel-block skel-line narrow"></div>
       </div>
       <div class="info-disclosure" id="rainNowcastInfo">
-        Pure radar, not a forecast model — a real pixel sampled from RainViewer's live radar tiles at the
-        track's coordinates, decoded back into an actual reflectivity reading. "Approaching" checks a ring of
-        points ~15 mi out and flags the one in the direction the wind is blowing from, with a rough ETA based on
-        current wind speed — a first-order estimate, not a guarantee, since real storms can move faster, slower,
-        or in a different direction than the surface wind.
+        Pure radar, not a forecast model — sampled from RainViewer's live radar tiles at the track's
+        coordinates, decoded back into actual reflectivity readings. "Rain nearby" scans every pixel within
+        15 mi and reports the closest one showing real rain. An ETA is only attached when that cell is roughly
+        upwind (current wind direction, steering-wind assumption) — a first-order estimate, not a guarantee,
+        since real storms can move faster, slower, or in a different direction than the surface wind.
       </div>
     </div>
 
@@ -8845,9 +8845,10 @@
     // the rest of this alert system).
     const approachIntensity = result?.approaching?.intensity ?? null;
     if (alertState.radarInitialized && approachIntensity && !alertState.radarApproaching && !intensity){
-      const { dir, milesAway, etaMinutes } = result.approaching;
+      const { dir, milesAway, upwind, etaMinutes } = result.approaching;
       const etaText = etaMinutes != null ? ` — could arrive in ~${etaMinutes} min at the current wind speed` : "";
-      pushAlert(makeAlert("weather", `Radar shows ${approachIntensity} rain ~${milesAway} mi ${dir} of the track, upwind${etaText}`));
+      const upwindText = upwind ? `, upwind${etaText}` : " (not clearly upwind — direction of travel uncertain)";
+      pushAlert(makeAlert("weather", `Radar shows ${approachIntensity} rain ~${milesAway} mi ${dir} of the track${upwindText}`));
     }
 
     alertState = { ...alertState, radarInitialized: true, radarIntensity: intensity, radarApproaching: approachIntensity };
@@ -9130,11 +9131,12 @@
     const approaching = lastRadarObserved?.approaching;
     if (approaching){
       const etaText = approaching.etaMinutes != null ? ` — could arrive in ~${approaching.etaMinutes} min at the current wind speed` : "";
+      const upwindText = approaching.upwind ? `, upwind${etaText}` : " (not clearly upwind)";
       body.innerHTML = `
-        <div class="rain-nowcast-headline">Rain approaching</div>
+        <div class="rain-nowcast-headline">Rain nearby</div>
         <div class="rain-nowcast-detail">
           <span class="tag rain-intensity-${approaching.intensity}">${approaching.intensity.toUpperCase()}</span>
-          <span>~${approaching.milesAway} mi ${approaching.dir} of the track, upwind${etaText}</span>
+          <span>~${approaching.milesAway} mi ${approaching.dir} of the track${upwindText}</span>
         </div>
       `;
       return;
@@ -9163,28 +9165,49 @@
   // fully transparent, matching this table's own dBZ 0 row exactly).
   const RAINVIEWER_DBZ_TABLE=[[-32,0,0,0,0],[-31,1,1,1,255],[-30,2,2,2,255],[-29,3,3,3,255],[-28,4,4,4,255],[-27,5,5,5,255],[-26,6,6,6,255],[-25,7,7,7,255],[-24,8,8,8,255],[-23,9,9,9,255],[-22,10,10,10,255],[-21,11,11,11,255],[-20,12,12,12,255],[-19,13,13,13,255],[-18,14,14,14,255],[-17,15,15,15,255],[-16,16,16,16,255],[-15,17,17,17,255],[-14,18,18,18,255],[-13,19,19,19,255],[-12,20,20,20,255],[-11,21,21,21,255],[-10,22,22,22,255],[-9,23,23,23,255],[-8,24,24,24,255],[-7,25,25,25,255],[-6,26,26,26,255],[-5,27,27,27,255],[-4,28,28,28,255],[-3,29,29,29,255],[-2,30,30,30,255],[-1,31,31,31,255],[0,130,123,105,73],[1,133,125,106,79],[2,137,128,108,86],[3,141,131,110,92],[4,146,134,112,99],[5,150,136,113,106],[6,155,139,115,112],[7,159,142,117,119],[8,164,145,119,125],[9,169,148,121,132],[10,206,192,135,150],[11,207,193,135,152],[12,208,195,136,154],[13,209,196,136,156],[14,210,197,137,158],[15,211,199,138,161],[16,212,200,139,163],[17,213,201,139,165],[18,214,203,140,167],[19,215,204,141,169],[20,0,163,224,255],[21,17,143,205,255],[22,34,124,187,255],[23,51,105,168,255],[24,68,86,150,255],[25,0,119,170,255],[26,0,113,163,255],[27,0,107,156,255],[28,0,101,149,255],[29,0,95,142,255],[30,0,85,136,255],[31,0,80,132,255],[32,0,75,128,255],[33,0,70,124,255],[34,0,65,120,255],[35,255,238,0,255],[36,255,228,0,255],[37,255,218,0,255],[38,255,208,0,255],[39,255,198,0,255],[40,255,170,0,255],[41,255,161,0,255],[42,255,151,0,255],[43,255,142,0,255],[44,255,132,0,255],[45,255,68,0,255],[46,255,63,0,255],[47,255,57,0,255],[48,255,51,0,255],[49,255,46,0,255],[50,193,0,0,255],[51,187,0,0,255],[52,182,0,0,255],[53,176,0,0,255],[54,171,0,0,255],[55,255,170,255,255],[56,255,163,255,255],[57,255,155,255,255],[58,255,148,255,255],[59,255,140,255,255],[60,255,119,255,255],[61,255,111,255,255],[62,255,103,255,255],[63,255,94,255,255],[64,255,86,255,255],[65,255,255,255,255],[66,255,255,255,255],[67,255,255,255,255],[68,255,255,255,255],[69,255,255,255,255],[70,255,255,255,255],[71,255,255,255,255],[72,255,255,255,255],[73,255,255,255,255],[74,255,255,255,255],[75,0,255,0,255],[76,0,255,0,255],[77,0,255,0,255],[78,0,255,0,255],[79,0,255,0,255],[80,0,255,0,255],[81,0,255,0,255],[82,0,255,0,255],[83,0,255,0,255],[84,0,255,0,255],[85,0,255,0,255],[86,0,255,0,255],[87,0,255,0,255],[88,0,255,0,255],[89,0,255,0,255],[90,0,255,0,255],[91,0,255,0,255],[92,0,255,0,255],[93,0,255,0,255],[94,0,255,0,255],[95,0,255,0,255]];
 
-  // How far out (and in which 8 directions) fetchRadarObservedAt() looks for
-  // an approaching cell that isn't over the track yet — see its own comment
-  // for why this fits inside the SAME tile fetch, no extra network cost.
-  // 15 miles keeps this inside a real convective cell's own 15-20 min
-  // spin-up lead time at typical storm-motion speeds (roughly 20-40 mph) —
-  // far enough to be a genuine heads-up, not so far the steering-wind ETA
-  // estimate below stops meaning anything.
+  // How far out fetchRadarObservedAt() searches for an approaching cell that
+  // isn't over the track yet — see its own comment for why this fits inside
+  // the SAME tile fetch, no extra network cost. 15 miles keeps this inside a
+  // real convective cell's own 15-20 min spin-up lead time at typical
+  // storm-motion speeds (roughly 20-40 mph) — far enough to be a genuine
+  // heads-up, not so far the steering-wind ETA estimate below stops meaning
+  // anything.
   const RADAR_RING_MILES = 15;
   const RADAR_ZOOM = 7; // must match the zoom in fetchRadarObservedAt()'s tile URL
-  const RADAR_RING_DIRECTIONS = [
-    { dir: "N", deg: 0 }, { dir: "NE", deg: 45 }, { dir: "E", deg: 90 }, { dir: "SE", deg: 135 },
-    { dir: "S", deg: 180 }, { dir: "SW", deg: 225 }, { dir: "W", deg: 270 }, { dir: "NW", deg: 315 },
-  ];
+  const COMPASS_16 = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  // Compass bearing (0=N, clockwise) from the track to a point offset
+  // eastMiles/southMiles away — image-space y grows south, so "north" is
+  // -southMiles, not +.
+  function bearingDeg(eastMiles, southMiles){
+    let deg = Math.atan2(eastMiles, -southMiles) * 180 / Math.PI;
+    if (deg < 0) deg += 360;
+    return deg;
+  }
   // Standard Web Mercator ground resolution formula (same family as
   // lonLatToTileXY() elsewhere in this app, solved for meters/pixel instead
   // of tile index) — at RADAR_ZOOM, this comes out to roughly 900m/pixel at
   // Saratoga's latitude, so a 256px tile spans well over 100 miles across.
-  // The whole ring sample below reads pixels from the ONE tile
+  // The whole scan below reads pixels from the ONE tile
   // fetchRadarObservedAt() already downloads for the center-point check.
   function metersPerPixelAt(lat){
     return 156543.03392 * Math.cos(lat * Math.PI / 180) / (2 ** RADAR_ZOOM);
   }
+
+  // Confirmed live (2026-09-02) against a real tile: RainViewer's PNGs
+  // contain scattered anti-aliasing/dithering pixels at color-band edges
+  // that don't correspond to ANY real dBZ color — one sampled at (136,221,
+  // 238,255) came back "nearest" to dBZ 65 (white/extreme) at a squared
+  // distance over 15,000, even though the pixels immediately around it were
+  // clean, confident matches to real dBZ ~10-20 rows at distance 0. A
+  // dithering pixel like that is nowhere near ANY real table color, but
+  // "nearest," unbounded, still returns whichever one is least-far — turning
+  // a rendering artifact into a confidently wrong classification (a false
+  // EXTREME reading that sent a real cell's distance from ~8mi down to a
+  // fabricated ~3.5mi). MAX_DBZ_MATCH_DIST_SQ rejects any match that isn't
+  // actually close to a real table color, based on real matches observed
+  // running comfortably under 100 (minor PNG compression noise) versus this
+  // artifact's 15,000+ — 1200 leaves wide margin on both sides.
+  const MAX_DBZ_MATCH_DIST_SQ = 1200;
 
   // Nearest-color match (squared distance over r,g,b,a) against the table
   // above — RainViewer's tiles are compressed PNGs, so a sampled pixel won't
@@ -9200,7 +9223,7 @@
       const dist = (r - tr) ** 2 + (g - tg) ** 2 + (b - tb) ** 2 + (a - ta) ** 2;
       if (dist < bestDist){ bestDist = dist; best = dbz; }
     }
-    return best;
+    return bestDist <= MAX_DBZ_MATCH_DIST_SQ ? best : null;
   }
 
   // Same NWS-style dBZ bands referenced in the Radar panel's own "how to
@@ -9261,47 +9284,66 @@
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0);
           const cx = Math.floor(canvas.width / 2), cy = Math.floor(canvas.height / 2);
+          // One getImageData() over the whole tile, then plain array reads —
+          // far cheaper than one getImageData() call per sampled pixel once
+          // the scan below is checking thousands of them.
+          const { data: pixels, width: stride, height: rows } = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const readAt = (px, py) => {
-            const [r, g, b, a] = ctx.getImageData(px, py, 1, 1).data;
-            const dbz = nearestDbzForPixel(r, g, b, a);
+            const i = (py * stride + px) * 4;
+            const dbz = nearestDbzForPixel(pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]);
             return { dbz, intensity: classifyDbz(dbz) };
           };
           const center = readAt(cx, cy);
 
-          // Ring sample — image-space x grows east, y grows south (screen/
-          // tile convention), so a compass bearing maps to
-          // (cx + offset*sin, cy - offset*cos), not the usual math convention.
-          const offsetPx = (RADAR_RING_MILES * 1609.34) / metersPerPixelAt(lat);
-          const ring = RADAR_RING_DIRECTIONS.map(({ dir, deg }) => {
-            const rad = deg * Math.PI / 180;
-            const px = Math.round(cx + offsetPx * Math.sin(rad));
-            const py = Math.round(cy - offsetPx * Math.cos(rad));
-            if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return { dir, dbz: null, intensity: null };
-            return { dir, ...readAt(px, py) };
-          });
-
-          // "Approaching" only means something when nothing's over the track
-          // yet (a strictly weaker signal than "it's already here"), and only
-          // in the ring direction closest to where the wind is blowing FROM —
-          // a steering-wind assumption, the same first-order approximation
-          // real short-range nowcasting leans on when it doesn't have a
-          // second radar frame to measure a cell's actual observed motion
-          // from. Real storms can move faster/slower or diverge from the
-          // surface wind, so etaMinutes is a rough estimate, not a promise.
-          let approaching = null;
-          if (!center.intensity && windFromDeg != null){
-            const upwind = RADAR_RING_DIRECTIONS.reduce((best, d) => {
-              const diff = Math.min(Math.abs(d.deg - windFromDeg), 360 - Math.abs(d.deg - windFromDeg));
-              return diff < best.diff ? { ...d, diff } : best;
-            }, { diff: Infinity });
-            const hit = ring.find(r => r.dir === upwind.dir);
-            if (hit?.intensity){
-              const etaMinutes = windSpeedMph > 1 ? Math.round((RADAR_RING_MILES / windSpeedMph) * 60) : null;
-              approaching = { dir: upwind.dir, intensity: hit.intensity, milesAway: RADAR_RING_MILES, etaMinutes };
+          // Dense scan for the CLOSEST real-rain pixel within RADAR_RING_MILES
+          // of the track — checks every pixel in the box, not just a fixed
+          // ring, because a real cell can sit anywhere in the disc. (The
+          // original design only sampled 8 fixed compass points on a 15-mile
+          // circle plus the exact center, and missed a real cell sitting
+          // 7.8 miles out — confirmed live against a real RainViewer tile —
+          // because nothing landed on it.) Still just one tile fetch; this is
+          // a plain loop over the pixels already decoded above.
+          const mpp = metersPerPixelAt(lat);
+          const offsetPx = Math.min(cx, cy, Math.round((RADAR_RING_MILES * 1609.34) / mpp));
+          let nearest = null;
+          for (let y = Math.max(0, cy - offsetPx); y <= Math.min(rows - 1, cy + offsetPx); y++){
+            for (let x = Math.max(0, cx - offsetPx); x <= Math.min(stride - 1, cx + offsetPx); x++){
+              const distMiles = Math.hypot(x - cx, y - cy) * mpp / 1609.34;
+              if (distMiles > RADAR_RING_MILES) continue;
+              if (nearest && distMiles >= nearest.distMiles) continue; // already found something closer
+              const { dbz, intensity } = readAt(x, y);
+              if (!intensity) continue; // below the light-rain floor
+              nearest = { distMiles, dbz, intensity, eastMiles: (x - cx) * mpp / 1609.34, southMiles: (y - cy) * mpp / 1609.34 };
             }
           }
 
-          resolve({ dbz: center.dbz, intensity: center.intensity, ring, approaching });
+          // "Approaching" only means something when nothing's over the track
+          // yet (a strictly weaker signal than "it's already here"). ETA is
+          // only attached when the nearest cell is roughly upwind (within 60°
+          // of the direction the wind is blowing FROM) — a steering-wind
+          // assumption, the same first-order approximation real short-range
+          // nowcasting leans on when it doesn't have a second radar frame to
+          // measure a cell's actual observed motion from. When it's nearby
+          // but NOT upwind, this still reports the distance/direction, just
+          // without implying an arrival estimate the data doesn't support.
+          let approaching = null;
+          if (!center.intensity && nearest){
+            const bearing = bearingDeg(nearest.eastMiles, nearest.southMiles);
+            let upwind = false, etaMinutes = null;
+            if (windFromDeg != null){
+              const diff = Math.min(Math.abs(bearing - windFromDeg), 360 - Math.abs(bearing - windFromDeg));
+              upwind = diff <= 60;
+              if (upwind && windSpeedMph > 1) etaMinutes = Math.round((nearest.distMiles / windSpeedMph) * 60);
+            }
+            approaching = {
+              dir: COMPASS_16[Math.round(bearing / 22.5) % 16],
+              intensity: nearest.intensity,
+              milesAway: Math.round(nearest.distMiles * 10) / 10,
+              upwind, etaMinutes,
+            };
+          }
+
+          resolve({ dbz: center.dbz, intensity: center.intensity, approaching });
         } catch(err){ reject(err); }
       };
       img.onerror = () => reject(new Error("radar tile failed to load"));
