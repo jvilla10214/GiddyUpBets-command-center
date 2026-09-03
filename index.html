@@ -2364,6 +2364,66 @@
     z-index: 50;
   }
   .alert-dropdown[hidden]{ display: none; }
+
+  /* ---------- Command Palette (prototype, 2026-09-03) ---------- */
+  #cmdpTriggerBtn{ font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.03em; }
+  .cmdp-overlay{
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 12vh;
+    z-index: 200;
+  }
+  .cmdp-overlay[hidden]{ display: none; }
+  .cmdp-box{
+    width: min(560px, 92vw);
+    max-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--tote-amber);
+    border-radius: var(--radius);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    overflow: hidden;
+  }
+  #cmdpInput{
+    background: var(--panel-2);
+    border: none;
+    border-bottom: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family: 'Oswald', sans-serif;
+    font-size: 17px;
+    padding: 16px 18px;
+    outline: none;
+  }
+  #cmdpInput::placeholder{ color: var(--parchment-dim); }
+  .cmdp-results{ overflow-y: auto; padding: 6px; }
+  .cmdp-row{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--parchment);
+  }
+  .cmdp-row.active{ background: rgba(240,180,41,0.14); color: var(--tote-amber); }
+  .cmdp-row-sub{ color: var(--parchment-dim); font-size: 11px; flex-shrink: 0; }
+  .cmdp-row.active .cmdp-row-sub{ color: var(--tote-amber); opacity: 0.7; }
+  .cmdp-empty{ padding: 16px; color: var(--parchment-dim); font-size: 13px; font-style: italic; }
+  .cmdp-hint{
+    border-top: 1px solid var(--panel-border);
+    padding: 8px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    letter-spacing: 0.02em;
+  }
   .alert-dropdown-header{
     display: flex;
     justify-content: space-between;
@@ -2482,6 +2542,7 @@
     <span id="clock">--:--:--</span>
     <span>Next refresh: <span id="countdown">--</span></span>
     <button id="refreshBtn">↻ Refresh now</button>
+    <button type="button" id="cmdpTriggerBtn" title="Jump to a track or page (⌘K)">⌘K</button>
     <div class="alert-bell-wrap">
       <button type="button" id="alertBellBtn" class="alert-bell-btn" aria-expanded="false" title="Alert feed">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2503,6 +2564,14 @@
     </div>
   </div>
 </header>
+
+<div class="cmdp-overlay" id="cmdpOverlay" hidden>
+  <div class="cmdp-box">
+    <input type="text" id="cmdpInput" placeholder="Jump to a track or page…" autocomplete="off" spellcheck="false">
+    <div class="cmdp-results" id="cmdpResults"></div>
+    <div class="cmdp-hint">↑↓ to navigate &nbsp;·&nbsp; ↵ to select &nbsp;·&nbsp; esc to close</div>
+  </div>
+</div>
 
 <div class="update-banner" id="updateBanner" hidden>
   <span class="update-banner-icon">🔄</span>
@@ -11992,6 +12061,115 @@
   });
   fetchPageVersionTag().then(tag => { pageVersionTag = tag; }); // baseline from the copy actually running
   setInterval(checkForUpdate, UPDATE_CHECK_MS);
+
+  // ---------- Command Palette (prototype, 2026-09-03) ----------
+  // Cmd/Ctrl+K opens a fuzzy-searchable jump list over every track and
+  // sidebar page, plus a couple of one-off actions (refresh, alert feed) —
+  // built directly off the same TRACKS object and .sidebar-btn DOM the rest
+  // of the app already uses, not a parallel hardcoded list that could drift
+  // out of sync with it. Prototype status: demonstrates the interaction and
+  // is wired to the real switchTrack()/page-nav functions, but hasn't been
+  // through a full pass (e.g. no history of recent jumps yet) — built to be
+  // tried live before deciding whether it's worth finishing.
+  function buildCommandList(){
+    const commands = [];
+    Object.values(TRACKS).forEach(t => {
+      commands.push({
+        label: [t.flag, t.name].filter(Boolean).join(" "),
+        sub: "Switch track",
+        // switchTrack() alone doesn't sync the sidebar <select>'s own
+        // displayed value — normally a moot point since it's only ever
+        // called FROM that select's own change event, but the palette
+        // calls it directly, so the dropdown needs to be told explicitly
+        // or it's left showing the old track while the rest of the page
+        // shows the new one.
+        action: () => { $("trackSelect").value = t.id; switchTrack(t.id); closeCommandPalette(); },
+      });
+    });
+    document.querySelectorAll(".sidebar-btn[data-page]").forEach(btn => {
+      commands.push({
+        label: btn.textContent.trim(),
+        sub: "Go to page",
+        action: () => { btn.click(); closeCommandPalette(); },
+      });
+    });
+    commands.push({ label: "Refresh now", sub: "Action", action: () => { $("refreshBtn").click(); closeCommandPalette(); } });
+    commands.push({ label: "Open Alert Feed", sub: "Action", action: () => { $("alertBellBtn").click(); closeCommandPalette(); } });
+    return commands;
+  }
+
+  let cmdpCommands = [];
+  let cmdpFiltered = [];
+  let cmdpActiveIdx = 0;
+
+  function renderCommandResults(){
+    const el = $("cmdpResults");
+    if (!cmdpFiltered.length){
+      el.innerHTML = `<div class="cmdp-empty">No matches.</div>`;
+      return;
+    }
+    el.innerHTML = cmdpFiltered.map((c, i) => `
+      <div class="cmdp-row${i === cmdpActiveIdx ? " active" : ""}" data-idx="${i}">
+        <span>${escapeHtml(c.label)}</span>
+        <span class="cmdp-row-sub">${escapeHtml(c.sub)}</span>
+      </div>
+    `).join("");
+    el.querySelector(".cmdp-row.active")?.scrollIntoView({ block: "nearest" });
+  }
+
+  function filterCommands(query){
+    const q = query.trim().toLowerCase();
+    cmdpFiltered = q ? cmdpCommands.filter(c => c.label.toLowerCase().includes(q)) : cmdpCommands;
+    cmdpActiveIdx = 0;
+    renderCommandResults();
+  }
+
+  function openCommandPalette(){
+    cmdpCommands = buildCommandList();
+    $("cmdpInput").value = "";
+    filterCommands("");
+    $("cmdpOverlay").hidden = false;
+    $("cmdpInput").focus();
+  }
+
+  function closeCommandPalette(){
+    $("cmdpOverlay").hidden = true;
+  }
+
+  function initCommandPalette(){
+    $("cmdpTriggerBtn").addEventListener("click", openCommandPalette);
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"){
+        e.preventDefault();
+        $("cmdpOverlay").hidden ? openCommandPalette() : closeCommandPalette();
+      } else if (e.key === "Escape" && !$("cmdpOverlay").hidden){
+        closeCommandPalette();
+      }
+    });
+    $("cmdpOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "cmdpOverlay") closeCommandPalette();
+    });
+    $("cmdpInput").addEventListener("input", (e) => filterCommands(e.target.value));
+    $("cmdpInput").addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown"){
+        e.preventDefault();
+        cmdpActiveIdx = Math.min(cmdpActiveIdx + 1, cmdpFiltered.length - 1);
+        renderCommandResults();
+      } else if (e.key === "ArrowUp"){
+        e.preventDefault();
+        cmdpActiveIdx = Math.max(cmdpActiveIdx - 1, 0);
+        renderCommandResults();
+      } else if (e.key === "Enter"){
+        e.preventDefault();
+        cmdpFiltered[cmdpActiveIdx]?.action();
+      }
+    });
+    $("cmdpResults").addEventListener("click", (e) => {
+      const row = e.target.closest(".cmdp-row");
+      if (row) cmdpFiltered[Number(row.dataset.idx)]?.action();
+    });
+  }
+  initCommandPalette();
 
   initWindFlow();
   initTrackMapResize();
