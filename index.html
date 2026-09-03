@@ -6969,7 +6969,30 @@
       table.hidden = false;
       $("historyAddBtn").addEventListener("click", async () => {
         const trackId = activeTrack.id;
-        const entry = { ...stats, isPartial: false, capturedAt: new Date().toISOString() };
+        // Attach the same retrospective Predictor Score maybeAutoLogYesterday()
+        // computes (see its own comment on why this isn't hindsight there) —
+        // but ONLY when dateStr is genuinely yesterday, i.e. this button is
+        // standing in for that automatic logger having missed its window
+        // (browser wasn't open), not being used to backfill some arbitrary
+        // older date. A score computed for a day whose actual bias is already
+        // long on record — which is exactly what this button is normally for —
+        // would be hindsight dressed up as a prediction, the same problem
+        // backfillDailyLogFromNyra() avoids by never computing one at all.
+        // Confirmed via a live audit (2026-09-02) that this exclusion was too
+        // broad in practice: EVERY stored day had a null score, because this
+        // button — not just the bulk backfill — was creating finalized entries
+        // with no score either, permanently locking maybeAutoLogYesterday()
+        // out once it ran first.
+        const { date: todayStrForAdd } = nowInTrackTZ();
+        const isYesterday = dateStr === shiftDateStr(todayStrForAdd, -1);
+        const retroScore = isYesterday
+          ? computeBiasPredictorScore({ speed: stats.windAvg, dir: stats.windPrevailingDeg, dirtLabel: stats.dirtConditionLabel, tide: null, apparentTemp: null, humidity: null })
+          : null;
+        const entry = {
+          ...stats, isPartial: false, capturedAt: new Date().toISOString(),
+          insideSpeed: retroScore?.insideSpeed ?? null,
+          outsideClosers: retroScore?.outsideClosers ?? null,
+        };
         try{
           const entries = await weatherLogApiUpsert(trackId, entry);
           if (activeTrack.id !== trackId) return;
