@@ -2112,6 +2112,35 @@
   .archive-race-header strong{ color: var(--parchment); }
   .archive-finish-line{ font-size: 12.5px; color: var(--rail-green); margin-top: 6px; }
   .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
+  .archive-month-summary:empty{ display: none; }
+  .archive-month-summary-grid{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .archive-month-stat{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .archive-month-stat-value{
+    font-family: 'Oswald', sans-serif;
+    font-size: 22px;
+    color: var(--tote-amber);
+  }
+  .archive-month-stat-value.archive-month-stat-bias{ font-size: 15px; }
+  .archive-month-stat-label{
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
   .archive-search-result{
     margin-bottom: 18px;
     padding-bottom: 14px;
@@ -3005,11 +3034,15 @@
         <input type="text" id="archiveSearchInput" placeholder="Search horse, trainer, or jockey…" aria-label="Search saved race days">
         <span class="log-note" id="archiveStatus">Loading saved race days…</span>
       </div>
+      <div class="archive-month-summary" id="archiveMonthSummary"></div>
       <div class="stable-trainer-list" id="archiveList"></div>
       <div class="info-disclosure" id="archiveInfo">
         Race Day Archive saves a snapshot of that day's entries + results as they're viewed live — an early-in-the-day
         visit archives entries only, a later visit (or the next visitor) fills in results as races go final. Weather
         and Bias rows shown alongside a saved day come straight from the Daily Log / Bias Tracker for that same date.
+        The Month at a Glance strip above the list is computed the same way — favorite win rate and average field
+        size only count races with both saved entries (for the morning-line favorite) and a final result, so an
+        early month with mostly-open days will show fewer counted races than saved days.
       </div>
     </div>
   </div>
@@ -5861,6 +5894,8 @@
     archiveSearchQuery = "";
     archiveSearchResults = null;
     archiveSearching = false;
+    monthSummaryCache = {};
+    monthSummaryLoadingKey = null;
     const searchInput = $("archiveSearchInput");
     if (searchInput) searchInput.value = "";
     renderRaceDayArchive();
@@ -6078,6 +6113,152 @@
     renderRaceDayArchive();
   }
 
+  // ---------- Race Day Archive: Month at a Glance ----------
+  // Aggregate read across every saved day in the selected month — favorite
+  // win rate, average field size, and the month's dominant bias — computed
+  // from data that's already being archived anyway (this page's own
+  // entries+results snapshots, Bias Tracker's biasLog), just never
+  // summarized before. Needs every day in the month cached client-side
+  // first, same "fetch whatever's missing, in parallel" approach
+  // runArchiveSearch() above already uses for the same underlying reason
+  // (normal browsing only ever loads a day once it's expanded).
+  let monthSummaryCache = {}; // monthKey -> computed stats; cleared on track switch (loadRaceDayArchive())
+  let monthSummaryLoadingKey = null; // guards against a second render re-triggering the same fetch mid-flight
+
+  async function ensureMonthCached(datesInMonth){
+    const trackId = activeTrack.id;
+    const toFetch = datesInMonth.filter(d => !archiveDayCache[d]);
+    if (!toFetch.length) return;
+    await Promise.all(toFetch.map(async date => {
+      try{
+        const res = await fetch(stableApiUrl(`/raceday?track=${encodeURIComponent(trackId)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+        archiveDayCache[date] = res.ok ? await res.json() : { entries: [], results: [] };
+      } catch(err){
+        archiveDayCache[date] = { entries: [], results: [] }; // avoid retry-looping forever on a real failure
+      }
+    }));
+  }
+
+  // Same "plurality, not just most common" reasoning as biasTrendPhrase()
+  // (Bias Tracker's own trend synthesis) — a bare label version of it, since
+  // this needs to sit in a compact stat card, not a full sentence.
+  function dominantBiasLabel(values){
+    if (!values.length) return null;
+    const counts = {};
+    values.forEach(v => counts[v] = (counts[v] ?? 0) + 1);
+    const [topStyle, topCount] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (topStyle === "Mixed / Inconsistent" || topCount / values.length < 0.5) return "No clear trend";
+    return topStyle;
+  }
+
+  // Pure computation over already-cached data — kept separate from the
+  // async fetch above so it's cheap to re-run once a month is cached
+  // (e.g. flipping back to a month already visited this session).
+  function computeMonthSummary(monthKey, datesInMonth){
+    let favoriteRaces = 0, favoriteWins = 0;
+    let fieldSizeSum = 0, fieldSizeRaces = 0;
+
+    for (const date of datesInMonth){
+      const cached = archiveDayCache[date];
+      if (!cached) continue;
+      const resultsByRace = {};
+      (cached.results || []).forEach(r => { resultsByRace[r.raceNumber] = r; });
+      (cached.entries || []).forEach(race => {
+        const result = resultsByRace[race.raceNumber];
+        const horses = race.horses || [];
+
+        // Field size: the actual final field when the race went final
+        // (finishOrder already excludes scratches by construction), falling
+        // back to entries' non-scratched count for a race that hasn't run
+        // yet or whose result wasn't saved.
+        if (result?.isFinal && result.finishOrder?.length){
+          fieldSizeSum += result.finishOrder.length;
+          fieldSizeRaces++;
+        } else {
+          const live = horses.filter(h => !h.scratched).length;
+          if (live){ fieldSizeSum += live; fieldSizeRaces++; }
+        }
+
+        // Favorite win rate needs BOTH a final result and at least one
+        // horse with a parseable morning-line price — an entries-only or
+        // results-only race (see archiveRaceHtml()'s own comment on
+        // horses: null for results-only days) can't answer "did the
+        // favorite win," so it's skipped rather than guessed at.
+        if (!result?.isFinal || !result.finishOrder?.length || !horses.length) return;
+        let favorite = null, favoriteOdds = Infinity;
+        horses.forEach(h => {
+          if (h.scratched) return;
+          const dec = parseOddsToDecimal(h.mlOdds);
+          if (dec != null && dec < favoriteOdds){ favoriteOdds = dec; favorite = h; }
+        });
+        if (!favorite) return;
+        favoriteRaces++;
+        const winner = result.finishOrder.find(f => f.finishPosition === 1);
+        if (winner && String(winner.postPosition) === String(favorite.postPosition)) favoriteWins++;
+      });
+    }
+
+    const monthBias = biasLog.filter(e => monthKeyOf(e.date) === monthKey);
+    return {
+      favoriteRaces, favoriteWins,
+      favoritePct: favoriteRaces ? Math.round((favoriteWins / favoriteRaces) * 100) : null,
+      avgFieldSize: fieldSizeRaces ? fieldSizeSum / fieldSizeRaces : null,
+      fieldSizeRaces,
+      dirtLabel: dominantBiasLabel(monthBias.map(entryDirtBias).filter(Boolean)),
+      turfLabel: dominantBiasLabel(monthBias.map(entryTurfBias).filter(Boolean)),
+    };
+  }
+
+  function renderMonthSummary(stats){
+    const el = $("archiveMonthSummary");
+    if (!el) return;
+    if (!stats){ el.innerHTML = `<div class="archive-empty">Crunching this month's results…</div>`; return; }
+    const cards = [];
+    if (stats.favoritePct != null){
+      cards.push(`<div class="archive-month-stat">
+        <span class="archive-month-stat-value">${stats.favoritePct}%</span>
+        <span class="archive-month-stat-label">Favorites won (${stats.favoriteWins} of ${stats.favoriteRaces})</span>
+      </div>`);
+    }
+    if (stats.avgFieldSize != null){
+      cards.push(`<div class="archive-month-stat">
+        <span class="archive-month-stat-value">${stats.avgFieldSize.toFixed(1)}</span>
+        <span class="archive-month-stat-label">Avg field size (${stats.fieldSizeRaces} races)</span>
+      </div>`);
+    }
+    if (stats.dirtLabel){
+      cards.push(`<div class="archive-month-stat">
+        <span class="archive-month-stat-value archive-month-stat-bias">${escapeHtml(stats.dirtLabel)}</span>
+        <span class="archive-month-stat-label">Dirt bias this month</span>
+      </div>`);
+    }
+    if (stats.turfLabel){
+      cards.push(`<div class="archive-month-stat">
+        <span class="archive-month-stat-value archive-month-stat-bias">${escapeHtml(stats.turfLabel)}</span>
+        <span class="archive-month-stat-label">Turf bias this month</span>
+      </div>`);
+    }
+    el.innerHTML = cards.length ? `<div class="archive-month-summary-grid">${cards.join("")}</div>` : "";
+  }
+
+  async function loadMonthSummary(monthKey, datesInMonth){
+    if (monthSummaryCache[monthKey]){
+      renderMonthSummary(monthSummaryCache[monthKey]);
+      return;
+    }
+    if (monthSummaryLoadingKey === monthKey) return; // already fetching this exact month
+    monthSummaryLoadingKey = monthKey;
+    renderMonthSummary(null);
+    const trackId = activeTrack.id;
+    await ensureMonthCached(datesInMonth);
+    monthSummaryLoadingKey = null;
+    // Stale if the track or the selected month moved on while this was in flight.
+    if (activeTrack.id !== trackId || selectedArchiveMonth !== monthKey) return;
+    const stats = computeMonthSummary(monthKey, datesInMonth);
+    monthSummaryCache[monthKey] = stats;
+    renderMonthSummary(stats);
+  }
+
   function renderRaceDayArchive(){
     const status = $("archiveStatus");
     const list = $("archiveList");
@@ -6087,20 +6268,23 @@
       status.textContent = "Loading saved race days…";
       list.innerHTML = "";
       if (monthSelect) monthSelect.hidden = true;
+      $("archiveMonthSummary").innerHTML = "";
       return;
     }
     if (!archiveDates.length){
       status.textContent = `No saved race days yet for ${activeTrack.shortName} — they're archived automatically as you view Entries.`;
       list.innerHTML = "";
       if (monthSelect) monthSelect.hidden = true;
+      $("archiveMonthSummary").innerHTML = "";
       return;
     }
 
     if (archiveSearchQuery.trim()){
       // Search spans every saved day, not just the selected month — hide
-      // the month picker while a search is active so it doesn't imply the
-      // results are scoped to it.
+      // the month picker AND the month summary while a search is active so
+      // neither implies the results are scoped to one month.
       if (monthSelect) monthSelect.hidden = true;
+      $("archiveMonthSummary").innerHTML = "";
       if (archiveSearching){
         status.textContent = `Searching ${archiveDates.length} saved day${archiveDates.length === 1 ? "" : "s"} for ${activeTrack.shortName}…`;
         list.innerHTML = `<div class="archive-empty">Loading…</div>`;
@@ -6136,6 +6320,7 @@
         monthSelect.value = selectedArchiveMonth;
       }
       const datesInMonth = archiveDates.filter(d => monthKeyOf(d) === selectedArchiveMonth);
+      loadMonthSummary(selectedArchiveMonth, datesInMonth);
 
       status.textContent = `${datesInMonth.length} saved day${datesInMonth.length === 1 ? "" : "s"} for ${activeTrack.shortName} in ${monthLabelOf(selectedArchiveMonth)} (${archiveDates.length} total).`;
       list.innerHTML = datesInMonth.map(date => {
