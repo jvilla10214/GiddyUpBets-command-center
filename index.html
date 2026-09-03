@@ -155,7 +155,7 @@
          "—"/"Loading…" underneath, unchanged) behind a pulsing block sized
          by that node's own font metrics. Removed via classList.remove('skel')
          at the exact point each independent data source first resolves —
-         see render(), fetchAirQuality(), fetchTideData(), loadRainNowcast(),
+         see render(), fetchAirQuality(), fetchTideData(), loadRadarObserved(),
          refreshOfficialTrackConditions().
      (2) .skel-block — a standalone placeholder element used only in markup
          that gets wholesale innerHTML-replaced once real data arrives
@@ -2792,10 +2792,11 @@
         <div class="skel-block skel-line narrow"></div>
       </div>
       <div class="info-disclosure" id="rainNowcastInfo">
-        Short-range estimate from Pirate Weather's per-minute nowcast (blends short-range models with radar) —
-        not a guarantee, especially for fast-forming summer storms that can spin up faster than any model
-        catches. Beyond the next hour, this falls back to the site's own longer-range forecast data, clearly
-        lower-confidence and without per-minute detail.
+        Pure radar, not a forecast model — a real pixel sampled from RainViewer's live radar tiles at the
+        track's coordinates, decoded back into an actual reflectivity reading. "Approaching" checks a ring of
+        points ~15 mi out and flags the one in the direction the wind is blowing from, with a rough ETA based on
+        current wind speed — a first-order estimate, not a guarantee, since real storms can move faster, slower,
+        or in a different direction than the surface wind.
       </div>
     </div>
 
@@ -8634,7 +8635,7 @@
   const ALERT_LAST_SEEN_KEY = "giddyupbets_alert_last_seen";
   const ALERT_FEED_MAX = 50;
   let alertFeed = [];
-  let alertState = { initialized: false, windTier: null, rainActive: null, rainTotalTier: null, dirtTier: null, radarInitialized: false, radarIntensity: null };
+  let alertState = { initialized: false, windTier: null, rainActive: null, rainTotalTier: null, dirtTier: null, radarInitialized: false, radarIntensity: null, radarApproaching: null };
   let alertLastSeen = localStorage.getItem(ALERT_LAST_SEEN_KEY);
 
   function loadAlertFeed(){
@@ -8835,7 +8836,21 @@
         pushAlert(makeAlert("weather", "Radar-observed rain over the track has cleared"));
       }
     }
-    alertState = { ...alertState, radarInitialized: true, radarIntensity: intensity };
+
+    // Approaching-but-not-overhead-yet: only worth its own alert the moment
+    // it FIRST shows up (clear -> approaching) — once it's already overhead
+    // the alert above takes over, and once it fades back to clear without
+    // ever arriving there's nothing actionable left to say, so that
+    // transition stays silent on purpose (same "don't fire noise" rule as
+    // the rest of this alert system).
+    const approachIntensity = result?.approaching?.intensity ?? null;
+    if (alertState.radarInitialized && approachIntensity && !alertState.radarApproaching && !intensity){
+      const { dir, milesAway, etaMinutes } = result.approaching;
+      const etaText = etaMinutes != null ? ` — could arrive in ~${etaMinutes} min at the current wind speed` : "";
+      pushAlert(makeAlert("weather", `Radar shows ${approachIntensity} rain ~${milesAway} mi ${dir} of the track, upwind${etaText}`));
+    }
+
+    alertState = { ...alertState, radarInitialized: true, radarIntensity: intensity, radarApproaching: approachIntensity };
     saveAlertState();
   }
 
@@ -9091,223 +9106,40 @@
     }
   }
 
-  // ---------- Rain Nowcast ----------
-  // Short-range ("next hour") rain start/intensity/duration estimate from
-  // Pirate Weather's minutely block (per-minute precipIntensity/
-  // precipProbability for ~60 minutes, blending short-range models with
-  // radar-based nowcasting) — a different, much finer-grained data source
-  // than the Open-Meteo hourly/minutely_15 data the rest of this app uses.
-  // The Worker only proxies the raw per-minute array (the API key never
-  // reaches the client); all the threshold/classification logic below is
-  // this app's own interpretation of it.
-  const RAIN_START_INTENSITY = 0.02; // in/hr — a "real signal, not trace/noise" floor.
-  // NOT an NWS number — NWS only defines the light/moderate/heavy bands
-  // below, not a start-detection threshold, so this is a judgment call.
-  const RAIN_START_PROBABILITY = 0.3; // 30% confidence floor, same reasoning.
-  const RAIN_LIGHT_MAX = 0.1; // in/hr — NWS light-rain ceiling (also the "has it stopped" floor for duration).
-  const RAIN_MODERATE_MAX = 0.3; // in/hr — NWS moderate-rain ceiling; above this is heavy.
-  const RAIN_SCAN_MINUTES = 55; // stays inside the ~60-min minutely array with a safety margin.
-
-  async function pirateMinutelyApiGet(lat, lon){
-    const res = await fetch(stableApiUrl(`/pirate-minutely?lat=${lat}&lon=${lon}`), { cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    return Array.isArray(data.minutely) ? data.minutely : [];
-  }
-
-  // Whether it's raining RIGHT NOW, from the minutely array's own first
-  // entry (Pirate Weather's minutely[0] is the current minute) — a
-  // different question from analyzeRainNowcast()'s own "detected" (which
-  // asks whether rain starts/continues ANYWHERE in the next ~55 minutes,
-  // including not-yet-started). Reuses the exact same start-floor and
-  // light/moderate/heavy bands as the rest of this section rather than
-  // introducing a second set of thresholds for what's otherwise the same
-  // underlying measurement.
-  function classifyCurrentRainRate(minuteZero){
-    const rate = minuteZero?.precipIntensity ?? 0;
-    if (rate < RAIN_START_INTENSITY) return { active: false, rate };
-    const intensity = rate > RAIN_MODERATE_MAX ? "heavy" : rate > RAIN_LIGHT_MAX ? "moderate" : "light";
-    return { active: true, rate, intensity };
-  }
-
-  // Pure function over the minutely array — kept separate from rendering so
-  // the logic itself is easy to reason about in isolation.
-  function analyzeRainNowcast(minutely){
-    const current = classifyCurrentRainRate(minutely?.[0]);
-    if (!minutely || !minutely.length) return { detected: false, current };
-
-    let startIdx = -1;
-    const scanEnd = Math.min(minutely.length, RAIN_SCAN_MINUTES + 1);
-    for (let i = 0; i < scanEnd; i++){
-      const m = minutely[i];
-      if ((m.precipIntensity ?? 0) >= RAIN_START_INTENSITY && (m.precipProbability ?? 0) >= RAIN_START_PROBABILITY){
-        startIdx = i;
-        break;
-      }
-    }
-    if (startIdx === -1) return { detected: false, current };
-
-    // Duration: scan forward from the start until 2 consecutive minutes both
-    // drop back under the START floor (not the light/moderate classification
-    // ceiling — light rain, by definition, already sits below that ceiling
-    // the whole time it's falling, which would falsely end every light-rain
-    // event at minute 0; verified this the hard way against synthetic data
-    // before catching it). If the 60-minute window runs out first, this is
-    // left open-ended rather than asserting a duration the data doesn't
-    // actually support.
-    let endIdx = minutely.length;
-    for (let i = startIdx; i < minutely.length - 1; i++){
-      if (minutely[i].precipIntensity < RAIN_START_INTENSITY && minutely[i + 1].precipIntensity < RAIN_START_INTENSITY){
-        endIdx = i;
-        break;
-      }
-    }
-    const openEnded = endIdx >= minutely.length;
-    const windowVals = minutely.slice(startIdx, endIdx).map(m => m.precipIntensity ?? 0);
-    const peak = windowVals.length ? Math.max(...windowVals) : (minutely[startIdx].precipIntensity ?? 0);
-    const intensity = peak > RAIN_MODERATE_MAX ? "heavy" : peak > RAIN_LIGHT_MAX ? "moderate" : "light";
-
-    return {
-      detected: true,
-      startMinutes: Math.round(startIdx / 5) * 5, // "don't imply more precision than the data supports"
-      intensity,
-      durationMinutes: endIdx - startIdx,
-      openEnded,
-      current,
-    };
-  }
-
-  // Step 7's fallback: beyond the ~60-minute Pirate Weather window, look at
-  // the site's own Open-Meteo minutely_15 data (already fetched every
-  // refresh for the forecast scrubber) for the next 15-min interval with
-  // measurable precipitation, THROUGH THE REST OF TODAY only — this hint
-  // sits right above the "Estimated total today" line and is framed as
-  // "beyond that" (i.e. later this hour/day), so it must stop at midnight.
-  // Without that bound this found real hits days out (once literally caught
-  // a Sunday-afternoon shower two days away) and formatPostTimeLabel()
-  // — which only ever prints a bare time-of-day, no date — displayed it as
-  // if it were happening any minute now. No probability field exists at
-  // this resolution, so this can only say "rain looks possible around
-  // <time>", never classify intensity — deliberately vaguer, to match how
-  // much less this data source actually knows at that range.
-  //
-  // Threshold is 0.0125in — computeTodayRainOutlook()'s own 0.05in/hr
-  // "meaningful rain" bar, divided down to this function's 15-min
-  // resolution. Was a flat 0.01in before, which sits BELOW that hourly bar
-  // once scaled up (0.01in × 4 = 0.04in/hr) and could flag amounts this
-  // app's own hourly-based "Estimated total today" line correctly calls too
-  // small to matter, producing two contradicting-looking lines in the same
-  // panel from what was actually just a threshold mismatch, not a real
-  // model disagreement.
-  function analyzeLongerRangeOutlook(){
-    const RAIN_THRESHOLD_15MIN = 0.0125; // see comment above
-    const m = lastWeatherData?.minutely_15;
-    if (!m?.time?.length) return null;
-    // m.time entries are naive track-local wall time (no offset) — comparing
-    // via `new Date(t).getTime() > Date.now()` would parse them in the
-    // BROWSER's zone instead, drifting whenever that differs from the
-    // track's, which could keep a slot flagged as "still ahead" well past
-    // the point it's actually already happened. String-compare against
-    // nowInTrackTZIso() instead, same fix as pickDefaultEntriesRace() uses.
-    const nowIso = nowInTrackTZIso();
-    const todayPrefix = nowIso.slice(0, 10); // "YYYY-MM-DD", track-local
-    const startIdx = m.time.findIndex(t => t > nowIso);
-    if (startIdx < 0) return null;
-    const beyondIdx = startIdx + 4; // ~60 minutes further out, at 15-min spacing
-    for (let i = beyondIdx; i < m.time.length; i++){
-      if (!m.time[i].startsWith(todayPrefix)) break; // stop at midnight — see comment above
-      if ((m.precipitation?.[i] ?? 0) >= RAIN_THRESHOLD_15MIN){
-        return { atLabel: formatPostTimeLabel(m.time[i]) };
-      }
-    }
-    return null;
-  }
-
-  // Cached across this panel's two independent render triggers (its own
-  // Pirate Weather poll below, and render()'s own call right after
-  // todayRainOutlookData updates) so either one can repaint the full panel
-  // using whatever's currently known on both sides, rather than the two
-  // needing to resolve in lockstep.
-  let lastRainNowcastResult = { detected: false, current: { active: false, rate: 0 } };
-  // Distinguishes "hasn't loaded yet" (keep showing the skeleton) from
-  // "loaded and confirmed no rain" — without this, render()'s own call to
-  // renderRainNowcastPanel() (see below) could win a race against
-  // loadRainNowcast()'s first-ever resolve and prematurely paint
-  // lastRainNowcastResult's placeholder default over the skeleton.
-  let rainNowcastLoaded = false;
-
-  function renderRainNowcast(result){
-    lastRainNowcastResult = result;
-    renderRainNowcastPanel();
-  }
-
+  // ---------- Rain Nowcast (radar-only) ----------
+  // Used to blend a Pirate Weather forecast-model minutely block with a
+  // radar cross-check underneath it — replaced 2026-09-03 with a pure radar
+  // read, no forecast model at all, so this panel now only ever says what an
+  // actual radar observation shows: overhead now, approaching from a
+  // direction with a rough ETA, or clear. See fetchRadarObservedAt() below
+  // for how the reading itself is produced.
   function renderRainNowcastPanel(){
     const body = $("rainNowcastBody");
-    const result = lastRainNowcastResult;
-    const longer = result.detected ? null : analyzeLongerRangeOutlook();
-
-    let forwardHtml;
-    if (!result.detected){
-      forwardHtml = `
-        <div class="rain-nowcast-headline">No rain expected in the next hour</div>
-        ${longer
-          ? `<div class="rain-nowcast-detail-dim">Beyond that (lower-confidence, longer-range): rain looks possible around ${escapeHtml(longer.atLabel)}.</div>`
-          : ""}
-      `;
-    } else {
-      const whenLabel = result.startMinutes <= 0 ? "now" : `in ~${result.startMinutes} minutes`;
-      const durationLabel = result.openEnded
-        ? `~${result.durationMinutes}+ min (continuing past the forecast window)`
-        : `~${result.durationMinutes} min`;
-      forwardHtml = `
-        <div class="rain-nowcast-headline">Rain expected ${whenLabel}</div>
+    if (!radarObservedLoaded) return;
+    const intensity = lastRadarObserved?.intensity ?? null;
+    if (intensity){
+      body.innerHTML = `
+        <div class="rain-nowcast-headline">Rain over the track right now</div>
         <div class="rain-nowcast-detail">
-          <span class="tag rain-intensity-${result.intensity}">${result.intensity.toUpperCase()}</span>
-          <span>${escapeHtml(durationLabel)}</span>
+          <span class="tag rain-intensity-${intensity}">${intensity.toUpperCase()}</span>
+          <span>Radar-observed, live</span>
         </div>
       `;
-    }
-
-    body.innerHTML = forwardHtml + radarCheckLine();
-  }
-
-  // Small addendum line under the model-based Rain Nowcast readout above,
-  // sourced from an actual radar observation (see fetchRadarObservedAt()
-  // below) rather than another model. Only calls out radar/model
-  // *disagreement* with a highlighted tag — when they already agree, a dim
-  // one-line confirmation is enough; no need to shout about it.
-  function radarCheckLine(){
-    if (!radarObservedLoaded) return "";
-    const intensity = lastRadarObserved?.intensity ?? null;
-    const modelSaysActive = lastRainNowcastResult?.current?.active ?? false;
-    if (intensity && !modelSaysActive){
-      return `<div class="rain-nowcast-detail" style="margin-top:8px;">
-        <span class="tag rain-intensity-${intensity}">RADAR</span>
-        <span>Showing ${escapeHtml(intensity)} rain over the track right now — the model above hasn't caught this yet.</span>
-      </div>`;
-    }
-    if (intensity){
-      return `<div class="rain-nowcast-detail-dim">Radar confirms ${escapeHtml(intensity)} rain over the track right now.</div>`;
-    }
-    return `<div class="rain-nowcast-detail-dim">Radar: clear over the track right now.</div>`;
-  }
-
-  async function loadRainNowcast(){
-    const tag = $("rainNowcastTag");
-    const trackId = activeTrack.id;
-    let minutely;
-    try{ minutely = await pirateMinutelyApiGet(activeTrack.lat, activeTrack.lon); }
-    catch(err){
-      console.error("Rain nowcast fetch failed", err);
-      if (activeTrack.id !== trackId) return;
-      $("rainNowcastBody").innerHTML = `<div class="log-empty">Couldn't load the short-range nowcast — ${escapeHtml(err.message)}</div>`;
-      if (tag) tag.textContent = "ERROR";
       return;
     }
-    if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
-    if (tag) tag.textContent = "LIVE · PIRATE WEATHER";
-    rainNowcastLoaded = true;
-    renderRainNowcast(analyzeRainNowcast(minutely));
+    const approaching = lastRadarObserved?.approaching;
+    if (approaching){
+      const etaText = approaching.etaMinutes != null ? ` — could arrive in ~${approaching.etaMinutes} min at the current wind speed` : "";
+      body.innerHTML = `
+        <div class="rain-nowcast-headline">Rain approaching</div>
+        <div class="rain-nowcast-detail">
+          <span class="tag rain-intensity-${approaching.intensity}">${approaching.intensity.toUpperCase()}</span>
+          <span>~${approaching.milesAway} mi ${approaching.dir} of the track, upwind${etaText}</span>
+        </div>
+      `;
+      return;
+    }
+    body.innerHTML = `<div class="rain-nowcast-headline">No rain within ${RADAR_RING_MILES} mi of the track</div>`;
   }
 
   // ---------- Radar-Observed Precipitation (RainViewer) ----------
@@ -9330,6 +9162,29 @@
   // verified against a live sample tile (a currently-clear point came back
   // fully transparent, matching this table's own dBZ 0 row exactly).
   const RAINVIEWER_DBZ_TABLE=[[-32,0,0,0,0],[-31,1,1,1,255],[-30,2,2,2,255],[-29,3,3,3,255],[-28,4,4,4,255],[-27,5,5,5,255],[-26,6,6,6,255],[-25,7,7,7,255],[-24,8,8,8,255],[-23,9,9,9,255],[-22,10,10,10,255],[-21,11,11,11,255],[-20,12,12,12,255],[-19,13,13,13,255],[-18,14,14,14,255],[-17,15,15,15,255],[-16,16,16,16,255],[-15,17,17,17,255],[-14,18,18,18,255],[-13,19,19,19,255],[-12,20,20,20,255],[-11,21,21,21,255],[-10,22,22,22,255],[-9,23,23,23,255],[-8,24,24,24,255],[-7,25,25,25,255],[-6,26,26,26,255],[-5,27,27,27,255],[-4,28,28,28,255],[-3,29,29,29,255],[-2,30,30,30,255],[-1,31,31,31,255],[0,130,123,105,73],[1,133,125,106,79],[2,137,128,108,86],[3,141,131,110,92],[4,146,134,112,99],[5,150,136,113,106],[6,155,139,115,112],[7,159,142,117,119],[8,164,145,119,125],[9,169,148,121,132],[10,206,192,135,150],[11,207,193,135,152],[12,208,195,136,154],[13,209,196,136,156],[14,210,197,137,158],[15,211,199,138,161],[16,212,200,139,163],[17,213,201,139,165],[18,214,203,140,167],[19,215,204,141,169],[20,0,163,224,255],[21,17,143,205,255],[22,34,124,187,255],[23,51,105,168,255],[24,68,86,150,255],[25,0,119,170,255],[26,0,113,163,255],[27,0,107,156,255],[28,0,101,149,255],[29,0,95,142,255],[30,0,85,136,255],[31,0,80,132,255],[32,0,75,128,255],[33,0,70,124,255],[34,0,65,120,255],[35,255,238,0,255],[36,255,228,0,255],[37,255,218,0,255],[38,255,208,0,255],[39,255,198,0,255],[40,255,170,0,255],[41,255,161,0,255],[42,255,151,0,255],[43,255,142,0,255],[44,255,132,0,255],[45,255,68,0,255],[46,255,63,0,255],[47,255,57,0,255],[48,255,51,0,255],[49,255,46,0,255],[50,193,0,0,255],[51,187,0,0,255],[52,182,0,0,255],[53,176,0,0,255],[54,171,0,0,255],[55,255,170,255,255],[56,255,163,255,255],[57,255,155,255,255],[58,255,148,255,255],[59,255,140,255,255],[60,255,119,255,255],[61,255,111,255,255],[62,255,103,255,255],[63,255,94,255,255],[64,255,86,255,255],[65,255,255,255,255],[66,255,255,255,255],[67,255,255,255,255],[68,255,255,255,255],[69,255,255,255,255],[70,255,255,255,255],[71,255,255,255,255],[72,255,255,255,255],[73,255,255,255,255],[74,255,255,255,255],[75,0,255,0,255],[76,0,255,0,255],[77,0,255,0,255],[78,0,255,0,255],[79,0,255,0,255],[80,0,255,0,255],[81,0,255,0,255],[82,0,255,0,255],[83,0,255,0,255],[84,0,255,0,255],[85,0,255,0,255],[86,0,255,0,255],[87,0,255,0,255],[88,0,255,0,255],[89,0,255,0,255],[90,0,255,0,255],[91,0,255,0,255],[92,0,255,0,255],[93,0,255,0,255],[94,0,255,0,255],[95,0,255,0,255]];
+
+  // How far out (and in which 8 directions) fetchRadarObservedAt() looks for
+  // an approaching cell that isn't over the track yet — see its own comment
+  // for why this fits inside the SAME tile fetch, no extra network cost.
+  // 15 miles keeps this inside a real convective cell's own 15-20 min
+  // spin-up lead time at typical storm-motion speeds (roughly 20-40 mph) —
+  // far enough to be a genuine heads-up, not so far the steering-wind ETA
+  // estimate below stops meaning anything.
+  const RADAR_RING_MILES = 15;
+  const RADAR_ZOOM = 7; // must match the zoom in fetchRadarObservedAt()'s tile URL
+  const RADAR_RING_DIRECTIONS = [
+    { dir: "N", deg: 0 }, { dir: "NE", deg: 45 }, { dir: "E", deg: 90 }, { dir: "SE", deg: 135 },
+    { dir: "S", deg: 180 }, { dir: "SW", deg: 225 }, { dir: "W", deg: 270 }, { dir: "NW", deg: 315 },
+  ];
+  // Standard Web Mercator ground resolution formula (same family as
+  // lonLatToTileXY() elsewhere in this app, solved for meters/pixel instead
+  // of tile index) — at RADAR_ZOOM, this comes out to roughly 900m/pixel at
+  // Saratoga's latitude, so a 256px tile spans well over 100 miles across.
+  // The whole ring sample below reads pixels from the ONE tile
+  // fetchRadarObservedAt() already downloads for the center-point check.
+  function metersPerPixelAt(lat){
+    return 156543.03392 * Math.cos(lat * Math.PI / 180) / (2 ** RADAR_ZOOM);
+  }
 
   // Nearest-color match (squared distance over r,g,b,a) against the table
   // above — RainViewer's tiles are compressed PNGs, so a sampled pixel won't
@@ -9387,10 +9242,14 @@
   // Color id "2" is the specific scheme RAINVIEWER_DBZ_TABLE above was
   // copied from — pairing a different id with that table would silently
   // decode every pixel wrong.
-  async function fetchRadarObservedAt(lat, lon){
+  // windFromDeg/windSpeedMph (optional — the "approaching" read is skipped
+  // without them) are the compass direction the wind is blowing FROM and its
+  // speed, straight from the same Open-Meteo "current" fields the rest of
+  // this app's wind logic already uses.
+  async function fetchRadarObservedAt(lat, lon, windFromDeg, windSpeedMph){
     const framePath = await latestRainviewerFramePath();
     if (!framePath) return null;
-    const url = `${framePath}/256/7/${lat}/${lon}/2/0_0.png`;
+    const url = `${framePath}/256/${RADAR_ZOOM}/${lat}/${lon}/2/0_0.png`;
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
@@ -9402,9 +9261,47 @@
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0);
           const cx = Math.floor(canvas.width / 2), cy = Math.floor(canvas.height / 2);
-          const [r, g, b, a] = ctx.getImageData(cx, cy, 1, 1).data;
-          const dbz = nearestDbzForPixel(r, g, b, a);
-          resolve({ dbz, intensity: classifyDbz(dbz) });
+          const readAt = (px, py) => {
+            const [r, g, b, a] = ctx.getImageData(px, py, 1, 1).data;
+            const dbz = nearestDbzForPixel(r, g, b, a);
+            return { dbz, intensity: classifyDbz(dbz) };
+          };
+          const center = readAt(cx, cy);
+
+          // Ring sample — image-space x grows east, y grows south (screen/
+          // tile convention), so a compass bearing maps to
+          // (cx + offset*sin, cy - offset*cos), not the usual math convention.
+          const offsetPx = (RADAR_RING_MILES * 1609.34) / metersPerPixelAt(lat);
+          const ring = RADAR_RING_DIRECTIONS.map(({ dir, deg }) => {
+            const rad = deg * Math.PI / 180;
+            const px = Math.round(cx + offsetPx * Math.sin(rad));
+            const py = Math.round(cy - offsetPx * Math.cos(rad));
+            if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return { dir, dbz: null, intensity: null };
+            return { dir, ...readAt(px, py) };
+          });
+
+          // "Approaching" only means something when nothing's over the track
+          // yet (a strictly weaker signal than "it's already here"), and only
+          // in the ring direction closest to where the wind is blowing FROM —
+          // a steering-wind assumption, the same first-order approximation
+          // real short-range nowcasting leans on when it doesn't have a
+          // second radar frame to measure a cell's actual observed motion
+          // from. Real storms can move faster/slower or diverge from the
+          // surface wind, so etaMinutes is a rough estimate, not a promise.
+          let approaching = null;
+          if (!center.intensity && windFromDeg != null){
+            const upwind = RADAR_RING_DIRECTIONS.reduce((best, d) => {
+              const diff = Math.min(Math.abs(d.deg - windFromDeg), 360 - Math.abs(d.deg - windFromDeg));
+              return diff < best.diff ? { ...d, diff } : best;
+            }, { diff: Infinity });
+            const hit = ring.find(r => r.dir === upwind.dir);
+            if (hit?.intensity){
+              const etaMinutes = windSpeedMph > 1 ? Math.round((RADAR_RING_MILES / windSpeedMph) * 60) : null;
+              approaching = { dir: upwind.dir, intensity: hit.intensity, milesAway: RADAR_RING_MILES, etaMinutes };
+            }
+          }
+
+          resolve({ dbz: center.dbz, intensity: center.intensity, ring, approaching });
         } catch(err){ reject(err); }
       };
       img.onerror = () => reject(new Error("radar tile failed to load"));
@@ -9414,17 +9311,29 @@
 
   const RADAR_OBSERVED_REFRESH_MS = 10 * 60 * 1000; // matches RainViewer's own ~10-min frame cadence — polling faster wouldn't see anything new
   let lastRadarObserved = null;
-  let radarObservedLoaded = false; // distinguishes "hasn't loaded yet" from "loaded, confirmed clear" — same reasoning as rainNowcastLoaded above
+  let radarObservedLoaded = false; // distinguishes "hasn't loaded yet" (keep showing the skeleton) from "loaded, confirmed clear"
 
   async function loadRadarObserved(){
+    const tag = $("rainNowcastTag");
     const trackId = activeTrack.id;
+    const windFromDeg = lastWeatherData?.current?.wind_direction_10m ?? null;
+    const windSpeedMph = lastWeatherData?.current?.wind_speed_10m ?? null;
     let result;
-    try{ result = await fetchRadarObservedAt(activeTrack.lat, activeTrack.lon); }
+    try{ result = await fetchRadarObservedAt(activeTrack.lat, activeTrack.lon, windFromDeg, windSpeedMph); }
     catch(err){
       console.error("Radar-observed fetch failed", err);
-      return; // leave the panel showing whatever it last had — a transient RainViewer hiccup shouldn't blank a working readout
+      if (activeTrack.id !== trackId) return;
+      // Only show the error state if nothing's ever loaded for this track —
+      // a transient RainViewer hiccup on a later poll shouldn't blank a
+      // panel that's currently showing a real reading.
+      if (!radarObservedLoaded){
+        $("rainNowcastBody").innerHTML = `<div class="log-empty">Couldn't load the radar reading — ${escapeHtml(err.message)}</div>`;
+        if (tag) tag.textContent = "ERROR";
+      }
+      return;
     }
     if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+    if (tag) tag.textContent = "LIVE · RADAR";
     lastRadarObserved = result;
     radarObservedLoaded = true;
     detectRadarAlert(result);
@@ -10332,10 +10241,10 @@
 
     const m = data.minutely_15;
     if (m?.time?.length){
-      // See analyzeLongerRangeOutlook()'s comment: m.time is naive
-      // track-local wall time, so this must be a string compare against
-      // nowInTrackTZIso(), not a Date parse against Date.now() (which reads
-      // the timestamp in the browser's zone instead of the track's).
+      // m.time is naive track-local wall time (no offset), so this must be a
+      // string compare against nowInTrackTZIso(), not a Date parse against
+      // Date.now() (which reads the timestamp in the browser's zone instead
+      // of the track's).
       const nowIso = nowInTrackTZIso();
       let startIdx = m.time.findIndex(t => t > nowIso);
       if (startIdx < 0) startIdx = 0;
@@ -10870,6 +10779,14 @@
     } catch(err){
       console.error(err);
       setStatus(false, "Connection issue — retrying");
+      // Same "don't leave the tile skeleton-loading forever on a persistent
+      // failure" rule as the AQI/tide fetchers — without this, a fetch that
+      // fails on the very first load (before render() ever runs once) left
+      // these tiles stuck on skeleton placeholders indefinitely, even while
+      // status correctly showed "Connection issue."
+      clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainTotal",
+        "humidity", "cloudCover", "pressure", "weatherDesc", "sunTimes",
+        "soilMoistureSurface", "soilMoistureDeep");
     } finally {
       secondsLeft = REFRESH_MS / 1000;
     }
@@ -11028,12 +10945,6 @@
       todayStartIdx, todayEndIdx, nowHourIdx,
     });
     renderRainTile();
-    // Repaints the "estimated total today" line immediately rather than
-    // waiting on loadRainNowcast()'s own independent poll — but only once
-    // that panel has genuinely loaded at least once (rainNowcastLoaded),
-    // so this can't win a startup race and paint over its skeleton loader
-    // with a placeholder "no rain"/"not currently raining" default.
-    if (rainNowcastLoaded) renderRainNowcastPanel();
 
     if (data.daily?.sunrise?.[todayIdx] && data.daily?.sunset?.[todayIdx]){
       $("sunTimes").textContent = `Sunrise ${fmtTime(data.daily.sunrise[todayIdx])} / Sunset ${fmtTime(data.daily.sunset[todayIdx])}`;
@@ -11295,9 +11206,9 @@
     // Rain Nowcast is genuinely loading again for the new track too — same
     // reasoning as weatherLogLoaded/biasLogLoaded elsewhere: show its
     // skeleton again rather than either the old track's stale reading or a
-    // premature "no rain" default.
-    rainNowcastLoaded = false;
-    lastRainNowcastResult = { detected: false, current: { active: false, rate: 0 } };
+    // premature "clear" default.
+    radarObservedLoaded = false;
+    lastRadarObserved = null;
     addSkeleton("rainTotal");
     $("rainNowcastBody").innerHTML = `
       <div class="skel-block skel-line wide" style="height:14px;"></div>
@@ -11401,9 +11312,6 @@
     fetchWeather();
     fetchAirQuality();
     fetchTideData(); // no-ops internally for tracks without tideStationId
-    loadRainNowcast();
-    lastRadarObserved = null;
-    radarObservedLoaded = false; // this track's own radar sample hasn't resolved yet — same "show loading, not stale/wrong" reasoning as rainNowcastLoaded
     loadRadarObserved();
   }
 
@@ -11845,7 +11753,6 @@
   fetchNewsWire();
   fetchAirQuality();
   fetchTideData(); // no-ops internally for tracks without tideStationId
-  loadRainNowcast();
   loadRadarObserved();
   refreshAllSevereWeatherAlerts(); // independent of which track is active — see its own comment
   setInterval(tickClock, 1000);
@@ -11861,7 +11768,6 @@
   setInterval(fetchNewsWire, NEWS_REFRESH_MS);
   setInterval(fetchAirQuality, SLOW_REFRESH_MS); // AQI doesn't move fast enough to justify the main 5-min cadence
   setInterval(fetchTideData, SLOW_REFRESH_MS); // same reasoning; no-ops for non-tide tracks
-  setInterval(loadRainNowcast, REFRESH_MS); // same cadence — per-minute data doesn't need faster than the rest of the dashboard
   setInterval(loadRadarObserved, RADAR_OBSERVED_REFRESH_MS);
 })();
 </script>
