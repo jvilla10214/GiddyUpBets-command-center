@@ -2401,7 +2401,19 @@
   .alert-dropdown[hidden]{ display: none; }
 
   /* ---------- Command Palette (prototype, 2026-09-03) ---------- */
-  #cmdpTriggerBtn{ font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.03em; }
+  #cmdpTriggerBtn, #compareTriggerBtn{
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    padding: 7px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  #cmdpTriggerBtn:hover, #compareTriggerBtn:hover{ border-color: var(--tote-amber); }
   .cmdp-overlay{
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.6);
@@ -2578,6 +2590,7 @@
     <span>Next refresh: <span id="countdown">--</span></span>
     <button id="refreshBtn">↻ Refresh now</button>
     <button type="button" id="cmdpTriggerBtn" title="Jump to a track or page (⌘K)">⌘K</button>
+    <button type="button" id="compareTriggerBtn" title="Compare two tracks' wind side by side">⇄ Compare</button>
     <div class="alert-bell-wrap">
       <button type="button" id="alertBellBtn" class="alert-bell-btn" aria-expanded="false" title="Alert feed">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2689,15 +2702,6 @@
         <path d="M10 20v-6h4v6"/>
       </svg>
       Stable Tour
-    </button>
-    <button type="button" class="sidebar-btn" data-page="compare">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="4" width="7" height="16" rx="1.5"/>
-        <rect x="14" y="4" width="7" height="16" rx="1.5"/>
-        <path d="M10 12h4"/>
-        <path d="M12 10v4"/>
-      </svg>
-      Compare Mode
     </button>
   </nav>
 
@@ -5245,8 +5249,25 @@
         nyraSourced = !!(dirtLabel || turfLabel || raw.weather);
       }
 
-      const entry = { ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString() };
+      // Confirmed real bug (2026-09-03): this used to build `entry` without
+      // insideSpeed/outsideClosers at all, so whenever this function decided
+      // a date needed updating (NYRA's official condition just became
+      // available, say), the full-replace /weatherlog/bulk-upsert wiped out
+      // any retroScore maybeAutoLogYesterday() had already attached to that
+      // SAME date earlier — including for yesterday itself, permanently
+      // starving the Bias Tracker calibration of data no matter how long the
+      // app ran. Carrying the existing score forward here isn't the same
+      // hindsight problem this function's own no-retroScore rule guards
+      // against: that rule is about never COMPUTING one for a date whose
+      // outcome is already on record (a genuine historical backfill), not
+      // about preserving one that was already computed honestly, before the
+      // outcome was known, by the code that originally logged this date.
       const existing = weatherLog.find(e => e.date === cursor);
+      const entry = {
+        ...stats, isPartial: false, nyraSourced, capturedAt: new Date().toISOString(),
+        insideSpeed: existing?.insideSpeed ?? null,
+        outsideClosers: existing?.outsideClosers ?? null,
+      };
       const changed = !existing
         || existing.dirtConditionLabel !== entry.dirtConditionLabel
         || existing.turfConditionLabel !== entry.turfConditionLabel
@@ -11739,6 +11760,10 @@
   document.querySelectorAll(".sidebar-btn").forEach(btn => {
     btn.addEventListener("click", () => setActivePage(btn.dataset.page));
   });
+  // Compare Mode lives as a small header button rather than a sidebar tab —
+  // it's a cross-track utility, not a "which track am I looking at" view
+  // the way every sidebar page is, so it didn't fit the same nav model.
+  $("compareTriggerBtn").addEventListener("click", () => setActivePage("compare"));
 
   $("refreshBtn").addEventListener("click", fetchWeather);
   $("forecastSlider").addEventListener("input", (e) => applyForecastStep(+e.target.value));
