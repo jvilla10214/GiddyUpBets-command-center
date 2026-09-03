@@ -2141,6 +2141,41 @@
     text-transform: uppercase;
     letter-spacing: 0.02em;
   }
+
+  /* ---------- Compare Mode ---------- */
+  .compare-picker-row{ display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .compare-picker-row select{
+    flex: 1; min-width: 200px;
+    background: var(--panel-2); color: var(--parchment);
+    border: 1px solid var(--panel-border); border-radius: 8px;
+    padding: 10px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+  }
+  .compare-cards{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px){ .compare-cards{ grid-template-columns: 1fr; } }
+  .compare-card{
+    background: var(--panel-2); border: 1px solid var(--panel-border);
+    border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .compare-card-track{ font-family: 'Oswald', sans-serif; font-size: 17px; color: var(--parchment); }
+  .compare-card-updated{ font-size: 10.5px; color: var(--parchment-dim); margin-top: 2px; }
+  .compare-stat-row{ display: flex; gap: 10px; }
+  .compare-stat{ flex: 1; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 9px 11px; }
+  .compare-stat-label{ font-size: 10px; letter-spacing: 0.04em; color: var(--parchment-dim); text-transform: uppercase; }
+  .compare-stat-value{ font-family: 'Oswald', sans-serif; font-size: 19px; margin-top: 3px; color: var(--parchment); }
+  .compare-wind-readout{ font-size: 12.5px; color: var(--parchment); line-height: 1.5; }
+  .compare-wind-readout.closer{ color: var(--sky); }
+  .compare-lean-label-row{ display: flex; justify-content: space-between; font-size: 10px; color: var(--parchment-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+  .compare-lean-bar{ height: 8px; border-radius: 5px; overflow: hidden; display: flex; background: var(--panel); border: 1px solid var(--panel-border); }
+  .compare-lean-bar-speed{ background: var(--tote-amber); }
+  .compare-lean-bar-closer{ background: var(--sky); }
+  .compare-synthesis{
+    margin-top: 16px;
+    background: var(--panel-2); border: 1px solid var(--tote-amber);
+    border-radius: 10px; padding: 14px 16px;
+    font-size: 13px; line-height: 1.6; color: var(--parchment);
+  }
+  .compare-synthesis-label{ font-size: 10px; letter-spacing: 0.05em; color: var(--tote-amber); text-transform: uppercase; margin-bottom: 6px; }
+
   .archive-search-result{
     margin-bottom: 18px;
     padding-bottom: 14px;
@@ -2654,6 +2689,15 @@
         <path d="M10 20v-6h4v6"/>
       </svg>
       Stable Tour
+    </button>
+    <button type="button" class="sidebar-btn" data-page="compare">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="7" height="16" rx="1.5"/>
+        <rect x="14" y="4" width="7" height="16" rx="1.5"/>
+        <path d="M10 12h4"/>
+        <path d="M12 10v4"/>
+      </svg>
+      Compare Mode
     </button>
   </nav>
 
@@ -3410,6 +3454,35 @@
         upcoming dates in advance, so the date buttons above let you jump ahead and see those cards early — a date
         with nothing posted yet just shows no races. Only tracks with a verified source are wired up — others show "not available" until
         one is added.
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="page-compare">
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Compare Mode
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="compareInfo" title="Why this works this way">ⓘ</button>
+      </div>
+      <div class="compare-picker-row">
+        <select id="compareTrackA" aria-label="Track A"></select>
+        <select id="compareTrackB" aria-label="Track B"></select>
+      </div>
+      <div class="compare-cards">
+        <div class="compare-card" id="compareCardA"></div>
+        <div class="compare-card" id="compareCardB"></div>
+      </div>
+      <div class="compare-synthesis" id="compareSynthesis" hidden>
+        <div class="compare-synthesis-label">At a Glance</div>
+        <div id="compareSynthesisText"></div>
+      </div>
+      <div class="info-disclosure" id="compareInfo">
+        Wind-only comparison — the same windComponents()/describeStretchWind() logic and wind-push scale as the
+        live Bias Predictor Score on the Dashboard, run independently for each track picked above against its own
+        stretch heading, with live current wind straight from Open-Meteo. Deliberately leaves out track condition,
+        tide (Del Mar), and temperature/humidity extremes — those need each track's own recent rain/tide history,
+        not just a current reading, so the Dashboard's own live badge for whichever track is active remains the
+        fuller read.
       </div>
     </div>
   </div>
@@ -11637,7 +11710,7 @@
   // ---------- Sidebar page navigation ----------
   // Config-driven like LOG_TABS below — adding another sidebar page is just
   // another button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "entries", "archive", "news", "historical", "bias", "stable"];
+  const SIDEBAR_PAGES = ["dashboard", "entries", "archive", "news", "historical", "bias", "stable", "compare"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
@@ -11655,6 +11728,13 @@
     // should exist doesn't stay permanently hidden from a measurement
     // taken while nobody could see the table anyway.
     if (pageId === "bias") showClampButtonsIfNeeded($("biasTableBody"));
+    // Compare Mode only ever loads its two live fetches the first time it's
+    // opened — cheap, but there's no reason to run it in the background for
+    // a page nobody's looking at, unlike the Dashboard's own always-on poll.
+    if (pageId === "compare" && !compareLoaded){
+      compareLoaded = true;
+      initCompareMode();
+    }
   }
   document.querySelectorAll(".sidebar-btn").forEach(btn => {
     btn.addEventListener("click", () => setActivePage(btn.dataset.page));
@@ -12170,6 +12250,150 @@
     });
   }
   initCommandPalette();
+
+  // ---------- Compare Mode ----------
+  // Side-by-side wind-vs-stretch read for any two tracks, independent of
+  // whichever one is currently active on the Dashboard. Reuses the exact
+  // same windComponents()/describeStretchWind()/computeBiasPredictorScore()
+  // functions the live Bias Predictor Score calls — not a parallel
+  // reimplementation — just fed only wind (dirtLabel/tide/apparentTemp/
+  // humidity passed as null), since those need each track's own recent
+  // rain/tide history to estimate, not a single current reading. Demoed
+  // first as a standalone artifact and approved before landing here.
+  let compareLoaded = false;
+  let compareData = { A: null, B: null };
+
+  function populateCompareSelects(){
+    const selectA = $("compareTrackA");
+    const selectB = $("compareTrackB");
+    Object.values(TRACKS).forEach(t => {
+      const label = [t.flag, t.name].filter(Boolean).join(" ");
+      selectA.appendChild(new Option(label, t.id));
+      selectB.appendChild(new Option(label, t.id));
+    });
+    // Default to two different tracks so the first open isn't a trivial
+    // "compare a track to itself" — the active one, plus whichever other
+    // track sorts first.
+    selectA.value = activeTrack.id;
+    const other = Object.keys(TRACKS).find(id => id !== activeTrack.id);
+    if (other) selectB.value = other;
+  }
+
+  function compareCardSkeleton(track){
+    return `
+      <div class="compare-card-track">${track.flag ? track.flag + " " : ""}${escapeHtml(track.name)}</div>
+      <div class="compare-card-updated skel">Loading live conditions…</div>
+    `;
+  }
+
+  // computeBiasPredictorScore() can't be reused directly here — it reads
+  // activeTrack.heading internally rather than taking a track argument
+  // (fine for its normal job, always scoring whichever track is on the
+  // Dashboard, but silently wrong for a card comparing a DIFFERENT track —
+  // caught this live: the lean bar for a non-active track was scored
+  // against the active track's stretch geometry instead of its own).
+  // Ports just the wind term of that same formula — identical PUSH scale
+  // and kind check — against the desc this card already computed correctly
+  // for its own track's heading.
+  const COMPARE_WIND_PUSH = { calm: 0, light: 0.8, moderate: 1.6, strong: 2.5 };
+  function compareLeanFromWind(desc){
+    let score = 5;
+    const push = COMPARE_WIND_PUSH[desc.strength] ?? 0;
+    if (desc.kind === "headwind") score += push;
+    if (desc.kind === "tailwind") score -= push;
+    score = Math.max(0, Math.min(10, score));
+    return { insideSpeed: score, outsideClosers: 10 - score };
+  }
+
+  function renderCompareCard(track, current){
+    const speed = current.wind_speed_10m ?? 0;
+    const dir = current.wind_direction_10m ?? 0;
+    const home = windComponents(speed, dir, track.heading.homestretch);
+    const desc = describeStretchWind(home.headwind, home.crosswind);
+    const lean = compareLeanFromWind(desc);
+    const readoutClass = desc.kind === "tailwind" ? "compare-wind-readout closer" : "compare-wind-readout";
+    return {
+      html: `
+        <div>
+          <div class="compare-card-track">${track.flag ? track.flag + " " : ""}${escapeHtml(track.name)}</div>
+          <div class="compare-card-updated">Live · Open-Meteo</div>
+        </div>
+        <div class="compare-stat-row">
+          <div class="compare-stat">
+            <div class="compare-stat-label">Conditions</div>
+            <div class="compare-stat-value">${Math.round(current.temperature_2m ?? 0)}°F</div>
+            <div class="compare-card-updated">${escapeHtml(WMO[current.weather_code] ?? "—")}</div>
+          </div>
+          <div class="compare-stat">
+            <div class="compare-stat-label">Wind</div>
+            <div class="compare-stat-value">${Math.round(speed)} mph</div>
+            <div class="compare-card-updated">${compassPoint(dir)} (${Math.round(dir)}°)</div>
+          </div>
+        </div>
+        <div class="${readoutClass}">${desc.text}</div>
+        <div>
+          <div class="compare-lean-label-row"><span>Speed</span><span>Closers</span></div>
+          <div class="compare-lean-bar">
+            <div class="compare-lean-bar-speed" style="width:${lean.insideSpeed * 10}%"></div>
+            <div class="compare-lean-bar-closer" style="width:${lean.outsideClosers * 10}%"></div>
+          </div>
+        </div>
+      `,
+      lean, track,
+    };
+  }
+
+  function renderCompareSynthesis(){
+    const { A, B } = compareData;
+    const el = $("compareSynthesis");
+    if (!A || !B){ el.hidden = true; return; }
+    el.hidden = false;
+    const diff = A.lean.insideSpeed - B.lean.insideSpeed;
+    const textEl = $("compareSynthesisText");
+    if (Math.abs(diff) < 0.6){
+      textEl.textContent = `${A.track.name} and ${B.track.name} are reading close to the same lean right now — neither track's wind is doing much more than the other's.`;
+      return;
+    }
+    const stronger = diff > 0 ? A : B;
+    const weaker = diff > 0 ? B : A;
+    const dir = stronger.lean.insideSpeed > 5 ? "speed" : "closers";
+    textEl.textContent = `${stronger.track.name}'s wind is doing more right now — a stronger lean toward ${dir} than ${weaker.track.name}'s.`;
+  }
+
+  async function loadCompareCard(selectId, cardId, slot){
+    const select = $(selectId);
+    const cardEl = $(cardId);
+    const track = TRACKS[select.value];
+    if (!track) return;
+    cardEl.innerHTML = compareCardSkeleton(track);
+    compareData[slot] = null;
+    renderCompareSynthesis();
+    try{
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${track.lat}&longitude=${track.lon}` +
+        `&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m` +
+        `&temperature_unit=fahrenheit&wind_speed_unit=mph`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      if (select.value !== track.id) return; // stale — user picked a different track while this was in flight
+      const result = renderCompareCard(track, data.current);
+      cardEl.innerHTML = result.html;
+      compareData[slot] = result;
+      renderCompareSynthesis();
+    } catch(err){
+      console.error("Compare Mode fetch failed", err);
+      if (select.value !== track.id) return;
+      cardEl.innerHTML = `<div class="compare-card-track">${escapeHtml(track.name)}</div><div class="compare-card-updated">Couldn't load live conditions — ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function initCompareMode(){
+    populateCompareSelects();
+    $("compareTrackA").addEventListener("change", () => loadCompareCard("compareTrackA", "compareCardA", "A"));
+    $("compareTrackB").addEventListener("change", () => loadCompareCard("compareTrackB", "compareCardB", "B"));
+    loadCompareCard("compareTrackA", "compareCardA", "A");
+    loadCompareCard("compareTrackB", "compareCardB", "B");
+  }
 
   initWindFlow();
   initTrackMapResize();
