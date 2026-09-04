@@ -2138,7 +2138,6 @@
   .archive-recap-clear-btn{ border-color: var(--silk-red); color: var(--silk-red); margin-left: auto; }
   .archive-recap-cancel-btn{ color: var(--parchment-dim); }
   .archive-race-header strong{ color: var(--parchment); }
-  .archive-finish-line{ font-size: 12.5px; color: var(--rail-green); margin-top: 6px; }
   .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
   .archive-month-summary:empty{ display: none; }
   .archive-month-summary-grid{
@@ -6049,6 +6048,60 @@
       </div>`;
   }
 
+  // Same "Official — {source} Results" card used above the live odds table
+  // on the Entries page (see the near-identical block a few hundred lines
+  // up, right before entries-race-card) — factored out so Race Recaps can
+  // show the exact same finish-order/payouts format above its own list of
+  // entries, per the user's explicit request (2026-09-04) to match that
+  // look. Returns "" when the race isn't final yet.
+  function archiveOfficialResultsCardHtml(raceNumber, result){
+    if (!result?.isFinal || !result.finishOrder?.length) return "";
+    const resultsSourceLabel = RESULTS_SOURCE_LABEL[activeTrack.resultsSource] || "Official Results";
+    const finishRows = result.finishOrder.map(f => `
+      <tr>
+        <td>${escapeHtml(String(f.finishPosition))}</td>
+        <td>${ppBadgeHtml(f.postPosition)}</td>
+        <td>${escapeHtml(f.horseName || "—")}</td>
+        <td>${f.winPayout ? escapeHtml(f.winPayout) : "—"}</td>
+        <td>${f.placePayout ? escapeHtml(f.placePayout) : "—"}</td>
+        <td>${f.showPayout ? escapeHtml(f.showPayout) : "—"}</td>
+      </tr>
+    `).join("");
+    const payoutRows = (result.payouts || []).map(p => `
+      <tr>
+        <td>${escapeHtml(p.wagerAmount)} ${escapeHtml(p.wagerType)}</td>
+        <td>${escapeHtml(p.winningCombo)}</td>
+        <td>${escapeHtml(p.payout)}</td>
+      </tr>
+    `).join("");
+    const alsoRanHtml = result.alsoRan?.length
+      ? `<div class="entries-results-also-ran"><strong>Also ran:</strong> ${escapeHtml(result.alsoRan.join(", "))}</div>`
+      : "";
+    return `
+      <div class="entries-results-card">
+        <div class="entries-results-header">
+          <span class="tag entries-results-tag">${escapeHtml(resultsSourceLabel)}</span>
+          <span class="entries-results-title">Race ${raceNumber} — Final</span>
+        </div>
+        <div class="log-table-wrap">
+          <table class="log-table entries-results-table">
+            <thead><tr><th>Fin</th><th>PP</th><th>Horse</th><th>Win</th><th>Place</th><th>Show</th></tr></thead>
+            <tbody>${finishRows}</tbody>
+          </table>
+        </div>
+        ${alsoRanHtml}
+        ${result.payouts?.length ? `
+          <div class="log-table-wrap">
+            <table class="log-table entries-payouts-table">
+              <thead><tr><th>Wager</th><th>Winners</th><th>Payout</th></tr></thead>
+              <tbody>${payoutRows}</tbody>
+            </table>
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
   function archiveRaceHtml(entryRace, result, date, recap){
     const metaBits = [entryRace.purse, entryRace.raceType].filter(Boolean).join(" ");
     const nameAndMeta = [entryRace.raceName, metaBits].filter(Boolean).join(" — ");
@@ -6056,35 +6109,23 @@
     const timeLabel = formatPostTimeLabel(entryRace.postTimeIso);
     const headerHtml = `<div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong>${timeLabel ? " — " + escapeHtml(timeLabel) : ""}${nameAndMeta ? " — " + escapeHtml(nameAndMeta) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>`;
     const recapHtml = archiveRecapSectionHtml(date, entryRace.raceNumber, recap);
+    const resultsCardHtml = archiveOfficialResultsCardHtml(entryRace.raceNumber, result);
 
     // entries.horses is null (not just an empty array) specifically when
     // this date's entries source can't serve historical dates at all
     // (DMTC-sourced tracks like Del Mar — see fetchDmtcEntriesDay()'s own
     // comment) — a results-only race, not a card that genuinely had zero
-    // entries. Shows the full finish list instead of an empty
-    // PP/Horse/Jockey/ML table nobody asked to see.
+    // entries. The official results card above already shows the full
+    // finish list in this case, so there's nothing further to render below it.
     if (entryRace.horses == null){
-      if (!result?.isFinal || !result.finishOrder?.length){
+      if (!resultsCardHtml){
         return `<div class="archive-race">${headerHtml}${recapHtml}<div class="archive-empty">No entries or results saved for this race.</div></div>`;
       }
-      const finishRows = result.finishOrder.map(f => `
-        <tr>
-          <td>${f.finishPosition}</td>
-          <td>${ppBadgeHtml(f.postPosition)}</td>
-          <td>${escapeHtml(f.horseName || "—")}</td>
-          <td>${escapeHtml(f.winPayout || f.placePayout || f.showPayout || "—")}</td>
-        </tr>
-      `).join("");
       return `
         <div class="archive-race">
           ${headerHtml}
           ${recapHtml}
-          <div class="log-table-wrap">
-            <table class="log-table entries-horse-table">
-              <thead><tr><th>Pos</th><th>PP</th><th>Horse</th><th>Payout</th></tr></thead>
-              <tbody>${finishRows}</tbody>
-            </table>
-          </div>
+          ${resultsCardHtml}
         </div>`;
     }
     const rows = (entryRace.horses || []).map(h => `
@@ -6095,24 +6136,17 @@
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.mlOdds || h.currentOdds || "—")}</td>
       </tr>
     `).join("");
-    let finishHtml = "";
-    if (result?.isFinal && result.finishOrder?.length){
-      const top = result.finishOrder.slice(0, 3)
-        .map(f => `${f.finishPosition}) ${escapeHtml(f.horseName || "—")}${f.winPayout ? ` (${escapeHtml(f.winPayout)})` : ""}`)
-        .join("  ");
-      finishHtml = `<div class="archive-finish-line">Finish: ${top}</div>`;
-    }
     return `
       <div class="archive-race">
         ${headerHtml}
         ${recapHtml}
+        ${resultsCardHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
             <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>ML</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
-        ${finishHtml}
       </div>`;
   }
 
