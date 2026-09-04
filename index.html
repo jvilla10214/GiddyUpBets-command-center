@@ -2119,6 +2119,14 @@
     font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
   }
   .archive-recap-edit-btn:hover{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .archive-section-title-row{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .archive-section-title-row .archive-section-title{ margin-bottom: 0; }
+  .archive-resync-btn{
+    background: transparent; border: 1px solid var(--panel-border); color: var(--parchment-dim);
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .archive-resync-btn:hover{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .archive-resync-btn:disabled{ opacity: 0.5; cursor: default; }
   .archive-recap-text{
     font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.55;
     color: var(--parchment); margin-top: 8px; white-space: pre-wrap;
@@ -6484,7 +6492,10 @@
               ${archiveWeatherSection(date)}
               ${archiveBiasSection(date)}
               <div class="archive-section">
-                <div class="archive-section-title">Entries &amp; Results</div>
+                <div class="archive-section-title-row">
+                  <div class="archive-section-title">Entries &amp; Results</div>
+                  <button type="button" class="archive-resync-btn" data-archive-date="${date}" title="Re-pull this date's race recaps from the shared Google Doc">↻ Re-sync from Doc</button>
+                </div>
                 ${racesHtml}
               </div>`;
           }
@@ -6550,6 +6561,29 @@
           console.error("Race recap save failed", err);
           btn.disabled = false;
           alert(`Couldn't save this recap — ${err.message}. Try again.`);
+        }
+      });
+    });
+    list.querySelectorAll(".archive-resync-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const date = btn.dataset.archiveDate;
+        const originalLabel = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Syncing…";
+        try{
+          const result = await raceRecapResyncApiPost(activeTrack.id, date);
+          if (!result.available){
+            alert(`Couldn't re-sync ${date} — ${result.error || "unknown error"}.`);
+            return;
+          }
+          await refreshArchiveDayCache(date);
+          renderRaceDayArchive();
+        } catch(err){
+          console.error("Race recap resync failed", err);
+          alert(`Couldn't re-sync this date — ${err.message}. Try again.`);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalLabel;
         }
       });
     });
@@ -6629,6 +6663,23 @@
     }
     if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
     renderRaceDayArchive();
+  }
+
+  // Unlike toggleArchiveDay(), always re-fetches even if archiveDayCache[date]
+  // is already populated — used after a "↻ Re-sync from Doc" write so the
+  // freshly-updated recaps (and everything else on the record) show up
+  // immediately instead of the pre-sync cached copy.
+  async function refreshArchiveDayCache(date){
+    const trackId = activeTrack.id;
+    try{
+      const res = await fetch(stableApiUrl(`/raceday?track=${encodeURIComponent(trackId)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+      archiveDayCache[date] = data;
+    } catch(err){
+      console.error("Race Day Archive day refresh failed", err);
+    }
   }
 
   // ---------- Bias Tracker trends ----------
@@ -7436,6 +7487,21 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track, date, raceNumber, recap }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return await res.json();
+  }
+
+  // "↻ Re-sync from Doc" — re-pulls just this one date's recaps from the
+  // shared Google Doc. Scoped server-side (see resyncRaceRecapsFromDoc()'s
+  // own comment in the worker) — a race not mentioned in the doc for this
+  // date is left alone, never cleared, so this can't accidentally wipe a
+  // manually-typed recap just because a doc section didn't parse cleanly.
+  async function raceRecapResyncApiPost(track, date){
+    const res = await fetch(stableApiUrl("/raceday/recap/resync"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, date }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     return await res.json();
