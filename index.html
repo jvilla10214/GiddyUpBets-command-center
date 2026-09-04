@@ -2109,6 +2109,38 @@
   .archive-race{ margin-bottom: 16px; }
   .archive-race:last-child{ margin-bottom: 0; }
   .archive-race-header{ font-size: 12.5px; color: var(--parchment-dim); margin-bottom: 6px; }
+  .archive-recap-section{
+    background: var(--panel-2); border: 1px solid var(--tote-amber); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  .archive-recap-header{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .archive-recap-label{
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--tote-amber);
+  }
+  .archive-recap-edit-btn{
+    background: transparent; border: 1px solid var(--panel-border); color: var(--parchment-dim);
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .archive-recap-edit-btn:hover{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .archive-recap-text{
+    font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.55;
+    color: var(--parchment); margin-top: 8px; white-space: pre-wrap;
+  }
+  .archive-recap-textarea{
+    width: 100%; min-height: 110px; margin-top: 8px;
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 6px;
+    color: var(--parchment); font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.5;
+    padding: 8px 10px; resize: vertical;
+  }
+  .archive-recap-actions{ display: flex; gap: 8px; margin-top: 8px; }
+  .archive-recap-save-btn, .archive-recap-cancel-btn, .archive-recap-clear-btn{
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--panel-border); background: var(--panel);
+  }
+  .archive-recap-save-btn{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .archive-recap-clear-btn{ border-color: var(--silk-red); color: var(--silk-red); margin-left: auto; }
+  .archive-recap-cancel-btn{ color: var(--parchment-dim); }
   .archive-race-header strong{ color: var(--parchment); }
   .archive-finish-line{ font-size: 12.5px; color: var(--rail-green); margin-top: 6px; }
   .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
@@ -2668,7 +2700,7 @@
         <path d="M7 5H4a3 3 0 0 0 3 4"/>
         <path d="M17 5h3a3 3 0 0 1-3 4"/>
       </svg>
-      Race Day Archive
+      Race Recaps
     </button>
     <button type="button" class="sidebar-btn" data-page="news">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3143,7 +3175,7 @@
   <div class="page" id="page-archive">
     <div class="panel log-panel">
       <div class="panel-title">
-        Race Day Archive
+        Race Recaps
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="archiveInfo" title="Why this works this way">ⓘ</button>
       </div>
       <div class="log-controls">
@@ -3154,12 +3186,15 @@
       <div class="archive-month-summary" id="archiveMonthSummary"></div>
       <div class="stable-trainer-list" id="archiveList"></div>
       <div class="info-disclosure" id="archiveInfo">
-        Race Day Archive saves a snapshot of that day's entries + results as they're viewed live — an early-in-the-day
-        visit archives entries only, a later visit (or the next visitor) fills in results as races go final. Weather
+        Saves a snapshot of that day's entries + results as they're viewed live — an early-in-the-day visit
+        archives entries only, a later visit (or the next visitor) fills in results as races go final. Weather
         and Bias rows shown alongside a saved day come straight from the Daily Log / Bias Tracker for that same date.
         The Month at a Glance strip above the list is computed the same way — favorite win rate and average field
         size only count races with both saved entries (for the morning-line favorite) and a final result, so an
-        early month with mostly-open days will show fewer counted races than saved days.
+        early month with mostly-open days will show fewer counted races than saved days. Race Recap text you add
+        to a race (the "+ Add Recap" button on each race) automatically shows up in the entry-alert email for
+        every horse who actually finished that race, whenever they're entered again — matched against the real
+        finish order, not the morning entries list, so a scratch never gets tagged with a race it didn't run.
       </div>
     </div>
   </div>
@@ -6059,6 +6094,7 @@
     archiveSearching = false;
     monthSummaryCache = {};
     monthSummaryLoadingKey = null;
+    archiveRecapEditingKey = null;
     const searchInput = $("archiveSearchInput");
     if (searchInput) searchInput.value = "";
     renderRaceDayArchive();
@@ -6141,12 +6177,45 @@
   // Entries page's full multi-table results card (current odds, full
   // payouts table), since this view is scanning a whole day's races at
   // once, not focused on one.
-  function archiveRaceHtml(entryRace, result){
+  // Single scalar, not a Set — the archive's own tab UI only ever shows one
+  // race at a time per date, so there's never more than one recap editor
+  // that could plausibly be open at once. Format: "date:raceNumber".
+  let archiveRecapEditingKey = null;
+
+  function archiveRecapSectionHtml(date, raceNumber, recap){
+    if (date == null || raceNumber == null) return ""; // search-result rows don't have a date-scoped race to attach a recap to
+    const editKey = `${date}:${raceNumber}`;
+    const isEditing = archiveRecapEditingKey === editKey;
+    const dataAttrs = `data-recap-date="${escapeHtml(date)}" data-recap-race="${raceNumber}"`;
+    if (isEditing){
+      return `
+        <div class="archive-recap-section">
+          <div class="archive-recap-header"><span class="archive-recap-label">Race Recap</span></div>
+          <textarea class="archive-recap-textarea" id="archiveRecapTextarea">${escapeHtml(recap || "")}</textarea>
+          <div class="archive-recap-actions">
+            <button type="button" class="archive-recap-save-btn" ${dataAttrs}>Save</button>
+            <button type="button" class="archive-recap-cancel-btn">Cancel</button>
+            ${recap ? `<button type="button" class="archive-recap-clear-btn" ${dataAttrs}>Clear</button>` : ""}
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="archive-recap-section">
+        <div class="archive-recap-header">
+          <span class="archive-recap-label">Race Recap</span>
+          <button type="button" class="archive-recap-edit-btn" ${dataAttrs}>${recap ? "Edit" : "+ Add Recap"}</button>
+        </div>
+        ${recap ? `<div class="archive-recap-text">${escapeHtml(recap)}</div>` : ""}
+      </div>`;
+  }
+
+  function archiveRaceHtml(entryRace, result, date, recap){
     const metaBits = [entryRace.purse, entryRace.raceType].filter(Boolean).join(" ");
     const nameAndMeta = [entryRace.raceName, metaBits].filter(Boolean).join(" — ");
     const distBits = [entryRace.distanceLabel, entryRace.surface].filter(Boolean).join(" · ");
     const timeLabel = formatPostTimeLabel(entryRace.postTimeIso);
     const headerHtml = `<div class="archive-race-header"><strong>Race ${entryRace.raceNumber}</strong>${timeLabel ? " — " + escapeHtml(timeLabel) : ""}${nameAndMeta ? " — " + escapeHtml(nameAndMeta) : ""}${distBits ? " — " + escapeHtml(distBits) : ""}</div>`;
+    const recapHtml = archiveRecapSectionHtml(date, entryRace.raceNumber, recap);
 
     // entries.horses is null (not just an empty array) specifically when
     // this date's entries source can't serve historical dates at all
@@ -6156,7 +6225,7 @@
     // PP/Horse/Jockey/ML table nobody asked to see.
     if (entryRace.horses == null){
       if (!result?.isFinal || !result.finishOrder?.length){
-        return `<div class="archive-race">${headerHtml}<div class="archive-empty">No entries or results saved for this race.</div></div>`;
+        return `<div class="archive-race">${headerHtml}${recapHtml}<div class="archive-empty">No entries or results saved for this race.</div></div>`;
       }
       const finishRows = result.finishOrder.map(f => `
         <tr>
@@ -6169,6 +6238,7 @@
       return `
         <div class="archive-race">
           ${headerHtml}
+          ${recapHtml}
           <div class="log-table-wrap">
             <table class="log-table entries-horse-table">
               <thead><tr><th>Pos</th><th>PP</th><th>Horse</th><th>Payout</th></tr></thead>
@@ -6195,6 +6265,7 @@
     return `
       <div class="archive-race">
         ${headerHtml}
+        ${recapHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
             <thead><tr><th>PP</th><th>Horse</th><th>Jockey</th><th>ML</th></tr></thead>
@@ -6466,7 +6537,7 @@
             return `
               <div class="archive-search-result">
                 <div class="archive-search-result-date">${date}</div>
-                ${archiveRaceHtml(race, resultsByRace[raceNumber])}
+                ${archiveRaceHtml(race, resultsByRace[raceNumber], date, cached.raceRecaps?.[raceNumber])}
               </div>`;
           }).join("");
         }
@@ -6526,7 +6597,7 @@
               const race = races.find(r => r.raceNumber === selectedRace);
               racesHtml = `
                 <div class="entries-race-tabs">${tabsHtml}</div>
-                ${archiveRaceHtml(race, resultsByRace[race.raceNumber])}
+                ${archiveRaceHtml(race, resultsByRace[race.raceNumber], date, cached.raceRecaps?.[race.raceNumber])}
               `;
             }
             bodyHtml = `
@@ -6560,6 +6631,46 @@
       btn.addEventListener("click", () => {
         archiveSelectedRaceByDate[btn.dataset.archiveDate] = Number(btn.dataset.race);
         renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".archive-recap-edit-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        archiveRecapEditingKey = `${btn.dataset.recapDate}:${btn.dataset.recapRace}`;
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".archive-recap-cancel-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        archiveRecapEditingKey = null;
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".archive-recap-save-btn, .archive-recap-clear-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const date = btn.dataset.recapDate;
+        const raceNumber = Number(btn.dataset.recapRace);
+        const isClear = btn.classList.contains("archive-recap-clear-btn");
+        const recap = isClear ? "" : ($("archiveRecapTextarea")?.value ?? "").trim();
+        btn.disabled = true;
+        try{
+          await raceRecapApiPost(activeTrack.id, date, raceNumber, recap);
+          // Update the local cache directly instead of a full refetch — the
+          // save call itself is already the source of truth for what got
+          // stored, and archiveDayCache[date] is already loaded (this race
+          // couldn't have been edited otherwise).
+          const cached = archiveDayCache[date];
+          if (cached){
+            cached.raceRecaps = cached.raceRecaps || {};
+            if (recap) cached.raceRecaps[raceNumber] = recap;
+            else delete cached.raceRecaps[raceNumber];
+          }
+          archiveRecapEditingKey = null;
+          renderRaceDayArchive();
+        } catch(err){
+          console.error("Race recap save failed", err);
+          btn.disabled = false;
+          alert(`Couldn't save this recap — ${err.message}. Try again.`);
+        }
       });
     });
     // Same note-view/add-note wiring as renderEntriesPage()'s delegated
@@ -7438,6 +7549,18 @@
     const data = await res.json();
     return Array.isArray(data.entries) ? data.entries : [];
   }
+  // recap: "" clears an existing recap (see /raceday/recap's own comment on
+  // why an empty string, not a DELETE route, is how clearing works here).
+  async function raceRecapApiPost(track, date, raceNumber, recap){
+    const res = await fetch(stableApiUrl("/raceday/recap"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, date, raceNumber, recap }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return await res.json();
+  }
+
   async function weatherLogApiUpsert(track, entry){
     const res = await fetch(stableApiUrl("/weatherlog"), {
       method: "POST",
