@@ -1581,6 +1581,7 @@ async function handleRequest(request, env) {
           state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
         );
         const recapIndex = await readRecapIndex(env, track);
+        const fullCardRecapCache = {};
         const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
         let result;
         if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
@@ -1596,7 +1597,11 @@ async function handleRequest(request, env) {
             // other matching path in this file.
             const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
             const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
-            const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+            const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+            const recaps = [];
+            for (const r of recapsRaw) {
+              recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, track, r.date, fullCardRecapCache) });
+            }
             if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
             const notes = notesForHorse(state.notes, horse.trainer, horse.name);
             if (!notes.length && !recaps.length) continue;
