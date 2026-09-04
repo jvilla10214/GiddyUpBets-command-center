@@ -6091,7 +6091,7 @@
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${ppBadgeHtml(h.postPosition)}</td>
         <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
-        <td>${escapeHtml(h.jockey || "—")}</td>
+        <td>${escapeHtml(h.jockey || "—")} &bull; ${escapeHtml(h.trainer || "—")}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : escapeHtml(h.mlOdds || h.currentOdds || "—")}</td>
       </tr>
     `).join("");
@@ -6108,7 +6108,7 @@
         ${recapHtml}
         <div class="log-table-wrap">
           <table class="log-table entries-horse-table">
-            <thead><tr><th>PP</th><th>Horse</th><th>Jockey</th><th>ML</th></tr></thead>
+            <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>ML</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
