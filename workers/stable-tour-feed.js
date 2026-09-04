@@ -1986,6 +1986,26 @@ async function readRecapIndex(env, track) {
   const parsed = raw ? JSON.parse(raw) : {};
   return parsed && typeof parsed === "object" ? parsed : {};
 }
+
+// The horse->recap reverse index (readRecapIndex above) only ever stores
+// per-race recap text, not the whole-card writeup — that lives on the
+// raceday record itself (record.fullCardRecap), not per-horse, so it can't
+// be denormalized into the index the same way without going stale: the
+// manual "Full Card Recap" edit button (POST /raceday/fullcard) writes it
+// with an EMPTY recapsByRace, which would leave any already-indexed horses
+// for that date pointing at a stale/missing value if it were baked in at
+// index-write time instead of looked up here. `cache` is a plain object the
+// caller passes in and reuses across every horse in one runEntryAlerts()/
+// collectTodaysRaceGroupsForPreview() call, so two horses who ran on the
+// same date only cost one KV read between them, not one each.
+async function readFullCardRecapForDate(env, track, date, cache) {
+  if (Object.prototype.hasOwnProperty.call(cache, date)) return cache[date];
+  const raw = await env.STABLE_KV.get(racedayKvKey(track, date));
+  const value = raw ? (JSON.parse(raw).fullCardRecap || null) : null;
+  cache[date] = value;
+  return value;
+}
+
 // Handles one or many races for the SAME track+date in a single read-
 // modify-write of both the raceday record and the recap index. Confirmed
 // real bug (2026-09-04): the original version of this only ever handled one
@@ -2153,14 +2173,15 @@ function parseRaceRecapsFromSection(sectionBody) {
 // blank out a race's text in the doc, re-syncing won't clear it here — edit
 // or clear it directly in Race Recaps instead.
 // The whole-card writeup the doc puts right under the date header, above
-// the individual "R#" entries (labeled "Full Card Recap:" going forward,
-// 2026-09-04 — older dates used a bare "CARD:" label instead, which this
-// deliberately does NOT also match: that older label sits inside noisier
-// header text mixed with race-day conditions, and grabbing it blindly risks
-// pulling in garbage rather than the clean writeup the new label marks).
-// Only ever searches the span BEFORE the first race marker, so this can
-// never accidentally match something inside a race's own recap text.
+// the individual "R#" entries — labeled "Full Card Recap:" going forward
+// (2026-09-04). Older dates used a bare "CARD:" label instead, checked as a
+// fallback so past dates can be backfilled too (2026-09-04). Take the LAST
+// "CARD:" match in the pre-race span, not the first — confirmed real quirk
+// in the doc's 8/30 section: a stray "CARD:" with nothing after it sits
+// right under the date header, and the actual writeup's own "CARD:" comes
+// later, further down, still before the first race marker.
 const FULL_CARD_RECAP_LABEL = /Full\s*Card\s*Recap\s*:\s*/i;
+const FULL_CARD_RECAP_FALLBACK_LABEL = /Card\s*:\s*/gi;
 
 function parseFullCardRecapFromSection(sectionBody) {
   // NOTE: sectionBody.match(RACE_RECAP_RACE_MARKER) here would be a real bug
@@ -2173,10 +2194,15 @@ function parseFullCardRecapFromSection(sectionBody) {
   // a real match object with a usable .index.
   const [firstRaceMatch] = sectionBody.matchAll(RACE_RECAP_RACE_MARKER);
   const preRaceSpan = firstRaceMatch ? sectionBody.slice(0, firstRaceMatch.index) : sectionBody;
-  const labelMatch = preRaceSpan.match(FULL_CARD_RECAP_LABEL);
-  if (!labelMatch) return "";
-  const raw = preRaceSpan.slice(labelMatch.index + labelMatch[0].length);
-  return cleanRaceRecapDocText(raw);
+
+  const primaryMatch = preRaceSpan.match(FULL_CARD_RECAP_LABEL);
+  if (primaryMatch) {
+    return cleanRaceRecapDocText(preRaceSpan.slice(primaryMatch.index + primaryMatch[0].length));
+  }
+  const fallbackMatches = [...preRaceSpan.matchAll(FULL_CARD_RECAP_FALLBACK_LABEL)];
+  const lastFallback = fallbackMatches[fallbackMatches.length - 1];
+  if (!lastFallback) return "";
+  return cleanRaceRecapDocText(preRaceSpan.slice(lastFallback.index + lastFallback[0].length));
 }
 
 async function resyncRaceRecapsFromDoc(env, track, date) {
@@ -4293,6 +4319,7 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
   // directly, but the matching logic itself (including job #22's recap
   // trigger) needs to stay identical or a test send stops meaning anything.
   const recapIndex = await readRecapIndex(env, track);
+  const fullCardRecapCache = {};
   const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
   let result;
   if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
@@ -4307,7 +4334,11 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
       if (horse.scratched) continue;
       const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
       const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
-      const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+      const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+      const recaps = [];
+      for (const r of recapsRaw) {
+        recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, track, r.date, fullCardRecapCache) });
+      }
       if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
       const notes = notesForHorse(state.notes, horse.trainer, horse.name);
       if (!notes.length && !recaps.length) continue;
@@ -4382,12 +4413,29 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
       // reads as visually distinct at a glance — this is "how this horse's
       // actual last race went," a different kind of information than a
       // quote or observation, and shouldn't blend in with regular notes.
-      const recapsHtml = (recaps || []).map((r) => `
+      // A FULL CARD RECAP box (when that date has one) sits right above its
+      // matching RACE RECAP box, broad context before the specific race —
+      // dashed/muted styling on purpose so it doesn't compete with the
+      // solid-accent race recap for attention. Wired in the same way the
+      // race recap itself is: an independent per-date lookup attached to
+      // each recap entry in runEntryAlerts()/collectTodaysRaceGroupsForPreview(),
+      // not stored on the horse/note data itself.
+      const recapsHtml = (recaps || []).map((r) => {
+        const dateLabel = r.date ? formatEmailDateLabel(r.date) : "—";
+        const fullCardHtml = r.fullCardRecap ? `
+          <div style="background:rgba(0,0,0,0.03); border:1px dashed ${theme.dim}; border-radius:6px; padding:10px 12px; margin:4px 0 6px;">
+            <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.dim}; margin-bottom:4px;">FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}</span>
+            <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.fullCardRecap)}</div>
+          </div>
+        ` : "";
+        return `
+        ${fullCardHtml}
         <div style="background:rgba(0,0,0,0.05); border:1px solid ${theme.accent}; border-radius:6px; padding:10px 12px; margin:4px 0 10px;">
-          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(r.date ? formatEmailDateLabel(r.date) : "—")}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}</span>
+          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}</span>
           <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.recap)}</div>
         </div>
-      `).join("");
+      `;
+      }).join("");
       return `
         <div style="margin:10px 0 3px;">
           ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
@@ -4500,6 +4548,7 @@ async function runEntryAlerts(env, source = "manual") {
       // KV get), and reused for every horse on the card below instead of a
       // per-horse lookup.
       const recapIndex = await readRecapIndex(env, track);
+      const fullCardRecapCache = {};
       const raceGroups = [];
       for (const race of result.races || []) {
         const matchedHorses = [];
@@ -4508,7 +4557,11 @@ async function runEntryAlerts(env, source = "manual") {
           if (horse.scratched) continue;
           const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
           const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
-          const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+          const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+          const recaps = [];
+          for (const r of recapsRaw) {
+            recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, track, r.date, fullCardRecapCache) });
+          }
           // A race recap is its own independent reason to include a horse —
           // it doesn't require a tracked trainer or an existing note, since
           // the whole point is surfacing "here's how this horse's last
