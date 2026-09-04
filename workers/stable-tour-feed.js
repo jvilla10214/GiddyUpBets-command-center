@@ -411,9 +411,28 @@
 //    bare plural "' "/"’ " an owner name can end in; stripNyraBreedingDescriptor()
 //    then strips a breeding descriptor ("Kentucky homebred", "New
 //    York-bred") that can sit between the owner and the actual horse.
+// 21. Stable Tour note dedupe (Cron Trigger -> scheduled(), plus manual GET
+//    /debug-dedupe-notes) — deletes exact-duplicate notes (same trainer,
+//    same horse, byte-identical text after whitespace normalization),
+//    keeping the earliest by capturedAt. Piggybacks the existing job #16
+//    Cron Trigger, no new trigger needed. Deliberately narrow: a live audit
+//    (2026-09-03) found 227 true duplicates from articles getting
+//    re-imported a few days apart, but ALSO found that "same trainer+horse
+//    +source link" is NOT a safe duplicate signal — every one of 39 such
+//    groups whose text differed turned out to be two genuinely different
+//    quotes from the same article (e.g. trainer and jockey both quoted
+//    about the same horse), which this intentionally leaves alone.
+// 22. Race Recaps (POST /raceday/recap) — attaches free-text race-recap
+//    prose to one race of an already-archived race day (the Race Recaps
+//    page's own "+ Add/Edit Recap" button), and maintains a horse->recap
+//    reverse index (keyed off that race's real finish order, not the
+//    morning entries list) so job #16's entry-alert email can surface a
+//    horse's full recorded race recap whenever it's entered again — a
+//    trigger independent of tracked-trainer status or regular notes; a
+//    horse can appear in the digest purely because it has a recap on file.
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, #9, #15, and #16 to work — jobs #2, #4, #6, #7, #8,
+// for jobs #1, #3, #5, #9, #15, #16, #21, and #22 to work — jobs #2, #4, #6, #7, #8,
 // #10, #11, #12, #13, #14, #17, #18, and #20 (fetch-and-parse only, no
 // storage) work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
 // secret (Worker settings -> Variables and Secrets -> Add, type "Secret") —
@@ -487,6 +506,14 @@ const MAX_ARTICLES_PER_RUN = 8; // caps subrequests/runtime per poll
 // well within a Worker's subrequest budget (36 articles + 3 listing
 // fetches).
 const DRF_MAX_ARTICLES_PER_RUN = 36;
+// NYRA News (job #20) also gets its own higher cap, same reasoning as DRF
+// above — confirmed real gap: on a single busy stakes day (e.g. Travers
+// day) NYRA can publish 6+ press releases, easily blowing past the shared
+// 8-item cap between one 6-hour poll and the next and permanently skipping
+// real post-race recaps (including the Travers winner itself, confirmed
+// missing 2026-08-30) since nothing re-checks articles that fall off the
+// bottom of a fetch once a newer batch pushes them out of the top N.
+const NYRA_NEWS_MAX_ARTICLES_PER_RUN = 20;
 // A UA that identifies itself as a bot gets a flat 403 from this site's WAF
 // on individual article pages (confirmed directly: identical request,
 // bot-labeled UA -> 403, a real browser's UA -> 200) — the feed endpoint
@@ -558,6 +585,9 @@ export default {
     );
     ctx.waitUntil(
       backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
+    );
+    ctx.waitUntil(
+      dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
     );
   },
 };
@@ -1290,13 +1320,57 @@ async function handleRequest(request, env) {
       const unchanged = existing
         && JSON.stringify(existing.entries) === JSON.stringify(entries)
         && JSON.stringify(existing.results) === JSON.stringify(results);
+      // raceRecaps carried forward explicitly — this route rebuilds the
+      // record from scratch on any real entries/results change (the normal
+      // 5-minute polling loop), and without this it would silently wipe out
+      // any recap text /raceday/recap had already attached to this date,
+      // the same clobbering bug already found and fixed twice elsewhere in
+      // this file (2026-09-03) for the exact same "rebuild without carrying
+      // forward a field this route doesn't itself manage" shape.
       const record = unchanged
         ? existing
-        : { track, date, entries, results, capturedAt: new Date().toISOString() };
+        : { track, date, entries, results, capturedAt: new Date().toISOString(), raceRecaps: existing?.raceRecaps };
       if (!unchanged) {
         await env.STABLE_KV.put(key, JSON.stringify(record));
       }
       return json({ available: true, ...record }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Attaches (or clears, with recap: "") a race recap to one race of an
+    // already-archived race day, and keeps the horse->recap reverse index
+    // (used by runEntryAlerts() to surface a recap when that horse runs
+    // back) in sync with it. Open write, no passphrase — same reasoning as
+    // /notes: free text a visitor could vandalize, but consistent with how
+    // every other content-editing route in this file is already gated (or
+    // not) rather than introducing a new, inconsistent bar just for this.
+    if (url.pathname === "/raceday/recap" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date || "";
+      const raceNumber = Number(body.raceNumber);
+      const recap = typeof body.recap === "string" ? body.recap.trim() : "";
+      if (!track || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !raceNumber) {
+        return json({ error: "Missing track, invalid date, or missing raceNumber" }, 400);
+      }
+      const result = await upsertRaceRecap(env, track, date, raceNumber, recap);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Bulk variant of the above — every race for one track+date in a single
+    // read-modify-write, so an import covering a whole card can't race
+    // against itself the way calling /raceday/recap once per race did (see
+    // upsertRaceRecapsBulk()'s own comment on the real data loss this
+    // caused). Body: { track, date, recaps: { [raceNumber]: recapText } }.
+    if (url.pathname === "/raceday/recap/bulk" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date || "";
+      const recaps = body.recaps && typeof body.recaps === "object" ? body.recaps : null;
+      if (!track || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !recaps || !Object.keys(recaps).length) {
+        return json({ error: "Missing track, invalid date, or missing recaps" }, 400);
+      }
+      const result = await upsertRaceRecapsBulk(env, track, date, recaps);
+      return json(result, 200, { "Cache-Control": "no-store" });
     }
 
     // Lists which dates actually have a saved snapshot for this track, newest
@@ -1333,6 +1407,25 @@ async function handleRequest(request, env) {
         result = await runEntryAlerts(env);
       } catch (err) {
         return json({ error: `Entry alerts run failed: ${err.message}` }, 500);
+      }
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual trigger for dedupeStableTourNotes() — same reasoning as
+    // /debug-run-scheduled above (also runs on the real Cron Trigger
+    // already; this is the on-demand equivalent for testing, or for
+    // catching up right away instead of waiting for the next firing). Gated
+    // like every other write route since this deletes real notes, even
+    // though the detection itself is deliberately narrow (see the
+    // function's own comment on why "same source link" was rejected as a
+    // signal after auditing what it would have deleted).
+    if (url.pathname === "/debug-dedupe-notes" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      let result;
+      try {
+        result = await dedupeStableTourNotes(env);
+      } catch (err) {
+        return json({ error: `Note dedupe run failed: ${err.message}` }, 500);
       }
       return json(result, 200, { "Cache-Control": "no-store" });
     }
@@ -1413,6 +1506,64 @@ async function handleRequest(request, env) {
         return json({ sent: true, sentTo: to, horseCount, resendId: result.id || null }, 200, { "Cache-Control": "no-store" });
       } catch (err) {
         return json({ error: `Styled test email failed: ${err.message}` }, 500);
+      }
+    }
+
+    // Visual-preview-only variant of the route above — includes scratched
+    // horses, which the real pipeline (and /debug-send-styled-test-email)
+    // correctly never does. Exists purely so a Race Recap can actually be
+    // looked at in a real rendered email even on a day where every horse
+    // that happens to have one on file got scratched before post (added
+    // 2026-09-04: both real candidates that day — Shoot the Nickel,
+    // Jadorlinija — were scratched, so there was no other way to see one
+    // rendered without waiting for a future card). Doesn't touch
+    // runEntryAlerts()/collectTodaysRaceGroupsForPreview() at all — this is
+    // its own copy specifically so the real send logic can never accidentally
+    // pick up a "include scratches" code path.
+    if (url.pathname === "/debug-preview-recap-email" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const track = url.searchParams.get("track") || "saratoga";
+      const date = url.searchParams.get("date") || entryAlertTodayDate();
+      const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : NOTIFY_EMAILS;
+      try {
+        const state = await readNotesAndTrainers(env);
+        const trackedLastNames = new Set(state.trainers.map(lastNameKey));
+        const untrackedHorseNames = new Set(
+          state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
+        );
+        const recapIndex = await readRecapIndex(env, track);
+        const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
+        let result;
+        if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
+        else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
+        else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+        else result = await fetchMonmouthEntriesDay(date);
+
+        const raceGroups = [];
+        for (const race of result.races || []) {
+          const matchedHorses = [];
+          for (const horse of race.horses || []) {
+            // No scratch filter — the one deliberate difference from every
+            // other matching path in this file.
+            const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
+            const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
+            const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+            if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
+            const notes = notesForHorse(state.notes, horse.trainer, horse.name);
+            if (!notes.length && !recaps.length) continue;
+            matchedHorses.push({ horse, notes, recaps });
+          }
+          if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
+        }
+        if (!raceGroups.length) {
+          return json({ sent: false, reason: "No matches (tracked trainer, note, or recap) for that track/date, scratched or not." }, 200, { "Cache-Control": "no-store" });
+        }
+        const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
+        const sendResult = await sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to);
+        const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+        return json({ sent: true, sentTo: to, horseCount, resendId: sendResult.id || null }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Recap preview email failed: ${err.message}` }, 500);
       }
     }
 
@@ -1612,7 +1763,7 @@ async function handleRequest(request, env) {
       }
       if (!articleRes.ok) continue;
 
-      const horses = await extractHorseChunks(articleRes);
+      const horses = await extractHorseChunks(articleRes, trainer);
       articles.push({
         guid: item.guid || item.link,
         title: item.title,
@@ -1757,6 +1908,108 @@ function biasLogKvKey(track) {
   return `biaslog:${track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40)}`;
 }
 
+// ---------- Race Recaps ----------
+// A race recap is free text a human writes about how a whole race actually
+// played out, attached to one race of an already-archived race day (stored
+// inline on that same raceday:{track}:{date} record, in a new raceRecaps
+// field keyed by race number — see the /raceday POST route's own comment on
+// why that route now has to carry it forward explicitly). The point of a
+// recap isn't the text alone, though — it's resurfacing the WHOLE paragraph
+// automatically in the entry-alert email whenever any horse who actually
+// ran in that race is entered again. That needs a reverse index (horse name
+// -> every recap they've appeared in) so runEntryAlerts() can do one cheap
+// lookup per track instead of scanning every archived race day on every
+// run. The index is built from that race's real FINISH ORDER (who actually
+// ran), not the morning entries list, so a scratched horse never gets
+// wrongly tagged with a recap for a race it never ran.
+function raceRecapIndexKvKey(track) {
+  const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+  return `racerecap-index:${safeTrack}`;
+}
+// Same normalization notesForHorse()/stripHorseCountrySuffix() already use
+// elsewhere in this file — kept consistent so a horse's recap index entry
+// and its regular notes always agree on what counts as "the same horse."
+function normalizeHorseNameForRecap(name) {
+  return stripHorseCountrySuffix((name || "").trim().toLowerCase());
+}
+async function readRecapIndex(env, track) {
+  const raw = await env.STABLE_KV.get(raceRecapIndexKvKey(track));
+  const parsed = raw ? JSON.parse(raw) : {};
+  return parsed && typeof parsed === "object" ? parsed : {};
+}
+// Handles one or many races for the SAME track+date in a single read-
+// modify-write of both the raceday record and the recap index. Confirmed
+// real bug (2026-09-04): the original version of this only ever handled one
+// race per call, and a bulk import (many races for the same date, fired in
+// quick sequence) raced against itself — each call read the raceday record
+// before a previous call's write had landed, so whichever write finished
+// last silently clobbered the others. A from-scratch backfill of 54 races
+// across 5 dates lost 12 of them this way before this fix; verified clean
+// (byte-for-byte) after switching the import to this bulk path. recapsByRace
+// is { [raceNumber]: recapText }; an empty string clears that race's recap.
+async function upsertRaceRecapsBulk(env, track, date, recapsByRace) {
+  const key = racedayKvKey(track, date);
+  const raw = await env.STABLE_KV.get(key);
+  if (!raw) return { available: false, error: "No archived race day for this track/date yet" };
+  const record = JSON.parse(raw);
+  record.raceRecaps = record.raceRecaps || {};
+
+  const index = await readRecapIndex(env, track);
+  const indexedHorsesByRace = {};
+
+  for (const [raceNumberStr, recapRaw] of Object.entries(recapsByRace)) {
+    const raceNumber = Number(raceNumberStr);
+    const recap = typeof recapRaw === "string" ? recapRaw.trim() : "";
+    if (recap) record.raceRecaps[raceNumber] = recap;
+    else delete record.raceRecaps[raceNumber]; // empty text clears it
+
+    // Prefer the real finish order (who actually ran); fall back to the
+    // morning entries list (non-scratched) only when results haven't been
+    // archived yet for this race, so the recap still gets indexed against
+    // *someone* rather than silently indexing nobody.
+    const resultRace = (record.results || []).find((r) => r.raceNumber === raceNumber);
+    const entryRace = (record.entries || []).find((r) => r.raceNumber === raceNumber);
+    let horseNames = [];
+    if (resultRace?.finishOrder?.length) {
+      horseNames = resultRace.finishOrder.map((f) => f.horseName).filter(Boolean);
+    } else if (entryRace?.horses?.length) {
+      horseNames = entryRace.horses.filter((h) => !h.scratched).map((h) => h.name).filter(Boolean);
+    }
+    indexedHorsesByRace[raceNumber] = horseNames;
+
+    // Drop any stale entry for this exact date+race first (covers both a
+    // recap being edited and a recap being cleared) before adding it back —
+    // otherwise re-saving the same race's recap would pile up duplicates
+    // every time it's edited.
+    for (const horseKey of Object.keys(index)) {
+      index[horseKey] = (index[horseKey] || []).filter((r) => !(r.date === date && r.raceNumber === raceNumber));
+      if (!index[horseKey].length) delete index[horseKey];
+    }
+    if (recap) {
+      for (const name of horseNames) {
+        const horseKey = normalizeHorseNameForRecap(name);
+        if (!horseKey) continue;
+        if (!index[horseKey]) index[horseKey] = [];
+        index[horseKey].push({ date, raceNumber, recap });
+      }
+    }
+  }
+
+  await env.STABLE_KV.put(key, JSON.stringify(record));
+  await env.STABLE_KV.put(raceRecapIndexKvKey(track), JSON.stringify(index));
+
+  return { available: true, track, date, indexedHorsesByRace };
+}
+
+async function upsertRaceRecap(env, track, date, raceNumber, recap) {
+  const result = await upsertRaceRecapsBulk(env, track, date, { [raceNumber]: recap });
+  if (!result.available) return result;
+  return {
+    available: true, track, date, raceNumber, recap: recap || null,
+    indexedHorses: result.indexedHorsesByRace[raceNumber] || [],
+  };
+}
+
 function trackConditionsKvKey(track, date) {
   const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
   const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
@@ -1784,6 +2037,63 @@ function racedayKvKey(track, date) {
 // /debug-backfill-raceday-results for on-demand/manual use. Bounded to a
 // trailing window so a caught-up backlog doesn't re-check the same old,
 // permanently-resultless dates (rained out, canceled, etc.) every run.
+// Confirmed real problem via a live audit (2026-09-03): 227 redundant notes
+// across 210 groups, all the SAME source article getting auto-imported
+// twice a few days apart (re-scraped before the pipeline's own "already
+// imported" check caught up, or a source republishing under a fresh
+// timestamp). Detection is deliberately narrow — same trainer, same horse,
+// and BYTE-IDENTICAL note text (after trimming and collapsing whitespace
+// runs, to still catch a pure formatting-only re-scrape) — because a wider
+// signal like "same source link" turned out to be unreliable: audited all
+// 39 same-trainer+horse+link groups whose text differs, and every one of
+// them was two genuinely different quotes from the same article (trainer
+// AND jockey both quoted about the same horse, or two separate paragraphs),
+// not a duplicate. Auto-merging on that signal would have deleted real,
+// distinct content. Exact-text matching has no such risk — the two notes
+// say the literal same thing, so keeping only the earlier one loses
+// nothing. Runs on every scheduled() firing (piggybacks the existing
+// entry-alerts Cron Trigger, same as backfillRaceDayResults() above — no
+// new trigger needed) and via /debug-dedupe-notes for on-demand/manual use.
+function dedupeNoteKey(n) {
+  const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return `${norm(n.trainer)}|${norm(n.horse)}|${norm(n.note)}`;
+}
+async function dedupeStableTourNotes(env) {
+  const notes = await readNotes(env);
+  const groups = new Map();
+  notes.forEach((n) => {
+    const key = dedupeNoteKey(n);
+    if (!key.trim()) return; // a note with no trainer/horse/text at all — nothing to key on, leave it alone
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(n);
+  });
+
+  const toRemove = new Set();
+  const examples = [];
+  let duplicateGroups = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    duplicateGroups++;
+    // Earliest capturedAt wins (falls back to array order — the earlier
+    // occurrence in the stored list — when capturedAt is missing on an old
+    // note, so this never throws away the ONLY copy of something).
+    const sorted = [...group].sort((a, b) => (a.capturedAt || "").localeCompare(b.capturedAt || ""));
+    const [keep, ...dupes] = sorted;
+    dupes.forEach((d) => toRemove.add(d.id));
+    if (examples.length < 10) {
+      examples.push({ trainer: keep.trainer, horse: keep.horse, kept: keep.id, removed: dupes.map((d) => d.id) });
+    }
+  }
+
+  if (!toRemove.size) {
+    return { totalBefore: notes.length, totalAfter: notes.length, duplicateGroups: 0, removed: 0, examples: [] };
+  }
+  const filtered = notes.filter((n) => !toRemove.has(n.id));
+  await env.STABLE_KV.put("notes", JSON.stringify(filtered));
+  await bumpDataVersion(env);
+  return { totalBefore: notes.length, totalAfter: filtered.length, duplicateGroups, removed: toRemove.size, examples };
+}
+
 const RACEDAY_BACKFILL_LOOKBACK_DAYS = 10;
 async function backfillRaceDayResults(env) {
   const cutoff = new Date(Date.now() - RACEDAY_BACKFILL_LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
@@ -2037,19 +2347,52 @@ function trainerFromTitle(title) {
 // standalone <h2> heading with just the horse's name. Scoped to the
 // <article> boundary so sidebar/related-post headings (which reuse the same
 // heading markup) don't get swept in as false "horses".
-async function extractHorseChunks(response) {
+//
+// Confirmed real bug (2026-08-30): a Q&A-style piece (a trainer, or a
+// co-trainer pair, interviewed horse-by-horse) alternates "Horse Name:
+// description" with "Trainer: 'quote'" paragraphs using the exact same
+// "Name: text" shape — the code had no way to tell those apart, so every
+// speaker line started a brand-new chunk under the SPEAKER's own name
+// ("Casse", "Tonja", "John" — literally the trainer's own name) instead of
+// being folded into the horse chunk it was actually answering for. That
+// both fabricated fake "horses" out of the trainer's own name AND
+// truncated the real horse's chunk down to just its lead-in description,
+// silently dropping the actual quote. Trainer name tokens (handling a
+// co-trainer "X and Y Z" string, or just "X Y" for one person) are now
+// excluded from ever starting a new chunk — a match there is always the
+// trainer being quoted, so it's merged into whatever horse chunk is
+// currently open instead. Known residual gap, same spirit as every other
+// "necessarily incomplete" note elsewhere in this file: a THIRD-party
+// speaker quoted in passing (a PR staffer, an owner) isn't derivable from
+// the trainer name and can still spawn a stray one-off chunk under their
+// name — rare enough, and low-value enough when it happens, that it isn't
+// worth chasing with a maintained name list.
+async function extractHorseChunks(response, trainer) {
   const html = await response.text();
   const body = extractArticleBody(html);
   const paragraphs = htmlToPlainParagraphs(body);
+
+  const speakerTokens = new Set(
+    (trainer || "")
+      .replace(/\band\b/gi, " ")
+      .split(/\s+/)
+      .map((w) => w.trim().toLowerCase())
+      .filter(Boolean)
+  );
 
   const HORSE_COLON = /^([A-Z][A-Za-z.'’\-\s]{1,40}):\s*([\s\S]*)$/;
   const chunks = [];
   let current = null;
   for (const p of paragraphs) {
     const m = p.match(HORSE_COLON);
-    if (m && m[1].trim().split(/\s+/).length <= 5) {
+    const isSpeakerLabel = m && speakerTokens.has(m[1].trim().toLowerCase());
+    if (m && !isSpeakerLabel && m[1].trim().split(/\s+/).length <= 5) {
       if (current) chunks.push(current);
       current = { horse: m[1].trim(), text: m[2].trim() };
+      continue;
+    }
+    if (isSpeakerLabel) {
+      if (current) current.text += (current.text ? "\n\n" : "") + m[2].trim();
       continue;
     }
     if (isShortName(p)) {
@@ -3748,6 +4091,12 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
   const untrackedHorseNames = new Set(
     state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
   );
+  // Kept in sync with runEntryAlerts()'s own matching rules by hand — this
+  // is a preview/test path (no dedup writes, no real send unless the caller
+  // asks), not the real scheduled one, so it can't just call that function
+  // directly, but the matching logic itself (including job #22's recap
+  // trigger) needs to stay identical or a test send stops meaning anything.
+  const recapIndex = await readRecapIndex(env, track);
   const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
   let result;
   if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
@@ -3762,10 +4111,11 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
       if (horse.scratched) continue;
       const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
       const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
-      if (!trainerTracked && !hasUntrackedNote) continue;
+      const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+      if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
       const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-      if (!notes.length) continue;
-      matchedHorses.push({ horse, notes });
+      if (!notes.length && !recaps.length) continue;
+      matchedHorses.push({ horse, notes, recaps });
     }
     if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
   }
@@ -3807,7 +4157,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
     const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
     const raceTag = [`RACE ${race.raceNumber}`, postTime, conditionsBits, distBits].filter(Boolean).join(" · ");
-    const horsesHtml = horses.map(({ horse, notes }) => {
+    const horsesHtml = horses.map(({ horse, notes, recaps }) => {
       const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition) : "";
       // Full, untruncated note text — no slicing anywhere in this path.
       const notesHtml = notes.map((n) => {
@@ -3821,11 +4171,22 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         </div>
       `;
       }).join("");
+      // Filled box (not the notes' plain left-border style) so a race recap
+      // reads as visually distinct at a glance — this is "how this horse's
+      // actual last race went," a different kind of information than a
+      // quote or observation, and shouldn't blend in with regular notes.
+      const recapsHtml = (recaps || []).map((r) => `
+        <div style="background:rgba(0,0,0,0.05); border:1px solid ${theme.accent}; border-radius:6px; padding:10px 12px; margin:4px 0 10px;">
+          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(r.date || "—")}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}</span>
+          <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.recap)}</div>
+        </div>
+      `).join("");
       return `
         <div style="margin:10px 0 3px;">
           ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
         </div>
         <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:#000000; margin-bottom:5px;">${escapeHtmlForEmail(horse.trainer || "—")}${horse.jockey ? ` &middot; ${escapeHtmlForEmail(horse.jockey)}` : ""}</div>
+        ${recapsHtml}
         ${notesHtml}
       `;
     }).join("");
@@ -3928,6 +4289,10 @@ async function runEntryAlerts(env, source = "manual") {
       // (raceNotifyKvKey), checked here before a horse is added to the
       // digest, but only actually written after the digest send succeeds —
       // so a failed send doesn't silently mark horses as already-notified.
+      // One read of this track's whole recap index up front — cheap (one
+      // KV get), and reused for every horse on the card below instead of a
+      // per-horse lookup.
+      const recapIndex = await readRecapIndex(env, track);
       const raceGroups = [];
       for (const race of result.races || []) {
         const matchedHorses = [];
@@ -3936,17 +4301,23 @@ async function runEntryAlerts(env, source = "manual") {
           if (horse.scratched) continue;
           const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
           const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
-          if (!trainerTracked && !hasUntrackedNote) continue;
-          // Only worth including if there's actually a note to show — not
-          // dedup-marked when skipped for this reason (see below), so a
-          // note added earlier that same race day before the 8am window
-          // still gets caught at the next scheduled run.
+          const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+          // A race recap is its own independent reason to include a horse —
+          // it doesn't require a tracked trainer or an existing note, since
+          // the whole point is surfacing "here's how this horse's last
+          // recorded race actually went" even for a horse nobody's
+          // otherwise tracking.
+          if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
+          // Only worth including if there's actually something to show —
+          // notes OR recaps — not dedup-marked when skipped for this reason
+          // (see below), so a note/recap added later that same race day
+          // before the 8am window still gets caught at the next run.
           const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-          if (!notes.length) continue;
+          if (!notes.length && !recaps.length) continue;
           const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
           const already = await env.STABLE_KV.get(key);
           if (already) continue;
-          matchedHorses.push({ horse, notes, key });
+          matchedHorses.push({ horse, notes, recaps, key });
         }
         if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
       }
@@ -4847,14 +5218,40 @@ function extractNyraSections(paragraphs, titleHorseGuess) {
   // ("De Paz said") can still resolve to the full name ("Horacio De Paz")
   // announced elsewhere in the piece.
   const trainerFullNameByKey = {};
+  // Confirmed real gap (2026-08-30): the original two patterns only caught
+  // the narrowest literal phrasings ("Trained by NAME", "for trainer
+  // NAME") — but NYRA's own house style routinely wedges an accolade
+  // clause between the trigger word and the actual name ("Trained by dual
+  // Eclipse Award-winner Brad Cox", "for ... dual Eclipse Award-winning
+  // trainer Brad Cox"), and uses several other constructions entirely
+  // ("Cherie DeVaux, trainer of the popular Golden Tempo", "Trainer Ron
+  // Moquett, who...", "Hall of Famer Bill Mott-trained T Kraft", "trainer
+  // Chad Brown his third win"). Since Step 2 below bails out to an empty
+  // result for the WHOLE article when this comes back empty, missing all
+  // of these meant several real post-race recaps (including the Travers
+  // winner's own writeup) silently produced zero notes despite having
+  // genuine trainer quotes in them.
   const trainerNamePatterns = [
-    // No literal "." in this class — confirmed real bug: "for trainer Jim
-    // Ryerson." (sentence-ending period right against the name) would
-    // otherwise swallow the period into the captured word, making
-    // lastNameKey() produce "ryerson." instead of "ryerson" and silently
-    // failing to match this trainer's own quote attributions later.
-    /Trained by ([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){1,2})/g,
-    /for trainer ([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){1,2})/g,
+    // No literal "." in the name classes below — confirmed real bug: "for
+    // trainer Jim Ryerson." (sentence-ending period right against the
+    // name) would otherwise swallow the period into the captured word,
+    // making lastNameKey() produce "ryerson." instead of "ryerson" and
+    // silently failing to match this trainer's own quote attributions
+    // later.
+    // "Trained by [accolade clause] NAME," — skip up to 6 filler tokens
+    // non-greedily, then a hyphen-free capitalized run anchored by a
+    // trailing comma/period (hyphen excluded here specifically so a
+    // hyphenated accolade word like "Award-winner" can't itself get
+    // captured as if it were the first name word).
+    /Trained by\s+(?:\S+\s+){0,6}?([A-Z][A-Za-z’']+(?:\s+[A-Z][A-Za-z’']+){0,2})[,.]/g,
+    // "trainer NAME" / "Trainer NAME," — with or without a leading "for",
+    // with or without an accolade clause before "trainer" (that clause is
+    // simply ignored since the name is captured AFTER the trigger word).
+    /\b[Tt]rainer\s+([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2})/g,
+    // "NAME, trainer of HORSE" — name comes before the trigger phrase here.
+    /([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2}),\s+trainer of\b/g,
+    // "NAME-trained HORSE".
+    /([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2})-trained\b/g,
   ];
   for (const para of paragraphs) {
     for (const re of trainerNamePatterns) {
@@ -4871,7 +5268,22 @@ function extractNyraSections(paragraphs, titleHorseGuess) {
   // "in frame" (updated by the bracket convention, seeded from the
   // headline for the lead horse before its own bracket ever appears), and
   // building one merged section per (trainer, horse) pair.
-  let currentHorse = titleHorseGuess;
+  // Confirmed real bug (2026-08-30): a "roundup"-style headline like "DeVaux
+  // barn represented by top sophomores Englishman, Golden Tempo..." leads
+  // with the TRAINER's surname, not a horse — extractNyraTitleHorse() can't
+  // tell the difference on its own (it just grabs the leading capitalized
+  // run). Without a "[post N, Jockey]" bracket anywhere in the piece to
+  // correct it, that wrong guess stuck as the horse for the WHOLE article,
+  // silently mislabeling every section in it (not just the ones near the
+  // headline). Cross-checking against trainerFullNameByKey — already built
+  // in Step 1 from the article's own body text — catches this generally,
+  // without needing to hand-maintain a blocklist of headline phrasings
+  // ("barn", "well-represented by", etc.): if the guess's last name matches
+  // a trainer this article already names, it's not a horse, so drop it and
+  // let the bracket convention (or nothing, if none appears) take over
+  // instead of guessing wrong.
+  const titleGuessIsActuallyTrainer = titleHorseGuess && trainerFullNameByKey[lastNameKey(titleHorseGuess)];
+  let currentHorse = titleGuessIsActuallyTrainer ? null : titleHorseGuess;
   const sections = {}; // `${trainerKey}|${horse}` -> { trainerName, horse, parts: [] }
 
   for (const para of paragraphs) {
@@ -4928,7 +5340,7 @@ async function fetchNyraNews() {
   }
 
   const articles = [];
-  for (const item of items.slice(0, MAX_ARTICLES_PER_RUN)) {
+  for (const item of items.slice(0, NYRA_NEWS_MAX_ARTICLES_PER_RUN)) {
     let articleRes;
     try {
       articleRes = await fetch(item.link, {

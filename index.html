@@ -46,13 +46,18 @@
   /* ---------- Header ---------- */
   header{
     display:flex;
-    justify-content:space-between;
-    align-items:flex-end;
-    flex-wrap:wrap;
-    gap:16px;
+    flex-direction: column;
+    gap:14px;
     border-bottom: 2px solid var(--panel-border);
     padding-bottom: 14px;
     margin-bottom: 20px;
+  }
+  .header-controls{
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap:16px;
   }
 
   .brand{
@@ -121,16 +126,6 @@
     padding: 20px;
   }
   .track-photo-placeholder svg{ opacity: 0.5; }
-  @media (max-width: 480px){
-    .alert-dropdown{
-      position: fixed;
-      left: 50%;
-      right: auto;
-      top: 70px;
-      transform: translateX(-50%);
-      width: 92vw;
-    }
-  }
 
   .pill{
     display:inline-flex;
@@ -2383,56 +2378,6 @@
   }
   .stable-extract-discard:hover{ border-color: var(--silk-red); color: var(--silk-red); }
 
-  /* ---------- Unified alert feed (bell + dropdown) ---------- */
-  .alert-bell-wrap{ position: relative; }
-  .alert-bell-btn{
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    color: var(--parchment);
-    border-radius: 999px;
-    cursor: pointer;
-    transition: border-color .15s, color .15s;
-  }
-  .alert-bell-btn:hover{ border-color: var(--tote-amber); }
-  .alert-bell-btn.has-unread{ color: var(--tote-amber); border-color: var(--tote-amber); }
-  .alert-badge{
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    border-radius: 999px;
-    background: var(--silk-red);
-    color: #fff;
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 10px;
-    line-height: 16px;
-    text-align: center;
-  }
-  .alert-dropdown{
-    position: absolute;
-    top: calc(100% + 10px);
-    right: 0;
-    width: 400px;
-    max-width: min(90vw, 400px);
-    max-height: 70vh;
-    overflow-y: auto;
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius);
-    padding: 16px;
-    box-shadow: 0 12px 30px rgba(0,0,0,0.5);
-    z-index: 50;
-  }
-  .alert-dropdown[hidden]{ display: none; }
-
   /* ---------- Command Palette ---------- */
   #compareTriggerBtn{
     background: var(--panel-2);
@@ -2504,94 +2449,6 @@
     color: var(--parchment-dim);
     letter-spacing: 0.02em;
   }
-  .alert-dropdown-header{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-family:'Oswald', sans-serif;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    font-size: 13px;
-    color: var(--parchment-dim);
-    margin-bottom: 14px;
-  }
-  .alert-dropdown .alert-list{ max-height: none; }
-  .alert-filters{
-    display: flex;
-    gap: 8px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-  }
-  .alert-filter{
-    background: var(--panel-2);
-    border: 1px solid var(--panel-border);
-    color: var(--parchment-dim);
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    padding: 6px 12px;
-    border-radius: 999px;
-    cursor: pointer;
-    transition: border-color .15s, color .15s, background .15s;
-  }
-  .alert-filter:hover{ border-color: var(--tote-amber); }
-  .alert-filter.active{ background: var(--tote-amber); border-color: var(--tote-amber); color: var(--ink); }
-  .alert-list{
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-height: 720px;
-    overflow-y: auto;
-    padding-right: 4px;
-  }
-  .alert-list::-webkit-scrollbar{ width: 6px; }
-  .alert-list::-webkit-scrollbar-thumb{ background: var(--panel-border); border-radius: 4px; }
-  .alert-empty{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 12px;
-    color: var(--parchment-dim);
-    padding: 24px 4px;
-    text-align: center;
-  }
-  .alert-row{
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    background: var(--panel-2);
-    border: 1px solid var(--panel-border);
-    border-radius: 8px;
-    padding: 10px 12px;
-  }
-  .alert-dot{
-    flex: 0 0 auto;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    margin-top: 4px;
-  }
-  .alert-row.alert-weather .alert-dot{ background: var(--tote-amber); box-shadow: 0 0 6px var(--tote-amber); }
-  .alert-row.alert-severe .alert-dot{ background: var(--silk-red); box-shadow: 0 0 6px var(--silk-red); }
-  .alert-row.alert-bias .alert-dot{ background: var(--rail-green); box-shadow: 0 0 6px var(--rail-green); }
-  .alert-body{ min-width: 0; }
-  .alert-message{
-    font-family:'IBM Plex Sans', sans-serif;
-    font-size: 12.5px;
-    color: var(--parchment);
-    line-height: 1.4;
-  }
-  .alert-meta{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 10px;
-    color: var(--parchment-dim);
-    margin-top: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .alert-row.alert-weather .alert-category{ color: var(--tote-amber); }
-  .alert-row.alert-severe .alert-category{ color: var(--silk-red); }
-  .alert-row.alert-bias .alert-category{ color: var(--rail-green); }
-
   footer{
     margin-top: 22px;
     display:flex;
@@ -2616,31 +2473,14 @@
     <img class="brand-logo" src="assets/GupB.png" alt="GiddyUpBets — Press Your Strongest Opinions &amp; Print Money">
     <div class="sub">Command Center</div>
   </div>
-  <select id="trackSelect" title="Choose track"></select>
-  <div class="status-cluster">
-    <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText" class="skel">Connecting</span></span>
-    <span id="clock">--:--:--</span>
-    <span>Next refresh: <span id="countdown">--</span></span>
-    <button id="refreshBtn">↻ Refresh now</button>
-    <button type="button" id="compareTriggerBtn" title="Compare two tracks' wind side by side">⇄ Compare</button>
-    <div class="alert-bell-wrap">
-      <button type="button" id="alertBellBtn" class="alert-bell-btn" aria-expanded="false" title="Alert feed">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
-          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-        </svg>
-        <span class="alert-badge" id="alertBadge" hidden>0</span>
-      </button>
-      <div class="alert-dropdown" id="alertDropdown" hidden>
-        <div class="alert-dropdown-header">
-          Alert Feed
-          <span class="tag" id="alertCountTag">0</span>
-        </div>
-        <div class="alert-filters" id="alertFilters"></div>
-        <div class="alert-list" id="alertList">
-          <div class="alert-empty">No alerts yet.</div>
-        </div>
-      </div>
+  <div class="header-controls">
+    <select id="trackSelect" title="Choose track"></select>
+    <div class="status-cluster">
+      <span class="pill" id="statusPill"><span class="dot"></span><span id="statusText" class="skel">Connecting</span></span>
+      <span id="clock">--:--:--</span>
+      <span>Next refresh: <span id="countdown">--</span></span>
+      <button id="refreshBtn">↻ Refresh now</button>
+      <button type="button" id="compareTriggerBtn" title="Compare two tracks' wind side by side">⇄ Compare</button>
     </div>
   </div>
 </header>
@@ -9197,62 +9037,17 @@
   // Filter buttons are generated from ALERT_TYPES rather than hardcoded, so
   // turning on "scratch" or "odds" later (once they have a real data source)
   // is just flipping enabled:true here — no UI restructuring.
-  function updateAlertBadge(){
-    const unread = alertLastSeen
-      ? alertFeed.filter(a => new Date(a.timestamp).getTime() > new Date(alertLastSeen).getTime()).length
-      : alertFeed.length;
-    const badge = $("alertBadge");
-    const bell = $("alertBellBtn");
-    if (unread > 0){
-      badge.textContent = unread > 99 ? "99+" : String(unread);
-      badge.hidden = false;
-      bell.classList.add("has-unread");
-    } else {
-      badge.hidden = true;
-      bell.classList.remove("has-unread");
-    }
-  }
+  // Both of these are now no-ops — the bell button/dropdown they used to
+  // update were removed from the header (2026-09-04, "nobody uses that").
+  // Left as stubs rather than deleted outright: pushAlert() and every alert-
+  // generating call site (weather, bias, severe-weather) still call these,
+  // and alertFeed/saveAlertFeed()'s own persistence is untouched, so the
+  // underlying alert history keeps accumulating in localStorage even with
+  // no visible feed — reversible without touching any of those call sites
+  // if the UI ever comes back.
+  function updateAlertBadge(){}
 
-  function renderAlertFeed(){
-    const filterContainer = $("alertFilters");
-    filterContainer.innerHTML = "";
-    const makeFilterBtn = (key, label) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "alert-filter" + (alertFilter === key ? " active" : "");
-      btn.textContent = label;
-      btn.addEventListener("click", () => { alertFilter = key; renderAlertFeed(); });
-      return btn;
-    };
-    filterContainer.appendChild(makeFilterBtn("all", "All"));
-    Object.entries(ALERT_TYPES).forEach(([key, cfg]) => {
-      if (cfg.enabled) filterContainer.appendChild(makeFilterBtn(key, cfg.label));
-    });
-
-    $("alertCountTag").textContent = alertFeed.length;
-    updateAlertBadge();
-
-    const list = $("alertList");
-    const filtered = alertFilter === "all" ? alertFeed : alertFeed.filter(a => a.type === alertFilter);
-    list.innerHTML = "";
-    if (!filtered.length){
-      const label = alertFilter === "all" ? "" : `${(ALERT_TYPES[alertFilter]?.label ?? alertFilter).toLowerCase()} `;
-      list.innerHTML = `<div class="alert-empty">No ${label}alerts yet.</div>`;
-      return;
-    }
-    filtered.forEach(a => {
-      const row = document.createElement("div");
-      row.className = `alert-row alert-${a.type}`;
-      row.innerHTML = `
-        <span class="alert-dot"></span>
-        <div class="alert-body">
-          <div class="alert-message">${a.message}</div>
-          <div class="alert-meta">${a.track} · <span class="alert-category">${ALERT_TYPES[a.type]?.label ?? a.type}</span> · ${fmtRelativeTime(a.timestamp)}</div>
-        </div>
-      `;
-      list.appendChild(row);
-    });
-  }
+  function renderAlertFeed(){}
 
   function windTierFor(speed, gust){
     const v = Math.max(speed ?? 0, gust ?? 0);
@@ -12209,27 +12004,6 @@
   alertState = loadAlertState();
   renderAlertFeed();
 
-  function setAlertDropdownOpen(open){
-    $("alertDropdown").hidden = !open;
-    $("alertBellBtn").setAttribute("aria-expanded", String(open));
-    if (open){
-      alertLastSeen = new Date().toISOString();
-      localStorage.setItem(ALERT_LAST_SEEN_KEY, alertLastSeen);
-      updateAlertBadge();
-    }
-  }
-
-  $("alertBellBtn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    setAlertDropdownOpen($("alertDropdown").hidden);
-  });
-  document.addEventListener("click", (e) => {
-    const dropdown = $("alertDropdown");
-    if (!dropdown.hidden && !dropdown.contains(e.target) && e.target !== $("alertBellBtn")){
-      setAlertDropdownOpen(false);
-    }
-  });
-
   document.querySelectorAll(".radar-mode-btn").forEach(btn => {
     btn.addEventListener("click", () => setRadarMode(btn.dataset.mode));
   });
@@ -12328,7 +12102,6 @@
       });
     });
     commands.push({ label: "Refresh now", sub: "Action", action: () => { $("refreshBtn").click(); closeCommandPalette(); } });
-    commands.push({ label: "Open Alert Feed", sub: "Action", action: () => { $("alertBellBtn").click(); closeCommandPalette(); } });
     return commands;
   }
 
