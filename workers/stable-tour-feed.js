@@ -430,6 +430,14 @@
 //    horse's full recorded race recap whenever it's entered again — a
 //    trigger independent of tracked-trainer status or regular notes; a
 //    horse can appear in the digest purely because it has a recap on file.
+// 23. Race Recap Doc re-sync (POST /raceday/recap/resync) — re-pulls ONE
+//    date's recaps straight from the shared Google Doc the user writes them
+//    in by hand, so an edit made there after the original import doesn't
+//    require a manual re-backfill. Scoped to exactly the requested date; see
+//    resyncRaceRecapsFromDoc()'s own comment for the parsing details and its
+//    "never clears on empty match" safety rule. Also pulls that date's
+//    whole-card "Full Card Recap:" writeup (record.fullCardRecap, manual
+//    set/clear at POST /raceday/fullcard) in the same read-modify-write.
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
 // for jobs #1, #3, #5, #9, #15, #16, #21, and #22 to work — jobs #2, #4, #6, #7, #8,
@@ -1356,6 +1364,26 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
+    // One whole-card recap per day (not per race, no horse index — just the
+    // "how did the card play overall" writeup the Google Doc puts right
+    // under the date header, above the individual R# entries). Manual
+    // set/clear counterpart to the auto-pull in resyncRaceRecapsFromDoc();
+    // an empty recap clears it. Routes through the same read-modify-write as
+    // race recaps (upsertRaceRecapsBulk with an empty recapsByRace) rather
+    // than its own KV write, for the same race-condition reason documented
+    // on that function.
+    if (url.pathname === "/raceday/fullcard" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date || "";
+      const recap = typeof body.recap === "string" ? body.recap.trim() : "";
+      if (!track || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return json({ error: "Missing track or invalid date" }, 400);
+      }
+      const result = await upsertRaceRecapsBulk(env, track, date, {}, { fullCardRecap: recap });
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
     // Bulk variant of the above — every race for one track+date in a single
     // read-modify-write, so an import covering a whole card can't race
     // against itself the way calling /raceday/recap once per race did (see
@@ -1371,6 +1399,27 @@ async function handleRequest(request, env) {
       }
       const result = await upsertRaceRecapsBulk(env, track, date, recaps);
       return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Re-pulls ONE date's recaps straight from the shared Google Doc — the
+    // "↻ Re-sync from Doc" button in Race Recaps. Scoped to exactly the one
+    // date requested: the doc's other date sections are never even parsed
+    // into a KV write, so an edit sitting in a different section of the doc
+    // can't leak into this date's recaps. See resyncRaceRecapsFromDoc()'s own
+    // comment for exactly what does/doesn't get overwritten.
+    if (url.pathname === "/raceday/recap/resync" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const track = (body.track || "").trim();
+      const date = body.date || "";
+      if (!track || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return json({ error: "Missing track or invalid date" }, 400);
+      }
+      try {
+        const result = await resyncRaceRecapsFromDoc(env, track, date);
+        return json(result, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Resync failed: ${err.message}` }, 500);
+      }
     }
 
     // Lists which dates actually have a saved snapshot for this track, newest
@@ -1947,12 +1996,21 @@ async function readRecapIndex(env, track) {
 // across 5 dates lost 12 of them this way before this fix; verified clean
 // (byte-for-byte) after switching the import to this bulk path. recapsByRace
 // is { [raceNumber]: recapText }; an empty string clears that race's recap.
-async function upsertRaceRecapsBulk(env, track, date, recapsByRace) {
+// fullCardRecap is optional and touches the SAME record in this same read-
+// modify-write (not a separate KV round trip) — omit it (undefined) to leave
+// the day's full-card recap untouched; pass a string ("" to clear it) to
+// set/clear it alongside whichever races are being written.
+async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRecap } = {}) {
   const key = racedayKvKey(track, date);
   const raw = await env.STABLE_KV.get(key);
   if (!raw) return { available: false, error: "No archived race day for this track/date yet" };
   const record = JSON.parse(raw);
   record.raceRecaps = record.raceRecaps || {};
+  if (fullCardRecap !== undefined) {
+    const trimmed = typeof fullCardRecap === "string" ? fullCardRecap.trim() : "";
+    if (trimmed) record.fullCardRecap = trimmed;
+    else delete record.fullCardRecap;
+  }
 
   const index = await readRecapIndex(env, track);
   const indexedHorsesByRace = {};
@@ -1998,7 +2056,7 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace) {
   await env.STABLE_KV.put(key, JSON.stringify(record));
   await env.STABLE_KV.put(raceRecapIndexKvKey(track), JSON.stringify(index));
 
-  return { available: true, track, date, indexedHorsesByRace };
+  return { available: true, track, date, indexedHorsesByRace, fullCardRecap: record.fullCardRecap || null };
 }
 
 async function upsertRaceRecap(env, track, date, raceNumber, recap) {
@@ -2007,6 +2065,144 @@ async function upsertRaceRecap(env, track, date, raceNumber, recap) {
   return {
     available: true, track, date, raceNumber, recap: recap || null,
     indexedHorses: result.indexedHorsesByRace[raceNumber] || [],
+  };
+}
+
+// ---------- Race Recap Google Doc re-sync (POST /raceday/recap/resync) ----------
+// The user writes/edits recaps by hand in one shared Google Doc (link-shared,
+// "anyone with the link" — confirmed fetchable with a plain server-side
+// request, no auth/bot-wall like DRF or Racing Post hit). This is the
+// worker-side port of the exact parsing logic used for the original 54-race
+// backfill (2026-09-04), so a "re-sync this date" button can re-pull just one
+// date's section without a human re-doing the parse each time. Hardcoded, not
+// client-supplied, so this route can't be pointed at an arbitrary URL.
+const RACE_RECAP_DOC_EXPORT_URL = "https://docs.google.com/document/d/1mp4oK11UmuYYt0cnc1f9E7q8MTfsHe3FSwkKQHF_KMU/export?format=txt";
+
+// Date-section boundary: a line starting with bare "M/D" (1-2 digit month,
+// 1-2 digit day — the doc never writes a year), optionally prefixed with
+// "Recap " (as in "Recap 9/3", "9/4 Recap:"). Deliberately NOT a loose match —
+// a mid-paragraph restatement like "SAR 8/30 — fast dirt..." doesn't begin
+// the line with a bare date, so it never gets mistaken for a new section.
+// (?!\d) instead of a trailing \b because real entries in this doc run the
+// date straight into the next word with no separator at all ("8/21Card:").
+const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
+
+// Race marker: "R#" at the START of its own line, optionally followed —
+// still on that SAME line only — by "(...conditions...)" and/or a —/:
+// separator (covers both styles the doc has used: "R1 — text" / "R1
+// (conditions): text" on one line, and "R1:" or bare "R2" alone on its own
+// line with the actual recap starting on a later paragraph). Confirmed real
+// bug (2026-09-04): an earlier version required the —/: separator to be
+// present, which meant an unfilled stub like a bare "R2" with nothing after
+// it didn't match as a marker AT ALL — its own line, plus every blank line
+// after it, silently got appended as trailing text onto the PREVIOUS race's
+// recap instead of being skipped. The [ \t]* here (not \s*) is what fixes
+// it: the hunt for optional conditions/separator can never cross a line
+// break looking for one, so a marker with nothing else on its line matches
+// cleanly as just that bare "R#" and nothing more leaks into it or out of
+// the race before it. A genuinely empty stub (nothing at all before the
+// next marker) still safely produces no recap — now because its captured
+// content comes back empty, not because the marker itself failed to match.
+const RACE_RECAP_RACE_MARKER = /^R(\d{1,2})\b[ \t]*(?:\([^)]*\))?[ \t]*(?:[—:][ \t]*)?/gm;
+
+// Collapses the doc's hard mid-sentence line-wraps into spaces while still
+// preserving a genuine blank-line paragraph break as one — verified
+// byte-for-byte against every already-imported race's stored text before
+// this route shipped (2026-09-04).
+function cleanRaceRecapDocText(raw) {
+  return raw
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function findRaceRecapDateSections(docText) {
+  const matches = [...docText.matchAll(RACE_RECAP_DATE_MARKER)];
+  return matches.map((m, i) => ({
+    month: Number(m[1]),
+    day: Number(m[2]),
+    body: docText.slice(m.index, i + 1 < matches.length ? matches[i + 1].index : docText.length),
+  }));
+}
+
+function parseRaceRecapsFromSection(sectionBody) {
+  const raceMatches = [...sectionBody.matchAll(RACE_RECAP_RACE_MARKER)];
+  const recaps = {};
+  for (let i = 0; i < raceMatches.length; i++) {
+    const m = raceMatches[i];
+    const contentStart = m.index + m[0].length;
+    const contentEnd = i + 1 < raceMatches.length ? raceMatches[i + 1].index : sectionBody.length;
+    const cleaned = cleanRaceRecapDocText(sectionBody.slice(contentStart, contentEnd));
+    // Last occurrence for a given race number wins — the doc has at least
+    // one real accidental duplicate paste (8/30's Race 1), and the later
+    // copy is reliably the complete/corrected one, matching how a person
+    // reading top-to-bottom would resolve it themselves.
+    if (cleaned) recaps[Number(m[1])] = cleaned;
+  }
+  return recaps;
+}
+
+// Never clears a race's recap just because the doc section for it came back
+// empty/unmatched (e.g. a stub "R2:" with nothing written yet) — only races
+// that actually parsed to real text are included, so upsertRaceRecapsBulk()
+// only touches races the doc actually has content for. If you deliberately
+// blank out a race's text in the doc, re-syncing won't clear it here — edit
+// or clear it directly in Race Recaps instead.
+// The whole-card writeup the doc puts right under the date header, above
+// the individual "R#" entries (labeled "Full Card Recap:" going forward,
+// 2026-09-04 — older dates used a bare "CARD:" label instead, which this
+// deliberately does NOT also match: that older label sits inside noisier
+// header text mixed with race-day conditions, and grabbing it blindly risks
+// pulling in garbage rather than the clean writeup the new label marks).
+// Only ever searches the span BEFORE the first race marker, so this can
+// never accidentally match something inside a race's own recap text.
+const FULL_CARD_RECAP_LABEL = /Full\s*Card\s*Recap\s*:\s*/i;
+
+function parseFullCardRecapFromSection(sectionBody) {
+  // NOTE: sectionBody.match(RACE_RECAP_RACE_MARKER) here would be a real bug
+  // — RACE_RECAP_RACE_MARKER carries the /g flag, and .match() on a global
+  // regex returns an array of matched STRINGS with no .index at all (that
+  // shape only exists on a non-global match), so firstRaceMatch.index would
+  // be undefined and .slice(0, undefined) silently returns the WHOLE body —
+  // every race's text would leak into "the full-card recap." matchAll()
+  // (or, as here, spreading it and taking [0]) is what actually gives back
+  // a real match object with a usable .index.
+  const [firstRaceMatch] = sectionBody.matchAll(RACE_RECAP_RACE_MARKER);
+  const preRaceSpan = firstRaceMatch ? sectionBody.slice(0, firstRaceMatch.index) : sectionBody;
+  const labelMatch = preRaceSpan.match(FULL_CARD_RECAP_LABEL);
+  if (!labelMatch) return "";
+  const raw = preRaceSpan.slice(labelMatch.index + labelMatch[0].length);
+  return cleanRaceRecapDocText(raw);
+}
+
+async function resyncRaceRecapsFromDoc(env, track, date) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || "");
+  if (!m) return { available: false, error: "Invalid date" };
+  const month = Number(m[2]), day = Number(m[3]);
+
+  const docRes = await fetch(RACE_RECAP_DOC_EXPORT_URL);
+  if (!docRes.ok) return { available: false, error: `Doc fetch failed: ${docRes.status}` };
+  const docText = await docRes.text();
+
+  const sections = findRaceRecapDateSections(docText);
+  const section = sections.find((s) => s.month === month && s.day === day);
+  if (!section) return { available: false, error: "No section for this date found in the doc" };
+
+  const recapsByRace = parseRaceRecapsFromSection(section.body);
+  const fullCardRecap = parseFullCardRecapFromSection(section.body);
+  if (!Object.keys(recapsByRace).length && !fullCardRecap) {
+    return { available: false, error: "Found this date in the doc, but nothing parsed out of it" };
+  }
+  const result = await upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRecap: fullCardRecap || undefined });
+  if (!result.available) return result;
+  return {
+    available: true, track, date,
+    updatedRaces: Object.keys(recapsByRace).map(Number).sort((a, b) => a - b),
+    fullCardRecapUpdated: !!fullCardRecap,
   };
 }
 
@@ -4140,6 +4336,16 @@ function siteLabelForEmail(link) {
   catch { return null; }
 }
 
+// entryAlertTodayDate() always hands this a "YYYY-MM-DD" string — reformat
+// to M/D/YYYY for the email subject/header (US reader-facing date order,
+// not ISO's year-first).
+function formatEmailDateLabel(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || "");
+  if (!m) return dateStr;
+  const [, year, month, day] = m;
+  return `${Number(month)}/${Number(day)}/${year}`;
+}
+
 // Full untruncated note text, each as its own <div> (not a <ul><li> list,
 // to match the artifact's card layout) — inline-styled throughout since
 // Gmail strips most <style>-block rules and never renders custom web fonts
@@ -4151,7 +4357,8 @@ function siteLabelForEmail(link) {
 function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest = false } = {}) {
   const theme = STYLED_DIGEST_TRACK_THEME[track] || STYLED_DIGEST_TRACK_THEME.saratoga;
   const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
-  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${trackLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} today (${date})`;
+  const dateLabel = formatEmailDateLabel(date);
+  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${trackLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} today (${dateLabel})`;
   const racesHtml = raceGroups.map(({ race, horses }) => {
     const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
@@ -4167,7 +4374,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
           : "";
         return `
         <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink}; border-left:2px solid ${theme.accent}; padding-left:10px; margin:4px 0 10px;">
-          <strong>${escapeHtmlForEmail(n.date || "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")})${siteTag}: ${escapeHtmlForEmail(n.note)}
+          <strong>${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")})${siteTag}: ${escapeHtmlForEmail(n.note)}
         </div>
       `;
       }).join("");
@@ -4177,7 +4384,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
       // quote or observation, and shouldn't blend in with regular notes.
       const recapsHtml = (recaps || []).map((r) => `
         <div style="background:rgba(0,0,0,0.05); border:1px solid ${theme.accent}; border-radius:6px; padding:10px 12px; margin:4px 0 10px;">
-          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(r.date || "—")}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}</span>
+          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(r.date ? formatEmailDateLabel(r.date) : "—")}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}</span>
           <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.recap)}</div>
         </div>
       `).join("");
@@ -4201,7 +4408,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     <div style="background:${theme.bg}; color:${theme.ink}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
       <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double ${theme.accent};">
         <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:${theme.accent}; margin-bottom:6px;">GiddyUpQuotes &mdash; ${escapeHtmlForEmail(trackLabel)} Edition</div>
-        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:${theme.dim};">${isTest ? "TEST SEND &middot; " : ""}${escapeHtmlForEmail(date)} &middot; ${horseCount} tracked horse${horseCount === 1 ? "" : "s"} today</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:${theme.dim};">${isTest ? "TEST SEND &middot; " : ""}${escapeHtmlForEmail(dateLabel)} &middot; ${horseCount} tracked horse${horseCount === 1 ? "" : "s"} today</div>
       </div>
       ${racesHtml}
     </div>

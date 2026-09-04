@@ -2114,11 +2114,11 @@
     font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.05em;
     text-transform: uppercase; color: var(--tote-amber);
   }
-  .archive-recap-edit-btn{
+  .archive-recap-edit-btn, .archive-fullcard-edit-btn{
     background: transparent; border: 1px solid var(--panel-border); color: var(--parchment-dim);
     font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
   }
-  .archive-recap-edit-btn:hover{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .archive-recap-edit-btn:hover, .archive-fullcard-edit-btn:hover{ border-color: var(--tote-amber); color: var(--tote-amber); }
   .archive-section-title-row{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
   .archive-section-title-row .archive-section-title{ margin-bottom: 0; }
   .archive-resync-btn{
@@ -2138,13 +2138,14 @@
     padding: 8px 10px; resize: vertical;
   }
   .archive-recap-actions{ display: flex; gap: 8px; margin-top: 8px; }
-  .archive-recap-save-btn, .archive-recap-cancel-btn, .archive-recap-clear-btn{
+  .archive-recap-save-btn, .archive-recap-cancel-btn, .archive-recap-clear-btn,
+  .archive-fullcard-save-btn, .archive-fullcard-cancel-btn, .archive-fullcard-clear-btn{
     font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
     border: 1px solid var(--panel-border); background: var(--panel);
   }
-  .archive-recap-save-btn{ border-color: var(--tote-amber); color: var(--tote-amber); }
-  .archive-recap-clear-btn{ border-color: var(--silk-red); color: var(--silk-red); margin-left: auto; }
-  .archive-recap-cancel-btn{ color: var(--parchment-dim); }
+  .archive-recap-save-btn, .archive-fullcard-save-btn{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .archive-recap-clear-btn, .archive-fullcard-clear-btn{ border-color: var(--silk-red); color: var(--silk-red); margin-left: auto; }
+  .archive-recap-cancel-btn, .archive-fullcard-cancel-btn{ color: var(--parchment-dim); }
   .archive-race-header strong{ color: var(--parchment); }
   .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
   .archive-month-summary:empty{ display: none; }
@@ -6018,6 +6019,42 @@
       </div>`;
   }
 
+  // The whole-card writeup ("Full Card Recap:" in the Google Doc, sitting
+  // above the individual R# entries) — one per date, not per race, so no
+  // race number in its edit key (uses "fullcard:{date}", sharing
+  // archiveRecapEditingKey with the per-race editors below so at most one
+  // recap editor is ever open at a time in this view, same as before).
+  // Auto-filled by the "↻ Re-sync from Doc" button; manually editable here
+  // too via the same Edit/Save/Clear pattern as a per-race recap.
+  function archiveFullCardRecapSection(date, cached){
+    const recap = cached?.fullCardRecap || "";
+    const editKey = `fullcard:${date}`;
+    const isEditing = archiveRecapEditingKey === editKey;
+    const dataAttrs = `data-fullcard-date="${escapeHtml(date)}"`;
+    if (isEditing){
+      return `
+        <div class="archive-section">
+          <div class="archive-section-title">Full Card Recap</div>
+          <div class="archive-recap-section">
+            <textarea class="archive-recap-textarea" id="archiveFullCardTextarea">${escapeHtml(recap)}</textarea>
+            <div class="archive-recap-actions">
+              <button type="button" class="archive-fullcard-save-btn" ${dataAttrs}>Save</button>
+              <button type="button" class="archive-fullcard-cancel-btn">Cancel</button>
+              ${recap ? `<button type="button" class="archive-fullcard-clear-btn" ${dataAttrs}>Clear</button>` : ""}
+            </div>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="archive-section">
+        <div class="archive-section-title-row">
+          <div class="archive-section-title">Full Card Recap</div>
+          <button type="button" class="archive-fullcard-edit-btn" ${dataAttrs}>${recap ? "Edit" : "+ Add"}</button>
+        </div>
+        ${recap ? `<div class="archive-recap-text">${escapeHtml(recap)}</div>` : `<div class="archive-empty">No full card recap for this date yet.</div>`}
+      </div>`;
+  }
+
   // One race's compact read-only card: PP/horse/jockey/ML for the field,
   // plus a one-line top-3 finish (with win payout) folded in underneath if
   // that race's saved results were final — deliberately not the live
@@ -6026,7 +6063,8 @@
   // once, not focused on one.
   // Single scalar, not a Set — the archive's own tab UI only ever shows one
   // race at a time per date, so there's never more than one recap editor
-  // that could plausibly be open at once. Format: "date:raceNumber".
+  // that could plausibly be open at once. Format: "date:raceNumber", or
+  // "fullcard:{date}" for the whole-card editor above.
   let archiveRecapEditingKey = null;
 
   function archiveRecapSectionHtml(date, raceNumber, recap){
@@ -6491,6 +6529,7 @@
             bodyHtml = `
               ${archiveWeatherSection(date)}
               ${archiveBiasSection(date)}
+              ${archiveFullCardRecapSection(date, cached)}
               <div class="archive-section">
                 <div class="archive-section-title-row">
                   <div class="archive-section-title">Entries &amp; Results</div>
@@ -6561,6 +6600,40 @@
           console.error("Race recap save failed", err);
           btn.disabled = false;
           alert(`Couldn't save this recap — ${err.message}. Try again.`);
+        }
+      });
+    });
+    list.querySelectorAll(".archive-fullcard-edit-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        archiveRecapEditingKey = `fullcard:${btn.dataset.fullcardDate}`;
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".archive-fullcard-cancel-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        archiveRecapEditingKey = null;
+        renderRaceDayArchive();
+      });
+    });
+    list.querySelectorAll(".archive-fullcard-save-btn, .archive-fullcard-clear-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const date = btn.dataset.fullcardDate;
+        const isClear = btn.classList.contains("archive-fullcard-clear-btn");
+        const recap = isClear ? "" : ($("archiveFullCardTextarea")?.value ?? "").trim();
+        btn.disabled = true;
+        try{
+          await fullCardRecapApiPost(activeTrack.id, date, recap);
+          const cached = archiveDayCache[date];
+          if (cached){
+            if (recap) cached.fullCardRecap = recap;
+            else delete cached.fullCardRecap;
+          }
+          archiveRecapEditingKey = null;
+          renderRaceDayArchive();
+        } catch(err){
+          console.error("Full card recap save failed", err);
+          btn.disabled = false;
+          alert(`Couldn't save the full card recap — ${err.message}. Try again.`);
         }
       });
     });
@@ -7502,6 +7575,16 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track, date }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return await res.json();
+  }
+
+  async function fullCardRecapApiPost(track, date, recap){
+    const res = await fetch(stableApiUrl("/raceday/fullcard"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track, date, recap }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     return await res.json();
