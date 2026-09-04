@@ -83,7 +83,8 @@
   .status-cluster{
     display:flex;
     align-items:center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
     gap: 18px;
     font-family:'IBM Plex Mono', monospace;
     font-size: 13px;
@@ -2432,8 +2433,8 @@
   }
   .alert-dropdown[hidden]{ display: none; }
 
-  /* ---------- Command Palette (prototype, 2026-09-03) ---------- */
-  #cmdpTriggerBtn, #compareTriggerBtn{
+  /* ---------- Command Palette ---------- */
+  #compareTriggerBtn{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
     color: var(--parchment);
@@ -2445,7 +2446,7 @@
     cursor: pointer;
     transition: border-color .15s;
   }
-  #cmdpTriggerBtn:hover, #compareTriggerBtn:hover{ border-color: var(--tote-amber); }
+  #compareTriggerBtn:hover{ border-color: var(--tote-amber); }
   .cmdp-overlay{
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.6);
@@ -2621,7 +2622,6 @@
     <span id="clock">--:--:--</span>
     <span>Next refresh: <span id="countdown">--</span></span>
     <button id="refreshBtn">↻ Refresh now</button>
-    <button type="button" id="cmdpTriggerBtn" title="Jump to a track or page (⌘K)">⌘K</button>
     <button type="button" id="compareTriggerBtn" title="Compare two tracks' wind side by side">⇄ Compare</button>
     <div class="alert-bell-wrap">
       <button type="button" id="alertBellBtn" class="alert-bell-btn" aria-expanded="false" title="Alert feed">
@@ -6401,16 +6401,22 @@
         const result = resultsByRace[race.raceNumber];
         const horses = race.horses || [];
 
-        // Field size: the actual final field when the race went final
-        // (finishOrder already excludes scratches by construction), falling
-        // back to entries' non-scratched count for a race that hasn't run
-        // yet or whose result wasn't saved.
-        if (result?.isFinal && result.finishOrder?.length){
+        // Field size: entries' non-scratched count, not finishOrder.length —
+        // confirmed real bug (2026-09-04): finishOrder only ever holds the
+        // PAYOUT positions (win/place/show, plus a 4th for superfecta
+        // payouts), never the full field. A race with 8 live starters was
+        // counting as a field of 4 here, badly undercounting the real
+        // average. Only falls back to finishOrder's own length for a
+        // results-only backfilled day with no entries at all (horses: null,
+        // same case archiveRaceHtml() already handles) — still an
+        // underestimate then, but the best available number.
+        const live = horses.filter(h => !h.scratched).length;
+        if (live){
+          fieldSizeSum += live;
+          fieldSizeRaces++;
+        } else if (result?.isFinal && result.finishOrder?.length){
           fieldSizeSum += result.finishOrder.length;
           fieldSizeRaces++;
-        } else {
-          const live = horses.filter(h => !h.scratched).length;
-          if (live){ fieldSizeSum += live; fieldSizeRaces++; }
         }
 
         // Favorite win rate needs BOTH a final result and at least one
@@ -12365,7 +12371,9 @@
   }
 
   function initCommandPalette(){
-    $("cmdpTriggerBtn").addEventListener("click", openCommandPalette);
+    // No visible trigger button anymore (removed 2026-09-04 — redundant
+    // with the track dropdown for most of what it did) — ⌘K/Ctrl+K still
+    // opens it.
     document.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"){
         e.preventDefault();
