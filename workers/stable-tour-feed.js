@@ -1254,6 +1254,7 @@ async function handleRequest(request, env) {
         if (source === "nyra") result = await fetchNyraEntriesDay(track, date);
         else if (source === "dmtc") result = await fetchDmtcEntriesDay(date);
         else if (source === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+        else if (source === "smartpony") result = await fetchSmartPonyEntriesDay(track, date);
         else result = await fetchMonmouthEntriesDay(date);
       } catch (err) {
         return json({ error: `Entries fetch failed: ${err.message}` }, 502);
@@ -1283,13 +1284,11 @@ async function handleRequest(request, env) {
     if (url.pathname === "/changes" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const date = url.searchParams.get("date") || "";
-      const changesSource = CHANGES_SOURCE_BY_TRACK[track];
-      if (!changesSource) return json({ error: "Not supported for this track" }, 400);
+      if (!CHANGES_SOURCE_BY_TRACK[track]) return json({ error: "Not supported for this track" }, 400);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
       let result;
       try {
-        if (changesSource === "fairgrounds") result = await fetchFairgroundsChangesDay(date);
-        else result = await fetchDmtcChangesDay(date);
+        result = await fetchDmtcChangesDay(date);
       } catch (err) {
         return json({ error: `Changes fetch failed: ${err.message}` }, 502);
       }
@@ -1590,6 +1589,7 @@ async function handleRequest(request, env) {
         if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
         else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
         else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+        else if (sourceType === "smartpony") result = await fetchSmartPonyEntriesDay(track, date);
         else result = await fetchMonmouthEntriesDay(date);
 
         const raceGroups = [];
@@ -2984,6 +2984,12 @@ const ENTRIES_SOURCE_BY_TRACK = {
   york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
   curragh: "sportinglife", longchamp: "sportinglife",
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
+  // "smartpony" — see SMARTPONY_TRACK_CODE's own comment: every track here
+  // had no other free source at all after checking its own site plus
+  // DRF/HRN/TwinSpires, confirmed 2026-09-04.
+  churchilldowns: "smartpony", santaanita: "smartpony", oaklawnpark: "smartpony",
+  keeneland: "smartpony", gulfstreampark: "smartpony", colonialdowns: "smartpony",
+  kentuckydowns: "smartpony", ellispark: "smartpony", fairgrounds: "smartpony",
 };
 
 // Tracks job #16's entry alerts actually scans — a deliberate subset of
@@ -3015,12 +3021,13 @@ const RESULTS_SOURCE_BY_TRACK = {
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
 };
 
-// Same idea again, for the /changes route (free-text race-notes feeds —
-// see parseDmtcChanges()'s own file-level comment). No NYRA equivalent
-// exists yet. Fair Grounds added 2026-09-04: real markup verified, but
-// only against a stale/dark-day snapshot (season reopens Nov 19, 2026) —
-// see parseFairgroundsChanges()'s own comment.
-const CHANGES_SOURCE_BY_TRACK = { delmar: "dmtc", fairgrounds: "fairgrounds" };
+// Same idea again, for the /changes route (DMTC's free-text race-notes
+// feed — see parseDmtcChanges()'s own file-level comment). No NYRA
+// equivalent exists yet, so this only has Del Mar for now. (Fair Grounds
+// briefly had a scratches-only version of this 2026-09-04, superseded the
+// same day once SmartPony turned out to cover full entries for it — see
+// SMARTPONY_TRACK_CODE below.)
+const CHANGES_SOURCE_BY_TRACK = { delmar: "dmtc" };
 
 // Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
 // matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
@@ -3566,61 +3573,6 @@ async function fetchDmtcChangesDay(date) {
   if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
   const html = await res.text();
   return parseDmtcChanges(html, date);
-}
-
-// ---------- Fair Grounds Scratches/Changes parser ----------
-// Source verified directly (2026-09-04, while Fair Grounds is dark — the
-// page still serves whatever a staffer last hand-posted, in this case
-// stale content from Sat Mar 21, 2026): a plain WordPress page-builder
-// "cell" block with an <h2>Today's Scratches And Changes <Weekday>,
-// <Month> <Day>, <Year></h2> header, then flat `<p>Race N: <text></p>`
-// lines — no dated URL variant (same limitation as DMTC's changes page
-// above), no horse names, just post-position scratch numbers per race.
-// Same safety pattern as dmtcChangesCardDate() below: the header date is
-// the only signal this is actually today's card and not stale leftover
-// content, so a mismatch returns empty notes rather than stale scratches
-// mislabeled as current. Re-verify this parser against a real LIVE race
-// day once the season reopens Nov 19, 2026 — this was built against real
-// markup, but that markup was necessarily a stale/dark-day snapshot, not
-// a live one, so treat it as unconfirmed until then.
-const FAIRGROUNDS_CHANGES_URL = "https://www.fairgroundsracecourse.com/racing-information/live-racing-wagering/scratches-changes/";
-
-function fairgroundsChangesCardDate(html) {
-  // "Today&#8217;s Scratches And Changes Saturday, March 21, 2026" — the
-  // one entity in this header (the apostrophe) sits before the part
-  // matched here, so no decodeEntities() needed on the raw html, same as
-  // dmtcChangesCardDate()'s own date match above.
-  const m = html.match(/Scratches [Aa]nd [Cc]hanges \w+,\s*(\w+)\s+(\d{1,2})\w{0,2},\s*(\d{4})/);
-  if (!m) return null;
-  const month = NYRA_MONTHS[m[1].toLowerCase()];
-  if (!month) return null;
-  return `${m[3]}-${String(month).padStart(2, "0")}-${String(parseInt(m[2], 10)).padStart(2, "0")}`;
-}
-
-function parseFairgroundsChanges(html, date) {
-  const cardDate = fairgroundsChangesCardDate(html);
-  if (!cardDate || cardDate !== date) return { date, postedLabel: null, notes: [] };
-
-  const notes = [];
-  const noteRe = /<p>Race (\d+):\s*([^<]*?)\s*<\/p>/g;
-  let m;
-  while ((m = noteRe.exec(html))) {
-    const raceNumber = Number(m[1]);
-    const note = decodeEntities(m[2]).replace(/\s+/g, " ").replace(/&nbsp;?/gi, "").trim();
-    if (note) notes.push({ raceNumber, note });
-  }
-  notes.sort((a, b) => a.raceNumber - b.raceNumber);
-  return { date, postedLabel: null, notes };
-}
-
-async function fetchFairgroundsChangesDay(date) {
-  const res = await fetch(FAIRGROUNDS_CHANGES_URL, {
-    headers: { "User-Agent": BROWSER_UA },
-    cf: { cacheTtl: 120, cacheEverything: true },
-  });
-  if (!res.ok) throw new Error(`Fair Grounds returned HTTP ${res.status}`);
-  const html = await res.text();
-  return parseFairgroundsChanges(html, date);
 }
 
 // ---------- DMTC Post Position stats parser (job #10) ----------
@@ -4423,6 +4375,7 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
   if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
   else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
   else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+  else if (sourceType === "smartpony") result = await fetchSmartPonyEntriesDay(track, date);
   else result = await fetchMonmouthEntriesDay(date);
 
   const raceGroups = [];
@@ -4631,6 +4584,7 @@ async function runEntryAlerts(env, source = "manual") {
         if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
         else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
         else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+        else if (sourceType === "smartpony") result = await fetchSmartPonyEntriesDay(track, date);
         else result = await fetchMonmouthEntriesDay(date);
       } catch (err) {
         console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
@@ -6098,4 +6052,173 @@ async function auditNotesAgainstSmartPony(env) {
     mismatchCount: mismatches.length,
     mismatches,
   };
+}
+
+// ---------- SmartPony entries (job #23) ----------
+// Separate from job #18's trainer-quote lookups above (which query
+// race_entries by an ALREADY-KNOWN horse_id, for note-matching only) —
+// this queries races+race_entries+horses directly by track+date to pull
+// a genuine full day's card, for tracks with no other free source at all
+// (confirmed 2026-09-04: Churchill Downs, Santa Anita, Oaklawn Park,
+// Keeneland, Gulfstream Park, Colonial Downs, Kentucky Downs, Ellis Park,
+// Fair Grounds — every track this app couldn't get real entries for any
+// other way, after a full day of checking each track's own site plus
+// DRF/Horse Racing Nation/TwinSpires). Deliberately NOT used for
+// Saratoga/Belmont/Del Mar/Monmouth, which already have their own
+// track-run sources — those stay as-is, this only fills real gaps.
+//
+// No login needed for these three tables specifically (races,
+// race_entries, horses) — confirmed directly: the same public anon key
+// used everywhere else in this file reads them fine with no Authorization
+// bearer token, unlike job #18's trainer_quotes table, which does need
+// the real smartponyLogin() session. Row-level security evidently scopes
+// these three tables as public-read; smartponyLogin() is NOT called here.
+//
+// This is a heavier, ongoing reliance on a friend's own (very likely
+// BRIS/Equibase-licensed) data than job #18's occasional quote lookups —
+// confirmed OK with SmartPony's operator directly before building this
+// (2026-09-04), not assumed. The whole thing could disappear if that RLS
+// policy ever gets locked down on their end with no warning — there's no
+// way to detect that in advance, only handle the resulting fetch failure
+// the same as any other source going down.
+const SMARTPONY_TRACK_CODE = {
+  churchilldowns: "CD", santaanita: "SA", oaklawnpark: "OP", keeneland: "KEE",
+  gulfstreampark: "GP", colonialdowns: "CNL", kentuckydowns: "KD",
+  ellispark: "ELP", fairgrounds: "FG",
+};
+// IANA timezone per SmartPony-sourced track — needed to convert
+// races.post_time_utc (a real timestamptz) into the local naive
+// "YYYY-MM-DDTHH:MM:SS" shape formatPostTimeLabel()/weatherAtPostTime()
+// already expect from every other track's postTimeIso (see
+// toTrackLocalIso() below). Matches each track's own TRACKS.timezone in
+// index.html.
+const SMARTPONY_TRACK_TIMEZONE = {
+  churchilldowns: "America/New_York", santaanita: "America/Los_Angeles",
+  oaklawnpark: "America/Chicago", keeneland: "America/New_York",
+  gulfstreampark: "America/New_York", colonialdowns: "America/New_York",
+  kentuckydowns: "America/Chicago", ellispark: "America/Chicago",
+  fairgrounds: "America/Chicago",
+};
+
+function toTrackLocalIso(utcIso, timeZone) {
+  if (!utcIso) return null;
+  const d = new Date(utcIso);
+  if (isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
+}
+
+// 220 yards = 1 furlong, 1760 yards = 1 mile — real racing distances only
+// ever land on halves (furlongs) or sixteenths (miles), so this covers
+// every actual distance without needing a general fraction reducer.
+function yardsToDistanceLabel(yards) {
+  if (yards == null) return null;
+  const furlongs = yards / 220;
+  if (furlongs < 8) {
+    const whole = Math.floor(furlongs);
+    const isHalf = Math.round((furlongs - whole) * 2) === 1;
+    return `${whole}${isHalf ? " 1/2" : ""} Furlong${whole === 1 && !isHalf ? "" : "s"}`;
+  }
+  const miles = yards / 1760;
+  let whole = Math.floor(miles);
+  let sixteenths = Math.round((miles - whole) * 16);
+  if (sixteenths === 16) { whole += 1; sixteenths = 0; }
+  const fracMap = { 1: "1/16", 2: "1/8", 3: "3/16", 4: "1/4", 5: "5/16", 6: "3/8", 7: "7/16", 8: "1/2", 9: "9/16", 10: "5/8", 11: "11/16", 12: "3/4", 13: "13/16", 14: "7/8", 15: "15/16" };
+  const fracLabel = fracMap[sixteenths];
+  return `${whole}${fracLabel ? " " + fracLabel : ""} Mile${whole === 1 && !fracLabel ? "" : "s"}`;
+}
+
+// SmartPony stores morning-line odds as a decimal "profit per $1" number
+// (e.g. "3.50" = 7-2) rather than the traditional fractional display used
+// everywhere else here. Only the fraction denominators real morning lines
+// actually use are covered — anything else falls back to a plain decimal
+// display rather than a wrong fraction.
+const ML_ODDS_FRACTION_DENOMINATORS = [1, 2, 4, 5, 10, 20];
+function smartponyGcd(a, b) { return b === 0 ? a : smartponyGcd(b, a % b); }
+function formatSmartPonyMlOdds(decimalStr) {
+  if (decimalStr == null) return null;
+  const val = parseFloat(decimalStr);
+  if (!isFinite(val) || val <= 0) return null;
+  for (const denom of ML_ODDS_FRACTION_DENOMINATORS) {
+    const numerator = Math.round(val * denom);
+    if (numerator > 0 && Math.abs(numerator / denom - val) < 0.01) {
+      const g = smartponyGcd(numerator, denom);
+      return `${numerator / g}-${denom / g}`;
+    }
+  }
+  return `${val.toFixed(2)}-1`;
+}
+
+// SmartPony's medication field is a bare "0"/"1" flag in this feed (not
+// the multi-character code some other feeds use) — 1 is assumed to mean
+// Lasix (by far the most common flagged race-day medication in North
+// American racing), 0 means none. Genuinely uncertain for any other
+// value, so those pass through as-is rather than guessing.
+function smartponyMedicationLabel(code) {
+  if (code == null) return null;
+  if (code === "1") return "L";
+  if (code === "0") return null;
+  return code;
+}
+
+async function fetchSmartPonyEntriesDay(track, date) {
+  const code = SMARTPONY_TRACK_CODE[track];
+  if (!code) return { date, races: [] };
+  const timeZone = SMARTPONY_TRACK_TIMEZONE[track] || "America/New_York";
+
+  const racesRes = await fetch(
+    `${SMARTPONY_SUPABASE_URL}/rest/v1/races?track=eq.${code}&race_date=eq.${date}` +
+      `&select=id,race_num,distance_yards,surface,race_class,purse,post_time_utc,is_hurdle_race&order=race_num.asc`,
+    { headers: { apikey: SMARTPONY_ANON_KEY }, cf: { cacheTtl: 300, cacheEverything: true } }
+  );
+  if (!racesRes.ok) throw new Error(`SmartPony races returned HTTP ${racesRes.status}`);
+  const raceRows = await racesRes.json();
+  if (!raceRows.length) return { date, races: [] };
+
+  const raceIdList = raceRows.map((r) => r.id).join(",");
+  const entriesRes = await fetch(
+    `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?race_id=in.(${raceIdList})` +
+      `&select=race_id,post_position,program_number,jockey,trainer,owner,weight,medication,ml_odds,is_scratched,` +
+      `horses!fk_race_entries_horse_id(horse_name,sex,birth_year)&order=post_position.asc`,
+    { headers: { apikey: SMARTPONY_ANON_KEY }, cf: { cacheTtl: 300, cacheEverything: true } }
+  );
+  if (!entriesRes.ok) throw new Error(`SmartPony race_entries returned HTTP ${entriesRes.status}`);
+  const entryRows = await entriesRes.json();
+
+  const raceYear = parseInt(date.slice(0, 4), 10);
+  const entriesByRace = {};
+  for (const e of entryRows) {
+    const horse = e.horses || {};
+    const age = horse.birth_year ? raceYear - horse.birth_year : null;
+    (entriesByRace[e.race_id] ??= []).push({
+      postPosition: e.program_number || (e.post_position != null ? String(e.post_position) : null),
+      name: horse.horse_name ? titleCaseName(horse.horse_name) : "Unknown",
+      jockey: e.jockey ? reformatLastFirstName(e.jockey) : null,
+      trainer: e.trainer ? reformatLastFirstName(e.trainer) : null,
+      owner: e.owner ? titleCaseName(e.owner) : null,
+      weight: e.weight != null ? String(e.weight) : null,
+      medication: smartponyMedicationLabel(e.medication),
+      ageSex: age != null && horse.sex ? `${age} ${horse.sex}` : null,
+      scratched: !!e.is_scratched,
+      currentOdds: null, // SmartPony has no live tote feed, only morning line
+      mlOdds: formatSmartPonyMlOdds(e.ml_odds),
+    });
+  }
+
+  const races = raceRows.map((r) => ({
+    raceNumber: r.race_num,
+    postTimeIso: toTrackLocalIso(r.post_time_utc, timeZone),
+    mtpLabel: null,
+    purse: r.purse != null ? `$${Number(r.purse).toLocaleString()}` : null,
+    raceType: r.race_class || null,
+    raceName: null, // SmartPony's feed has no stakes-name field to draw from
+    distanceLabel: yardsToDistanceLabel(r.distance_yards),
+    surface: r.is_hurdle_race ? `${r.surface || ""} (Hurdle)`.trim() : (r.surface || null),
+    horses: entriesByRace[r.id] || [],
+  }));
+  return { date, races };
 }

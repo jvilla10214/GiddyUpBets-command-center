@@ -3542,6 +3542,10 @@
       nyraCode: null, scratchesUrl: null,
       photo: "assets/track-colonialdowns.png", photoAlt: "Aerial view of Colonial Downs",
       tideStationId: null, tideRangeFt: null,
+      // Colonial Downs' own site has no entries/scratches page at all (see
+      // SMARTPONY_TRACK_CODE in the worker) — only posts scratches on
+      // X/Twitter, not a scrapeable source.
+      entriesSource: "smartpony",
     },
     churchilldowns: {
       id: "churchilldowns", name: "Churchill Downs", shortName: "Churchill Downs",
@@ -3562,6 +3566,11 @@
       nyraCode: null, scratchesUrl: "https://www.churchilldowns.com/scratches-and-changes/",
       photo: "assets/track-churchilldowns.png", photoAlt: "Aerial view of Churchill Downs",
       tideStationId: null, tideRangeFt: null,
+      // No free source publishes real entries for this track directly
+      // (churchilldowns.com's own toteboard widget needs JS execution to
+      // render, and DRF/Horse Racing Nation/TwinSpires all dead-ended) —
+      // see SMARTPONY_TRACK_CODE in the worker.
+      entriesSource: "smartpony",
     },
     santaanita: {
       id: "santaanita", name: "Santa Anita Park", shortName: "Santa Anita",
@@ -3582,6 +3591,12 @@
       nyraCode: null, scratchesUrl: "https://www.santaanita.com/racing-information/changes/",
       photo: "assets/track-santaanita.png", photoAlt: "Aerial view of Santa Anita Park",
       tideStationId: null, tideRangeFt: null,
+      // santaanita.com's own entries page loads real data (verified — same
+      // 1/ST Racing platform as Gulfstream Park) but only via a client-side
+      // Next.js Server Action with an opaque per-deploy action id, not
+      // fetchable server-side the way this app's other sources are — see
+      // SMARTPONY_TRACK_CODE in the worker for the actual source used.
+      entriesSource: "smartpony",
     },
     keeneland: {
       id: "keeneland", name: "Keeneland Race Course", shortName: "Keeneland",
@@ -3597,6 +3612,12 @@
       nyraCode: null, scratchesUrl: "https://www.keeneland.com/racing/scratches-changes",
       photo: "assets/track-keeneland.png", photoAlt: "Aerial view of Keeneland Race Course",
       tideStationId: null, tideRangeFt: null,
+      // keeneland.com/racing/entries is just an iframe into an
+      // Equibase-hosted subdomain (keeneland.equibase.com) — a gray area
+      // against this app's usual "no Equibase" rule even though that
+      // specific subdomain didn't trigger Incapsula on a plain fetch, so
+      // SmartPony is used instead — see SMARTPONY_TRACK_CODE in the worker.
+      entriesSource: "smartpony",
     },
     gulfstreampark: {
       id: "gulfstreampark", name: "Gulfstream Park", shortName: "Gulfstream Park",
@@ -3611,6 +3632,12 @@
       nyraCode: null, scratchesUrl: "https://www.gulfstreampark.com/racing-information/",
       photo: "assets/track-gulfstream.png", photoAlt: "Aerial view of Gulfstream Park",
       tideStationId: null, tideRangeFt: null,
+      // gulfstreampark.com's own entries page loads real, live data
+      // (verified directly — actual horses/jockeys/trainers/odds, zero
+      // bot-detection) but only via a client-side Next.js Server Action
+      // with an opaque per-deploy action id, not fetchable server-side —
+      // see SMARTPONY_TRACK_CODE in the worker for the actual source used.
+      entriesSource: "smartpony",
     },
     oaklawnpark: {
       id: "oaklawnpark", name: "Oaklawn Park", shortName: "Oaklawn",
@@ -3641,6 +3668,10 @@
       // as every other track photo here.
       photo: "assets/track-oaklawnpark.png", photoAlt: "Aerial view of Oaklawn Park",
       tideStationId: null, tideRangeFt: null,
+      // oaklawn.com/equibase/entries/ has an "Entries Data" section but
+      // it's an empty container fed by a client-side Equibase JS widget —
+      // see SMARTPONY_TRACK_CODE in the worker for the actual source used.
+      entriesSource: "smartpony",
     },
     ellispark: {
       id: "ellispark", name: "Ellis Park", shortName: "Ellis Park",
@@ -3664,6 +3695,10 @@
       // USGS/NAIP public-domain aerial imagery — see Oaklawn's comment above.
       photo: "assets/track-ellispark.png", photoAlt: "Aerial view of Ellis Park",
       tideStationId: null, tideRangeFt: null,
+      // No independent official source exists for this track — only an
+      // external link to equibase.com (bot-walled) — see
+      // SMARTPONY_TRACK_CODE in the worker for the actual source used.
+      entriesSource: "smartpony",
     },
     kentuckydowns: {
       id: "kentuckydowns", name: "Kentucky Downs", shortName: "Kentucky Downs",
@@ -3698,12 +3733,12 @@
       // same 945x566 crop every other photo here uses.
       photo: "assets/track-kentuckydowns.png", photoAlt: "Aerial view of Kentucky Downs",
       tideStationId: null, tideRangeFt: null,
-      // Entries/results source deliberately left unset for now — user is
-      // still deciding where to pull them from. Every UI path that reads
-      // entriesSource/resultsSource already treats "unset" as "no source
-      // configured yet" (same as Colonial Downs/Churchill Downs above), so
-      // this track just shows up with weather/conditions/handicapping-read
-      // support and an empty entries panel until that's wired in.
+      // Own site (themintkentuckydowns.com) is pure marketing with no
+      // entries data, only a link out to Equibase's bot-walled static
+      // calendar — see SMARTPONY_TRACK_CODE in the worker for the actual
+      // source used (2026-09-04, superseding the earlier "left unset" plan
+      // from when this track was first added).
+      entriesSource: "smartpony",
     },
     fairgrounds: {
       id: "fairgrounds", name: "Fair Grounds Race Course", shortName: "Fair Grounds",
@@ -3716,24 +3751,16 @@
       // (89.0°/269.2°, two independent relation members agreeing within
       // 0.2°). Standard US counterclockwise convention.
       heading: { homestretch: 89, backstretch: 269 },
-      // Fair Grounds DOES publish its own scratches/changes page
-      // (fairgroundsracecourse.com/racing-information/live-racing-wagering/
-      // scratches-changes/ — see the worker's parseFairgroundsChanges()) but
-      // it sends X-Frame-Options: DENY (verified directly), so it can't be
-      // iframed here the way Monmouth/DMTC's own pages are — scratchesUrl
-      // stays null. The worker's changesSource below is unaffected (that's
-      // a server-side fetch, which X-Frame-Options doesn't touch).
+      // Fair Grounds' own scratches/changes page sends X-Frame-Options:
+      // DENY (verified directly), so it can't be iframed here the way
+      // Monmouth/DMTC's own pages are — scratchesUrl stays null.
       nyraCode: null, scratchesUrl: null,
       // USGS/NAIP public-domain aerial imagery — see Oaklawn's comment above.
       photo: "assets/track-fairgrounds.png", photoAlt: "Aerial view of Fair Grounds Race Course",
       tideStationId: null, tideRangeFt: null,
-      // Scratches/changes only — no full entries source (no free source
-      // publishes actual horse names/fields for this track, just
-      // post-position scratch numbers). See CHANGES_SOURCE_BY_TRACK in the
-      // worker and parseFairgroundsChanges()'s own comment: verified
-      // against real markup, but only a stale/dark-day snapshot (season
-      // reopens Nov 19, 2026) — re-check once it's actually live.
-      changesSource: "fairgrounds",
+      // No free source publishes real entries for this track directly —
+      // see SMARTPONY_TRACK_CODE in the worker.
+      entriesSource: "smartpony",
     },
 
     // ---- UK / International: no entries/tide/NYRA wiring (not applicable
@@ -4502,6 +4529,13 @@
   const ENTRIES_DATE_PICKER_TRACKS = new Set([
     "saratoga", "delmar", "york", "ascot", "epsomdowns", "newmarket",
     "curragh", "longchamp", "shatin", "happyvalley", "meydan",
+    // SmartPony-sourced tracks (see the worker's SMARTPONY_TRACK_CODE) —
+    // several of these are boutique/short meets (Kentucky Downs, Colonial
+    // Downs) where picking a specific day matters even more than it does
+    // for the Sporting Life tracks above, and SmartPony answers any date
+    // equally well (no "today only" limitation to work around).
+    "churchilldowns", "santaanita", "oaklawnpark", "keeneland",
+    "gulfstreampark", "colonialdowns", "kentuckydowns", "ellispark", "fairgrounds",
   ]);
   let selectedEntriesDate = null;
 
@@ -5249,42 +5283,13 @@
   // autoImportNyraTrends() above, no "done" flag, since odds and scratches
   // change throughout the racing day and the worker's own edge cache already
   // keeps this from hammering the source site.
-  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM", monmouth: "MONMOUTHPARK.COM", sportinglife: "SPORTINGLIFE.COM" };
+  const ENTRIES_SOURCE_LABEL = { nyra: "NYRA.COM", dmtc: "DMTC.COM", monmouth: "MONMOUTHPARK.COM", sportinglife: "SPORTINGLIFE.COM", smartpony: "SMARTPONY" };
   async function loadEntries(){
     const entriesTag = $("entriesTag");
     const source = activeTrack.entriesSource;
     const trackId = activeTrack.id;
     renderEntriesDatePicker();
     if (!source){
-      // A track can have a changesSource (e.g. Fair Grounds — scratch
-      // numbers only, no horse names) with no real entriesSource at all,
-      // since no free source publishes a full field for it. The normal
-      // entries UI below is built around an actual race/horses array (see
-      // renderEntriesPage()), so a scratches-only track can't reuse it —
-      // this renders a plain "Race N: <note>" list instead, standalone.
-      if (["dmtc", "fairgrounds"].includes(activeTrack.changesSource)){
-        const date = (ENTRIES_DATE_PICKER_TRACKS.has(trackId) && selectedEntriesDate) || nowInTrackTZ().date;
-        let notes;
-        try{ notes = await changesApiGet(trackId, date); }
-        catch(err){
-          console.error("Changes-only fetch failed", err);
-          $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load scratches for ${escapeHtml(date)} — ${escapeHtml(err.message)}</div>`;
-          if (entriesTag) entriesTag.textContent = "ERROR";
-          return;
-        }
-        if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
-        if (!notes.length){
-          $("entriesBody").innerHTML = `<div class="log-empty">No scratches/changes posted for ${escapeHtml(date)} yet.</div>`;
-          if (entriesTag) entriesTag.textContent = "NO CHANGES POSTED";
-          return;
-        }
-        $("entriesBody").innerHTML = `<div class="log-empty" style="text-align:left">
-          <div style="margin-bottom:8px;opacity:.7">Full entries aren't published anywhere free for this track — this is the track's own scratches/changes feed only, no horse names.</div>
-          ${notes.map(n => `<div><strong>Race ${n.raceNumber}:</strong> ${escapeHtml(n.note)}</div>`).join("")}
-        </div>`;
-        if (entriesTag) entriesTag.textContent = "SCRATCHES ONLY";
-        return;
-      }
       $("entriesBody").innerHTML = `<div class="log-empty">Live entries aren't wired up for this track yet.</div>`;
       if (entriesTag) entriesTag.textContent = "NOT AVAILABLE";
       return;
@@ -5348,12 +5353,10 @@
     return Array.isArray(data.notes) ? data.notes : [];
   }
   async function refreshRaceChanges(){
-    // "dmtc" and "fairgrounds" both go through the worker's shared
-    // /changes route (dispatched server-side by CHANGES_SOURCE_BY_TRACK) —
-    // other changesSource values (e.g. Saratoga's "nyra-conditions") build
-    // their note client-side from data another job already fetches, with
-    // no /changes route of their own to call.
-    if (!["dmtc", "fairgrounds"].includes(activeTrack.changesSource) || !lastEntriesDate) return;
+    // "dmtc" only — other changesSource values (e.g. Saratoga's
+    // "nyra-conditions") build their note client-side from data another
+    // job already fetches, with no /changes route of their own to call.
+    if (activeTrack.changesSource !== "dmtc" || !lastEntriesDate) return;
     const trackId = activeTrack.id;
     const date = lastEntriesDate;
     let notes;
