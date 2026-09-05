@@ -4633,21 +4633,44 @@ async function runEntryAlerts(env, source = "manual") {
     }
     const trackedLastNames = new Set(state.trainers.map(lastNameKey));
     const date = entryAlertTodayDate();
+    // Per-track outcome for this run — confirmed real gap 2026-09-05:
+    // Kentucky Downs' entries fetch failed silently on a real cron run (a
+    // transient SmartPony hiccup, not a code bug — a manual re-run minutes
+    // later succeeded cleanly), and the ONLY record of that run was an
+    // aggregate {checked, sent} across every track, so there was no way to
+    // tell WHICH track failed without manually re-testing each one by hand.
+    // Surfaced in /debug-last-run's own stored summary below so a future
+    // "why didn't track X send" question is answerable by just reading
+    // that route, no manual re-test needed.
+    const trackOutcomes = {};
     // Scans ALERT_TRACKS (a deliberate subset of ENTRIES_SOURCE_BY_TRACK —
     // see that constant's own comment on why), dispatched to the same
     // per-source fetcher the /entries route uses so this never drifts out
     // of sync with which parser a track actually needs.
     for (const track of ALERT_TRACKS) {
       const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
+      const fetchEntries = () => {
+        if (sourceType === "nyra") return fetchNyraEntriesDay(track, date);
+        if (sourceType === "dmtc") return fetchDmtcEntriesDay(date);
+        if (sourceType === "sportinglife") return fetchSportingLifeEntriesDay(track, date);
+        if (sourceType === "smartpony") return fetchSmartPonyEntriesDay(track, date);
+        return fetchMonmouthEntriesDay(date);
+      };
       let result;
       try {
-        if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
-        else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
-        else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
-        else if (sourceType === "smartpony") result = await fetchSmartPonyEntriesDay(track, date);
-        else result = await fetchMonmouthEntriesDay(date);
+        // One immediate retry on a transient fetch failure (the exact gap
+        // that let Kentucky Downs' 2026-09-05 run go silent) — no backoff
+        // delay, since the point is just to not give up on a track over a
+        // single momentary blip, not to wait out a real outage.
+        try {
+          result = await fetchEntries();
+        } catch (firstErr) {
+          console.error(`Entry alerts: ${track} ${date} fetch failed, retrying once`, firstErr.message);
+          result = await fetchEntries();
+        }
       } catch (err) {
-        console.error(`Entry alerts: ${track} ${date} fetch failed`, err.message);
+        console.error(`Entry alerts: ${track} ${date} fetch failed twice`, err.message);
+        trackOutcomes[track] = { status: "fetch_failed", error: err.message };
         continue;
       }
       // Collect every matched horse first, grouped by race, then send ONE
@@ -4693,7 +4716,10 @@ async function runEntryAlerts(env, source = "manual") {
         }
         if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
       }
-      if (!raceGroups.length) continue;
+      if (!raceGroups.length) {
+        trackOutcomes[track] = { status: "no_matches" };
+        continue;
+      }
       const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
       try {
         await sendEntryDigestEmail(env, track, trackLabel, date, raceGroups);
@@ -4702,12 +4728,15 @@ async function runEntryAlerts(env, source = "manual") {
             await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
           }
         }
-        sent += raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+        const trackSent = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
+        sent += trackSent;
+        trackOutcomes[track] = { status: "sent", horseCount: trackSent };
       } catch (err) {
         console.error(`Entry alerts: digest send failed for ${track} ${date}`, err.message);
+        trackOutcomes[track] = { status: "send_failed", error: err.message };
       }
     }
-    const summary = { checked, sent };
+    const summary = { checked, sent, tracks: trackOutcomes };
     await recordEntryAlertsRun(env, source, summary);
     return summary;
   } catch (err) {
