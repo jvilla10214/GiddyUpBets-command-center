@@ -3656,6 +3656,46 @@
       photo: "assets/track-ellispark.png", photoAlt: "Aerial view of Ellis Park",
       tideStationId: null, tideRangeFt: null,
     },
+    kentuckydowns: {
+      id: "kentuckydowns", name: "Kentucky Downs", shortName: "Kentucky Downs",
+      city: "Franklin, KY", state: "KY",
+      // Franklin (Simpson County) is right on the TN border — Central time,
+      // like Ellis Park's own comment above about Kentucky's irregular
+      // timezone split, not Eastern like Louisville/Lexington.
+      lat: 36.6436, lon: -86.5658,
+      timezone: "America/Chicago",
+      // No OSM way exists for the actual rail here (only a generic
+      // landuse=recreation_ground grounds boundary, way 59854958 — used for
+      // this lat/lon, its centroid) — good enough for weather, not for a
+      // surveyed heading. Course is a genuinely irregular, undulating
+      // "kidney" shape (not a simple oval), so unlike every other track
+      // here this heading is a direct pixel-bearing measurement off free
+      // USGS/NAIP aerial imagery (tracing the east straight's own rail,
+      // two point-pairs agreeing within ~4°), not a surveyed polygon —
+      // treat as a rougher estimate (+/-5-10°) than the rest of this file
+      // and revisit if it ever matters for a close handicapping call.
+      // Right-handed (clockwise) course, confirmed via WebSearch — same
+      // deal as Ascot/Longchamp's Grande Piste above, not the standard US
+      // counterclockwise convention. Grandstand ("The Mint") sits on the
+      // EAST side, confirmed against the aerial imagery directly (no OSM
+      // grandstand tag exists for this one).
+      heading: { homestretch: 188, backstretch: 8 },
+      // No dedicated scratches/conditions page found (checked
+      // kentuckydowns.com and themintkentuckydowns.com directly) — falls
+      // back to the generic scratches panel.
+      nyraCode: null, scratchesUrl: null,
+      // USGS/NAIP public-domain aerial imagery — see Oaklawn's comment
+      // above. Framed the same way: full oval + surrounding context at the
+      // same 945x566 crop every other photo here uses.
+      photo: "assets/track-kentuckydowns.png", photoAlt: "Aerial view of Kentucky Downs",
+      tideStationId: null, tideRangeFt: null,
+      // Entries/results source deliberately left unset for now — user is
+      // still deciding where to pull them from. Every UI path that reads
+      // entriesSource/resultsSource already treats "unset" as "no source
+      // configured yet" (same as Colonial Downs/Churchill Downs above), so
+      // this track just shows up with weather/conditions/handicapping-read
+      // support and an empty entries panel until that's wired in.
+    },
     fairgrounds: {
       id: "fairgrounds", name: "Fair Grounds Race Course", shortName: "Fair Grounds",
       city: "New Orleans, LA", state: "LA",
@@ -3906,7 +3946,7 @@
   // US membership only; order within it is computed by buildUsTrackGroups()
   // below, not this array's own order.
   const TRACK_REGIONS = {
-    US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds"],
+    US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds", "kentuckydowns"],
     UK: ["ascot", "epsomdowns", "newmarket", "york"],
     International: ["shatin", "happyvalley", "longchamp", "curragh", "meydan"],
   };
@@ -4922,7 +4962,7 @@
   // MAP_TILE_ZOOM_BY_TRACK's four tracks today, but kept as its own
   // explicitly-named constant (a genuine fact about the track, not a UI
   // detail) rather than reused, since the two could diverge later.
-  const TURF_ONLY_TRACKS = new Set(["ascot", "epsomdowns", "york", "newmarket"]);
+  const TURF_ONLY_TRACKS = new Set(["ascot", "epsomdowns", "york", "newmarket", "kentuckydowns"]);
 
   // British Horseracing Authority official turf going-scale vocabulary,
   // used only to relabel the heuristic estimate's tile TEXT for these four
