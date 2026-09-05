@@ -4964,6 +4964,16 @@
   // detail) rather than reused, since the two could diverge later.
   const TURF_ONLY_TRACKS = new Set(["ascot", "epsomdowns", "york", "newmarket", "kentuckydowns"]);
 
+  // Tracks explicitly documented above (search "Right-handed (clockwise)") as
+  // running the reverse direction from the standard US/most-of-the-world
+  // counterclockwise convention. Used by turnMidpointHeading() below to know
+  // which way a turn rotates a straight's heading — everything not in this
+  // set is assumed counterclockwise (the majority case, including every US
+  // track here). Newmarket is deliberately excluded despite being a
+  // right-handed circuit overall: the Rowley Mile itself is a straight
+  // course with no turn to model (see its own heading comment).
+  const CLOCKWISE_TRACKS = new Set(["ascot", "shatin", "happyvalley", "longchamp", "curragh", "kentuckydowns"]);
+
   // British Horseracing Authority official turf going-scale vocabulary,
   // used only to relabel the heuristic estimate's tile TEXT for these four
   // tracks — see updateTrackConditionTiles()'s turf branch for where this
@@ -10228,11 +10238,13 @@
   // otherwise modeled in this app (only the two straightaways have a fixed
   // heading) — this is a simplification good enough to classify turn wind as
   // head/tail/crosswind, not a precise geometric model of the turn's radius.
-  // Assumes a standard counterclockwise (left-turning) oval, same assumption
-  // already used for every track's homestretch/backstretch headings — the
-  // heading rotates left (decreases) by 90° at the turn's midpoint.
-  function turnMidpointHeading(fromHeadingDeg){
-    return (fromHeadingDeg - 90 + 360) % 360;
+  // Rotates left (decreases, -90°) for the standard counterclockwise oval,
+  // same assumption already used for most tracks' homestretch/backstretch
+  // headings — but rotates right (+90°) for the tracks in CLOCKWISE_TRACKS
+  // above, since a right-handed course turns the opposite way.
+  function turnMidpointHeading(fromHeadingDeg, track){
+    const delta = CLOCKWISE_TRACKS.has(track.id) ? 90 : -90;
+    return (fromHeadingDeg + delta + 360) % 360;
   }
 
   function buildTrackPlayAnalysis(speed, sourceDeg, condLabel){
@@ -10399,7 +10411,7 @@
     const back = windComponents(speed, dir, activeTrack.heading.backstretch);
     const backDesc = describeStretchWind(back.headwind, back.crosswind);
     if (activeTrack.id === "delmar"){
-      const farTurn = windComponents(speed, dir, turnMidpointHeading(activeTrack.heading.backstretch));
+      const farTurn = windComponents(speed, dir, turnMidpointHeading(activeTrack.heading.backstretch, activeTrack));
       if (farTurn.headwind >= 10){
         secondary.push({ tier: 1, text: `A strong far-turn headwind (~${Math.round(farTurn.headwind)} mph) favors horses that can rate covered up, away from runners caught 2-4 wide.` });
       } else if (backDesc.kind === "crosswind" && backDesc.strength !== "light"){
