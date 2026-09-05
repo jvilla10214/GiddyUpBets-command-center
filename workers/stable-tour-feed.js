@@ -322,21 +322,24 @@
 //    a note added earlier that same race day, before the day's cron run,
 //    still gets caught. One digest per track, never combined — a day with
 //    both a matching Saratoga horse and a matching Del Mar horse sends two
-//    separate emails. ALERT_TRACKS is Saratoga + Del Mar only for now — the
-//    user's explicit target list also includes Belmont, Keeneland,
-//    Churchill, and Santa Anita, added here as each becomes ready rather
-//    than all at once (confirmed real ask 2026-08-26). Belmont is now in
+//    separate emails. ALERT_TRACKS started as Saratoga + Del Mar only — the
+//    user's explicit target list also included Belmont, Keeneland,
+//    Churchill, and Santa Anita, added as each became ready rather than all
+//    at once (confirmed real ask 2026-08-26). Belmont is in
 //    ENTRIES_SOURCE_BY_TRACK/RESULTS_SOURCE_BY_TRACK (2026-09-04), gated by
 //    NYRA_TRACK_MEET_WINDOWS so nyra.com/belmont/rdl/race/ can no longer
 //    silently serve SARATOGA's live card mislabeled as Belmont while dark
 //    (confirmed happening live on 2026-09-04, before this gate existed) —
 //    but that gate only prevents wrong data, it isn't the same as fetching
 //    and verifying a REAL live Belmont card, which still hasn't happened
-//    (meet opens Sept 18, 2026). Add belmont to ALERT_TRACKS once that's
-//    done. Keeneland/Churchill/Santa Anita aren't in ALERT_TRACKS (or
-//    anywhere else in this file) yet at all — none of them have an entries
-//    scraper built, which is real future work (find each track's live
-//    entries page, verify its markup), not a one-line addition. Every run
+//    (meet opens Sept 18, 2026) — Belmont stays OUT of ALERT_TRACKS until
+//    then. Keeneland/Churchill/Santa Anita, plus Oaklawn/Gulfstream/
+//    Colonial Downs/Kentucky Downs/Ellis Park/Fair Grounds, went straight
+//    into ALERT_TRACKS the same day instead (2026-09-04) — they're all on
+//    SmartPony now (see SMARTPONY_TRACK_CODE), a real relational
+//    database filtered by exact track+date, not a scrape that could
+//    silently substitute the wrong card, so Belmont's specific staged-wait
+//    reasoning doesn't apply to them. Every run
 //    (real cron or
 //    manual) records its own outcome via recordEntryAlertsRun(), readable
 //    at GET /debug-last-run — the way to confirm the Cron Trigger is
@@ -3003,12 +3006,21 @@ const ENTRIES_SOURCE_BY_TRACK = {
 // Saratoga's card mislabeled as Belmont, but that guard alone isn't the
 // same thing as fetching and verifying a REAL live Belmont card, which
 // still hasn't happened (meet opens Sept 18, 2026). Add belmont here once
-// that's done. Keeneland, Churchill, and Santa Anita aren't here either
-// because none of them have an entries scraper built anywhere in this
-// file yet — that's real future work (finding each track's live entries
-// page and verifying its markup, same as every other source here), not a
-// one-line addition.
-const ALERT_TRACKS = ["saratoga", "delmar"];
+// that's done.
+//
+// The 9 SmartPony-sourced tracks (see SMARTPONY_TRACK_CODE) went straight
+// in on 2026-09-04, no staged wait like Belmont's — SmartPony's data is
+// filtered by an exact track+date match against a real relational
+// database, not scraped off a page that could silently substitute the
+// wrong track's card, so the specific risk that gates Belmont here
+// (verified stale/wrong data looking valid) doesn't apply the same way.
+// Most of them are still dark right now (off-season) — nothing fires
+// until each meet actually has a race carded, same as any other track.
+const ALERT_TRACKS = [
+  "saratoga", "delmar",
+  "churchilldowns", "santaanita", "oaklawnpark", "keeneland",
+  "gulfstreampark", "colonialdowns", "kentuckydowns", "ellispark", "fairgrounds",
+];
 
 // Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
 // map (not reused from ENTRIES_SOURCE_BY_TRACK) because a track can have
@@ -4290,10 +4302,13 @@ const NYRA_TRACK_LABEL = { saratoga: "Saratoga", belmont: "Belmont" };
 // does, and this file otherwise only has NYRA_TRACK_LABEL, which doesn't
 // cover Del Mar/Monmouth/the Sporting Life tracks.
 const ENTRIES_TRACK_LABEL = {
-  saratoga: "Saratoga", delmar: "Del Mar", monmouth: "Monmouth",
+  saratoga: "Saratoga", belmont: "Belmont", delmar: "Del Mar", monmouth: "Monmouth",
   york: "York", ascot: "Ascot", epsomdowns: "Epsom Downs", newmarket: "Newmarket",
   curragh: "Curragh", longchamp: "Longchamp",
   shatin: "Sha Tin", happyvalley: "Happy Valley", meydan: "Meydan",
+  churchilldowns: "Churchill Downs", santaanita: "Santa Anita", oaklawnpark: "Oaklawn Park",
+  keeneland: "Keeneland", gulfstreampark: "Gulfstream Park", colonialdowns: "Colonial Downs",
+  kentuckydowns: "Kentucky Downs", ellispark: "Ellis Park", fairgrounds: "Fair Grounds",
 };
 
 // One combined digest per track per day instead of a separate email per
@@ -4406,6 +4421,51 @@ const STYLED_DIGEST_TRACK_THEME = {
   saratoga: { accent: "#a3241f", bg: "#fffdfa", ink: "#2a1c17", dim: "#8a6f68", hairline: "#ecdcd9" },
   belmont: { accent: "#0d3b2a", bg: "#fbfdfb", ink: "#14211a", dim: "#6b8074", hairline: "#e3ede6" },
   delmar: { accent: "#0e8a8a", bg: "#fdfaf3", ink: "#1c3a3a", dim: "#5c7a78", hairline: "#e3ddc8" },
+  // Added 2026-09-04 for the 9 SmartPony-sourced tracks. First pass used
+  // each site's own <meta name="theme-color"> tag, but that turned out to
+  // be a modern-website UI accent, not each track's actual recognizable
+  // identity (confirmed real feedback: Churchill Downs, Santa Anita, and
+  // Keeneland "seemed off") — Churchill Downs and Keeneland's real logo
+  // assets both happened to be teal/dark-green (confirmed by sampling the
+  // actual PNG/ICO pixels directly), and Santa Anita's live site really
+  // does use bright teal throughout its UI, but none of that is what
+  // actually reads as "Churchill Downs" or "Santa Anita" to someone who
+  // knows racing. Redone using each track's real iconic association
+  // instead: Churchill Downs -> the garland of roses/Twin Spires red
+  // (distinguished from Saratoga's own warmer brick-red by leaning cooler,
+  // toward burgundy); Santa Anita -> the yellow lettering on its famous
+  // starting-gate sign (confirmed real ask); Keeneland keeps its real
+  // sampled dark green (#005941, from its own favicon) — now that the
+  // other two are off teal, it's the only green track, so the
+  // differentiation problem that prompted this redo resolves on its own;
+  // Gulfstream Park -> the navy blue of its own live header bar (confirmed
+  // by viewing the actual rendered page, not just its theme-color meta).
+  // Oaklawn Park's tan/gold (#b49e6c) was independently confirmed twice
+  // (theme-color tag AND its own apple-touch-icon's actual pixels) and is
+  // unchanged. Kentucky Downs' forest-green-and-beige comes from a direct
+  // description of The Mint's own logo, cross-checked against its real
+  // favicon (#003b1f). Keeneland, Colonial Downs, Ellis Park, and Fair
+  // Grounds still have no independently-sampled brand color beyond what's
+  // noted above, so Colonial Downs (rose/pink, from "Rosie's Gaming
+  // Emporium"), Ellis Park (amber, chosen only to stay visually distinct
+  // from Kentucky Downs' green), and Fair Grounds (Mardi Gras purple, its
+  // home city's own association) remain best-available placeholders, not
+  // verified brand colors — revisit if a real one ever turns up.
+  // bg/ink/dim/hairline for all 9 are hand-derived to match each accent's
+  // hue, same relationship as the three original themes above.
+  churchilldowns: { accent: "#8a1538", bg: "#fdf7f8", ink: "#2a1620", dim: "#8a6070", hairline: "#ecdbe1" },
+  santaanita: { accent: "#c9971f", bg: "#fdfaf3", ink: "#2e2410", dim: "#8a7a52", hairline: "#ede3c8" },
+  oaklawnpark: { accent: "#b49e6c", bg: "#fdfbf6", ink: "#2e2718", dim: "#8a7a5c", hairline: "#ede6d6" },
+  keeneland: { accent: "#0d5c44", bg: "#f6fbf8", ink: "#123328", dim: "#5c8274", hairline: "#dcece4" },
+  gulfstreampark: { accent: "#16406b", bg: "#f6f9fc", ink: "#12222f", dim: "#5c7284", hairline: "#dce4ec" },
+  colonialdowns: { accent: "#c2185b", bg: "#fdf7fa", ink: "#2e1420", dim: "#8a5c70", hairline: "#ecdce3" },
+  // Shifted warmer/more olive than a first pass's #1a4d2e, which read too
+  // close to Keeneland's own cooler teal-green in the track list — still
+  // the same real sampled forest-green family (#003b1f), just leaning
+  // toward the beige half of "forest green and beige" for separation.
+  kentuckydowns: { accent: "#4a5a1f", bg: "#f8f6ee", ink: "#22240f", dim: "#7c7a5c", hairline: "#e6e3d0" },
+  ellispark: { accent: "#b5772c", bg: "#fdf9f3", ink: "#2e2013", dim: "#8a7458", hairline: "#ede2d0" },
+  fairgrounds: { accent: "#5b2c83", bg: "#faf7fd", ink: "#201530", dim: "#7a6b8a", hairline: "#e6ddf0" },
 };
 
 // Site-domain tag on a note (e.g. "drf.com") — derived from the note's own
