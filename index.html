@@ -3515,6 +3515,15 @@
       nyraCode: "BEL", scratchesUrl: null,
       photo: "assets/track-belmont.png", photoAlt: "Aerial view of Belmont Park",
       tideStationId: null, tideRangeFt: null,
+      // Reuses NYRA's own rdl/race endpoint (same as Saratoga), but the
+      // worker's NYRA_TRACK_MEET_WINDOWS gates it to Belmont's confirmed
+      // fall meet (Sept 18 - Dec 6, 2026) — outside that window it just
+      // returns no races rather than risk the substitution bug documented
+      // in the worker (nyra.com/belmont/rdl/race/ silently serving
+      // Saratoga's card while Belmont is dark). Added 2026-09-04; not yet
+      // in the worker's ALERT_TRACKS since a real live card hasn't been
+      // fetched and verified yet (see the worker's own comment).
+      entriesSource: "nyra", resultsSource: "nyra",
     },
     colonialdowns: {
       id: "colonialdowns", name: "Colonial Downs", shortName: "Colonial Downs",
@@ -3707,13 +3716,24 @@
       // (89.0°/269.2°, two independent relation members agreeing within
       // 0.2°). Standard US counterclockwise convention.
       heading: { homestretch: 89, backstretch: 269 },
-      // No dedicated scratches/conditions page found (checked
-      // fairgroundsracecourse.com directly) — falls back to the generic
-      // scratches panel.
+      // Fair Grounds DOES publish its own scratches/changes page
+      // (fairgroundsracecourse.com/racing-information/live-racing-wagering/
+      // scratches-changes/ — see the worker's parseFairgroundsChanges()) but
+      // it sends X-Frame-Options: DENY (verified directly), so it can't be
+      // iframed here the way Monmouth/DMTC's own pages are — scratchesUrl
+      // stays null. The worker's changesSource below is unaffected (that's
+      // a server-side fetch, which X-Frame-Options doesn't touch).
       nyraCode: null, scratchesUrl: null,
       // USGS/NAIP public-domain aerial imagery — see Oaklawn's comment above.
       photo: "assets/track-fairgrounds.png", photoAlt: "Aerial view of Fair Grounds Race Course",
       tideStationId: null, tideRangeFt: null,
+      // Scratches/changes only — no full entries source (no free source
+      // publishes actual horse names/fields for this track, just
+      // post-position scratch numbers). See CHANGES_SOURCE_BY_TRACK in the
+      // worker and parseFairgroundsChanges()'s own comment: verified
+      // against real markup, but only a stale/dark-day snapshot (season
+      // reopens Nov 19, 2026) — re-check once it's actually live.
+      changesSource: "fairgrounds",
     },
 
     // ---- UK / International: no entries/tide/NYRA wiring (not applicable
@@ -5236,6 +5256,35 @@
     const trackId = activeTrack.id;
     renderEntriesDatePicker();
     if (!source){
+      // A track can have a changesSource (e.g. Fair Grounds — scratch
+      // numbers only, no horse names) with no real entriesSource at all,
+      // since no free source publishes a full field for it. The normal
+      // entries UI below is built around an actual race/horses array (see
+      // renderEntriesPage()), so a scratches-only track can't reuse it —
+      // this renders a plain "Race N: <note>" list instead, standalone.
+      if (["dmtc", "fairgrounds"].includes(activeTrack.changesSource)){
+        const date = (ENTRIES_DATE_PICKER_TRACKS.has(trackId) && selectedEntriesDate) || nowInTrackTZ().date;
+        let notes;
+        try{ notes = await changesApiGet(trackId, date); }
+        catch(err){
+          console.error("Changes-only fetch failed", err);
+          $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load scratches for ${escapeHtml(date)} — ${escapeHtml(err.message)}</div>`;
+          if (entriesTag) entriesTag.textContent = "ERROR";
+          return;
+        }
+        if (activeTrack.id !== trackId) return; // stale — switched away while this was in flight
+        if (!notes.length){
+          $("entriesBody").innerHTML = `<div class="log-empty">No scratches/changes posted for ${escapeHtml(date)} yet.</div>`;
+          if (entriesTag) entriesTag.textContent = "NO CHANGES POSTED";
+          return;
+        }
+        $("entriesBody").innerHTML = `<div class="log-empty" style="text-align:left">
+          <div style="margin-bottom:8px;opacity:.7">Full entries aren't published anywhere free for this track — this is the track's own scratches/changes feed only, no horse names.</div>
+          ${notes.map(n => `<div><strong>Race ${n.raceNumber}:</strong> ${escapeHtml(n.note)}</div>`).join("")}
+        </div>`;
+        if (entriesTag) entriesTag.textContent = "SCRATCHES ONLY";
+        return;
+      }
       $("entriesBody").innerHTML = `<div class="log-empty">Live entries aren't wired up for this track yet.</div>`;
       if (entriesTag) entriesTag.textContent = "NOT AVAILABLE";
       return;
@@ -5299,10 +5348,12 @@
     return Array.isArray(data.notes) ? data.notes : [];
   }
   async function refreshRaceChanges(){
-    // "dmtc" only — other changesSource values (e.g. Saratoga's
-    // "nyra-conditions") build their note client-side from data another
-    // job already fetches, with no /changes route of their own to call.
-    if (activeTrack.changesSource !== "dmtc" || !lastEntriesDate) return;
+    // "dmtc" and "fairgrounds" both go through the worker's shared
+    // /changes route (dispatched server-side by CHANGES_SOURCE_BY_TRACK) —
+    // other changesSource values (e.g. Saratoga's "nyra-conditions") build
+    // their note client-side from data another job already fetches, with
+    // no /changes route of their own to call.
+    if (!["dmtc", "fairgrounds"].includes(activeTrack.changesSource) || !lastEntriesDate) return;
     const trackId = activeTrack.id;
     const date = lastEntriesDate;
     let notes;

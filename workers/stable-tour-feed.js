@@ -325,14 +325,15 @@
 //    separate emails. ALERT_TRACKS is Saratoga + Del Mar only for now — the
 //    user's explicit target list also includes Belmont, Keeneland,
 //    Churchill, and Santa Anita, added here as each becomes ready rather
-//    than all at once (confirmed real ask 2026-08-26). Belmont specifically
-//    can't go in yet even though NYRA_ENTRIES_BASE would let it: while its
-//    meet is dark, nyra.com/belmont/rdl/race/ silently serves SARATOGA's
-//    live card mislabeled as Belmont instead of an empty response (verified
-//    directly, same horses/race names side-by-side) — adding it now would
-//    double-count every Saratoga horse as also entered at Belmont. Re-add
-//    once that meet reopens (Sept 18, 2026) and its real card is verified
-//    fresh. Keeneland/Churchill/Santa Anita aren't in ALERT_TRACKS (or
+//    than all at once (confirmed real ask 2026-08-26). Belmont is now in
+//    ENTRIES_SOURCE_BY_TRACK/RESULTS_SOURCE_BY_TRACK (2026-09-04), gated by
+//    NYRA_TRACK_MEET_WINDOWS so nyra.com/belmont/rdl/race/ can no longer
+//    silently serve SARATOGA's live card mislabeled as Belmont while dark
+//    (confirmed happening live on 2026-09-04, before this gate existed) —
+//    but that gate only prevents wrong data, it isn't the same as fetching
+//    and verifying a REAL live Belmont card, which still hasn't happened
+//    (meet opens Sept 18, 2026). Add belmont to ALERT_TRACKS once that's
+//    done. Keeneland/Churchill/Santa Anita aren't in ALERT_TRACKS (or
 //    anywhere else in this file) yet at all — none of them have an entries
 //    scraper built, which is real future work (find each track's live
 //    entries page, verify its markup), not a one-line addition. Every run
@@ -1282,11 +1283,13 @@ async function handleRequest(request, env) {
     if (url.pathname === "/changes" && request.method === "GET") {
       const track = url.searchParams.get("track") || "";
       const date = url.searchParams.get("date") || "";
-      if (!CHANGES_SOURCE_BY_TRACK[track]) return json({ error: "Not supported for this track" }, 400);
+      const changesSource = CHANGES_SOURCE_BY_TRACK[track];
+      if (!changesSource) return json({ error: "Not supported for this track" }, 400);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Missing or invalid date (expected YYYY-MM-DD)" }, 400);
       let result;
       try {
-        result = await fetchDmtcChangesDay(date);
+        if (changesSource === "fairgrounds") result = await fetchFairgroundsChangesDay(date);
+        else result = await fetchDmtcChangesDay(date);
       } catch (err) {
         return json({ error: `Changes fetch failed: ${err.message}` }, 502);
       }
@@ -2944,7 +2947,31 @@ function parseTurftraxGoingReport(payload, courseLabel) {
 // Belmont. Reverted; re-add only after fetching and verifying a REAL
 // Belmont race card once that meet reopens (Sept 18, 2026), same rule as
 // every other track source in this file, no exceptions this time.
-const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
+//
+// Belmont re-added 2026-09-04, but gated: NYRA_TRACK_MEET_WINDOWS below
+// makes fetchNyraEntriesDay()/fetchNyraResultsDay() refuse to even ATTEMPT
+// the fetch for any date outside Belmont's confirmed live window, so the
+// substitution bug above can't happen — outside the window this just
+// returns an honest empty card, same as "not wired up." This does NOT
+// satisfy "verified fresh against a real live card" on its own (still
+// dark as of this writing) — ALERT_TRACKS deliberately still excludes
+// belmont until that real verification happens once Sept 18 arrives.
+const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga", belmont: "https://www.nyra.com/belmont" };
+
+// Confirmed meet windows for NYRA tracks whose rdl/race endpoint has been
+// caught silently substituting another track's live card while dark (see
+// NYRA_ENTRIES_BASE's own comment on Belmont) — fetchNyraEntriesDay() and
+// fetchNyraResultsDay() both refuse to fetch for a date outside this
+// window. Saratoga isn't listed here: its own meet dates were never the
+// problem (it's the track that gets wrongly substituted IN, not the one
+// needing a guard), so it stays ungated. Update this window by hand if
+// Belmont's fall meet dates ever change from what NYRA has published.
+const NYRA_TRACK_MEET_WINDOWS = { belmont: { start: "2026-09-18", end: "2026-12-06" } };
+
+function nyraTrackMeetIsDark(track, date) {
+  const window = NYRA_TRACK_MEET_WINDOWS[track];
+  return !!window && (date < window.start || date > window.end);
+}
 
 // Maps a track id to which entries scraper handles it — checked before
 // either fetchNyraEntriesDay() or fetchDmtcEntriesDay() runs. Add a track
@@ -2953,7 +2980,7 @@ const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga" };
 // NYRA_ENTRIES_BASE's own comment on why belmont briefly being a declared
 // exception to that rule was a real bug, not a harmless shortcut.
 const ENTRIES_SOURCE_BY_TRACK = {
-  saratoga: "nyra", delmar: "dmtc", monmouth: "monmouth",
+  saratoga: "nyra", belmont: "nyra", delmar: "dmtc", monmouth: "monmouth",
   york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
   curragh: "sportinglife", longchamp: "sportinglife",
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
@@ -2965,14 +2992,16 @@ const ENTRIES_SOURCE_BY_TRACK = {
 // Confirmed real ask 2026-08-26: alerts should stay focused on the US
 // tracks that matter here, not fire on every international/UK track the
 // Entries tab happens to support. Belmont deliberately isn't in this list
-// yet — see NYRA_ENTRIES_BASE's own comment on why it can't be safely
-// added while its meet is dark (silently serves Saratoga's card mislabeled
-// as Belmont, not a safe no-op); re-add once that meet reopens Sept 18,
-// 2026 and its real markup is verified fresh. Keeneland, Churchill, and
-// Santa Anita aren't here either because none of them have an entries
-// scraper built anywhere in this file yet — that's real future work
-// (finding each track's live entries page and verifying its markup, same
-// as every other source here), not a one-line addition.
+// yet even though it's now in ENTRIES_SOURCE_BY_TRACK/RESULTS_SOURCE_BY_TRACK
+// (2026-09-04) — NYRA_TRACK_MEET_WINDOWS stops it from ever returning
+// Saratoga's card mislabeled as Belmont, but that guard alone isn't the
+// same thing as fetching and verifying a REAL live Belmont card, which
+// still hasn't happened (meet opens Sept 18, 2026). Add belmont here once
+// that's done. Keeneland, Churchill, and Santa Anita aren't here either
+// because none of them have an entries scraper built anywhere in this
+// file yet — that's real future work (finding each track's live entries
+// page and verifying its markup, same as every other source here), not a
+// one-line addition.
 const ALERT_TRACKS = ["saratoga", "delmar"];
 
 // Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
@@ -2980,16 +3009,18 @@ const ALERT_TRACKS = ["saratoga", "delmar"];
 // entries wired up before its results page has actually been verified, or
 // vice versa; the two shouldn't silently move in lockstep.
 const RESULTS_SOURCE_BY_TRACK = {
-  saratoga: "nyra", delmar: "dmtc",
+  saratoga: "nyra", belmont: "nyra", delmar: "dmtc",
   york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
   curragh: "sportinglife", longchamp: "sportinglife",
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
 };
 
-// Same idea again, for the /changes route (DMTC's free-text race-notes
-// feed — see parseDmtcChanges()'s own file-level comment). No NYRA
-// equivalent exists yet, so this only has Del Mar for now.
-const CHANGES_SOURCE_BY_TRACK = { delmar: "dmtc" };
+// Same idea again, for the /changes route (free-text race-notes feeds —
+// see parseDmtcChanges()'s own file-level comment). No NYRA equivalent
+// exists yet. Fair Grounds added 2026-09-04: real markup verified, but
+// only against a stale/dark-day snapshot (season reopens Nov 19, 2026) —
+// see parseFairgroundsChanges()'s own comment.
+const CHANGES_SOURCE_BY_TRACK = { delmar: "dmtc", fairgrounds: "fairgrounds" };
 
 // Nav links HTML-encode their querystrings ("...&amp;race=3"), so this
 // matches on "race=" alone rather than requiring a raw "&"/"?" just before it.
@@ -3094,6 +3125,10 @@ function parseNyraRaceFragment(html, date) {
 }
 
 async function fetchNyraEntriesDay(track, date) {
+  // See NYRA_TRACK_MEET_WINDOWS's own comment — refuse to fetch for a dark
+  // date rather than risk another track's card silently coming back
+  // mislabeled as this one.
+  if (nyraTrackMeetIsDark(track, date)) return { date, races: [] };
   const base = NYRA_ENTRIES_BASE[track];
   const fetchRace = async (n) => {
     const res = await fetch(`${base}/rdl/race/?day=${date}&limit=entries&race=${n}`, {
@@ -3180,6 +3215,9 @@ function parseNyraResultsFragment(html) {
 }
 
 async function fetchNyraResultsDay(track, date) {
+  // See NYRA_TRACK_MEET_WINDOWS's own comment — same guard as
+  // fetchNyraEntriesDay() above, same substitution risk.
+  if (nyraTrackMeetIsDark(track, date)) return { date, races: [] };
   const base = NYRA_ENTRIES_BASE[track];
   const fetchRace = async (n) => {
     const res = await fetch(`${base}/rdl/race/?day=${date}&limit=results&race=${n}`, {
@@ -3528,6 +3566,61 @@ async function fetchDmtcChangesDay(date) {
   if (!res.ok) throw new Error(`DMTC returned HTTP ${res.status}`);
   const html = await res.text();
   return parseDmtcChanges(html, date);
+}
+
+// ---------- Fair Grounds Scratches/Changes parser ----------
+// Source verified directly (2026-09-04, while Fair Grounds is dark — the
+// page still serves whatever a staffer last hand-posted, in this case
+// stale content from Sat Mar 21, 2026): a plain WordPress page-builder
+// "cell" block with an <h2>Today's Scratches And Changes <Weekday>,
+// <Month> <Day>, <Year></h2> header, then flat `<p>Race N: <text></p>`
+// lines — no dated URL variant (same limitation as DMTC's changes page
+// above), no horse names, just post-position scratch numbers per race.
+// Same safety pattern as dmtcChangesCardDate() below: the header date is
+// the only signal this is actually today's card and not stale leftover
+// content, so a mismatch returns empty notes rather than stale scratches
+// mislabeled as current. Re-verify this parser against a real LIVE race
+// day once the season reopens Nov 19, 2026 — this was built against real
+// markup, but that markup was necessarily a stale/dark-day snapshot, not
+// a live one, so treat it as unconfirmed until then.
+const FAIRGROUNDS_CHANGES_URL = "https://www.fairgroundsracecourse.com/racing-information/live-racing-wagering/scratches-changes/";
+
+function fairgroundsChangesCardDate(html) {
+  // "Today&#8217;s Scratches And Changes Saturday, March 21, 2026" — the
+  // one entity in this header (the apostrophe) sits before the part
+  // matched here, so no decodeEntities() needed on the raw html, same as
+  // dmtcChangesCardDate()'s own date match above.
+  const m = html.match(/Scratches [Aa]nd [Cc]hanges \w+,\s*(\w+)\s+(\d{1,2})\w{0,2},\s*(\d{4})/);
+  if (!m) return null;
+  const month = NYRA_MONTHS[m[1].toLowerCase()];
+  if (!month) return null;
+  return `${m[3]}-${String(month).padStart(2, "0")}-${String(parseInt(m[2], 10)).padStart(2, "0")}`;
+}
+
+function parseFairgroundsChanges(html, date) {
+  const cardDate = fairgroundsChangesCardDate(html);
+  if (!cardDate || cardDate !== date) return { date, postedLabel: null, notes: [] };
+
+  const notes = [];
+  const noteRe = /<p>Race (\d+):\s*([^<]*?)\s*<\/p>/g;
+  let m;
+  while ((m = noteRe.exec(html))) {
+    const raceNumber = Number(m[1]);
+    const note = decodeEntities(m[2]).replace(/\s+/g, " ").replace(/&nbsp;?/gi, "").trim();
+    if (note) notes.push({ raceNumber, note });
+  }
+  notes.sort((a, b) => a.raceNumber - b.raceNumber);
+  return { date, postedLabel: null, notes };
+}
+
+async function fetchFairgroundsChangesDay(date) {
+  const res = await fetch(FAIRGROUNDS_CHANGES_URL, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 120, cacheEverything: true },
+  });
+  if (!res.ok) throw new Error(`Fair Grounds returned HTTP ${res.status}`);
+  const html = await res.text();
+  return parseFairgroundsChanges(html, date);
 }
 
 // ---------- DMTC Post Position stats parser (job #10) ----------
