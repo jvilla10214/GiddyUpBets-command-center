@@ -3143,6 +3143,37 @@ function parseNyraRaceFragment(html, date) {
   return { raceNumber, postTimeIso, mtpLabel, purse, raceType, raceName, distanceLabel, surface, horses };
 }
 
+// NYRA's per-race entries fragment (parseNyraRaceFragment() above) only ever
+// reports a bare "Turf" for a turf race — verified directly against a real
+// Saratoga card where races 2/7/11 run on the Mellon course and 6/12 run on
+// the Inner course, and the entries page reports all four identically as
+// "Turf". Which course each race actually runs on lives on a completely
+// separate NYRA page instead — the same scratches/conditions page
+// parseNyraTrackConditions() already parses for track-condition data, whose
+// "Turf Races: Mellon: 2,7,11  Inner: 6,12" field becomes its turfRaceCourse
+// map ({"2":"Mellon", "6":"Inner", ...}). This cross-references that map
+// into entries so callers get "Mellon Turf"/"Inner Turf" instead of a bare
+// "Turf" that can't tell the two courses apart. Track-agnostic (same
+// NYRA_SCRATCHES_CODE_BY_TRACK map entries already uses for Saratoga and
+// Belmont), so it covers Belmont's turf courses (e.g. "Widener") the same
+// way once its meet opens — best-effort only: any fetch/parse failure here
+// just leaves the generic "Turf" NYRA's entries page already gave us, never
+// breaks entries fetch.
+async function fetchNyraTurfRaceCourseMap(track) {
+  const code = NYRA_SCRATCHES_CODE_BY_TRACK[track];
+  if (!code) return {};
+  try {
+    const res = await fetch(`https://tr-cdn.nyra.com/direct/scratches/${code}scratch.html`, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    if (!res.ok) return {};
+    return parseNyraTrackConditions(await res.text()).turfRaceCourse || {};
+  } catch {
+    return {};
+  }
+}
+
 async function fetchNyraEntriesDay(track, date) {
   // See NYRA_TRACK_MEET_WINDOWS's own comment — refuse to fetch for a dark
   // date rather than risk another track's card silently coming back
@@ -3159,7 +3190,7 @@ async function fetchNyraEntriesDay(track, date) {
     return { html, race: parseNyraRaceFragment(html, date) };
   };
 
-  const first = await fetchRace(1);
+  const [first, turfRaceCourse] = await Promise.all([fetchRace(1), fetchNyraTurfRaceCourseMap(track)]);
   const raceCount = first.html ? maxRaceNumberFromNav(first.html) : 1;
   const races = first.race ? [first.race] : [];
 
@@ -3170,6 +3201,14 @@ async function fetchNyraEntriesDay(track, date) {
     for (const { race } of rest) if (race) races.push(race);
   }
   races.sort((a, b) => a.raceNumber - b.raceNumber);
+
+  for (const race of races) {
+    if (race.surface && /^turf$/i.test(race.surface)) {
+      const course = turfRaceCourse[String(race.raceNumber)];
+      if (course) race.surface = `${course} Turf`;
+    }
+  }
+
   return { date, races };
 }
 
