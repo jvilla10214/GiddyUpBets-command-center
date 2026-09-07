@@ -87,7 +87,8 @@ function buildEntriesHtml(trackDisplay, isoDate, data) {
       const trainer = horse.trainer || '—';
       const chicklet = chickletHtml(horse.postPosition);
 
-      html += `<p>${chicklet} ${esc(horse.name)}${scrSuffix} — <b>${esc(mlText)}</b> — ${esc(jockey)} / ${esc(trainer)}</p>`;
+      // Odds are plain text, not bold — user preference (changed 2026-09-07).
+      html += `<p>${chicklet} ${esc(horse.name)}${scrSuffix} — ${esc(mlText)} — ${esc(jockey)} / ${esc(trainer)}</p>`;
       // Two blank lines after EACH horse (not once per race) — deliberate space for
       // hand-written trip notes on that specific horse (changed 2026-09-07).
       html += `<p>&nbsp;</p><p>&nbsp;</p>`;
