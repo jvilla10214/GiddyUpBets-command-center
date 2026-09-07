@@ -31,12 +31,30 @@ function displayDate(isoDate) {
   return `${parseInt(m, 10)}/${parseInt(d, 10)}/${y}`;
 }
 
+// Bare chicklet only (post-position number, no name/odds) — used in the Pace: column.
+// CSS classes do NOT survive Drive's HTML-to-Doc converter (tested 2026-09-07: colors
+// silently failed to render even though the upload itself succeeded) — always use full
+// inline style="background:#..." on every chicklet span, never a <style> class reference.
+function chickletHtml(postPosition) {
+  const pp = parseInt(postPosition, 10);
+  const color = COLORS[pp];
+  if (!color) return `<b>#${esc(postPosition)}</b>`;
+  const bg = shortHex(color.bg);
+  const style = color.fg === '000000'
+    ? `background:#${bg}`
+    : `background:#${bg};color:#${shortHex(color.fg)}`;
+  return `<b><span style="${style}">#${esc(postPosition)}</span></b>`;
+}
+
 function buildEntriesHtml(trackDisplay, isoDate, data) {
   const races = [...data.races].sort((a, b) => a.raceNumber - b.raceNumber);
 
   // <style> is placed inside <body> (not <head>) because some lightweight HTML-to-Doc
   // importers only read body content and would silently drop a <head> block.
-  let html = `<html><body><style>p,h1{border:none;border-width:0}</style><h1>${esc(trackDisplay)} Entries — ${esc(displayDate(isoDate))}</h1>`;
+  // Title is a plain bold <p> at 16pt, not <h1> — Google Docs' default Heading 1 style
+  // renders at 24pt, which is too big for what's just a document label (2026-09-07).
+  let html = `<html><body><style>p,h1{border:none;border-width:0}</style>` +
+    `<p><b style="font-size:16pt">${esc(trackDisplay)} Entries — ${esc(displayDate(isoDate))}</b></p>`;
 
   for (const race of races) {
     const classLabel = race.raceName ? race.raceName : race.raceType;
@@ -55,29 +73,25 @@ function buildEntriesHtml(trackDisplay, isoDate, data) {
 
     const horses = [...race.horses].sort((a, b) => parseInt(a.postPosition, 10) - parseInt(b.postPosition, 10));
 
+    // Pace column: bare chicklet per horse, joined with <br> (not separate <p> tags, to
+    // keep payload size down — a big card's doubled chicklet count can otherwise approach
+    // the upload's truncation ceiling), then a single blank line separating it from the
+    // entries list below (2026-09-07).
+    html += `<p>${horses.map((h) => chickletHtml(h.postPosition)).join('<br>')}</p>`;
+    html += `<p>&nbsp;</p>`;
+
     for (const horse of horses) {
       const mlText = horse.mlOdds != null && horse.mlOdds !== '' ? horse.mlOdds : '—';
       const scrSuffix = horse.scratched ? ' (SCR)' : '';
       const jockey = horse.jockey || '—';
       const trainer = horse.trainer || '—';
-      const pp = parseInt(horse.postPosition, 10);
-      const color = COLORS[pp];
-
-      let chicklet;
-      if (color) {
-        const bg = shortHex(color.bg);
-        const style = color.fg === '000000'
-          ? `background:#${bg}`
-          : `background:#${bg};color:#${shortHex(color.fg)}`;
-        chicklet = `<b><span style="${style}"> #${esc(horse.postPosition)} </span></b>`;
-      } else {
-        chicklet = `<b>#${esc(horse.postPosition)}</b>`;
-      }
+      const chicklet = chickletHtml(horse.postPosition);
 
       html += `<p>${chicklet} ${esc(horse.name)}${scrSuffix} — <b>${esc(mlText)}</b> — ${esc(jockey)} / ${esc(trainer)}</p>`;
+      // Two blank lines after EACH horse (not once per race) — deliberate space for
+      // hand-written trip notes on that specific horse (changed 2026-09-07).
+      html += `<p>&nbsp;</p><p>&nbsp;</p>`;
     }
-
-    html += `<p>&nbsp;</p><p>&nbsp;</p>`;
   }
 
   html += `</body></html>`;
