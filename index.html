@@ -3545,7 +3545,7 @@
       // Colonial Downs' own site has no entries/scratches page at all (see
       // SMARTPONY_TRACK_CODE in the worker) — only posts scratches on
       // X/Twitter, not a scrapeable source.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     churchilldowns: {
       id: "churchilldowns", name: "Churchill Downs", shortName: "Churchill Downs",
@@ -3570,7 +3570,7 @@
       // (churchilldowns.com's own toteboard widget needs JS execution to
       // render, and DRF/Horse Racing Nation/TwinSpires all dead-ended) —
       // see SMARTPONY_TRACK_CODE in the worker.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     santaanita: {
       id: "santaanita", name: "Santa Anita Park", shortName: "Santa Anita",
@@ -3596,7 +3596,7 @@
       // Next.js Server Action with an opaque per-deploy action id, not
       // fetchable server-side the way this app's other sources are — see
       // SMARTPONY_TRACK_CODE in the worker for the actual source used.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     keeneland: {
       id: "keeneland", name: "Keeneland Race Course", shortName: "Keeneland",
@@ -3617,7 +3617,7 @@
       // against this app's usual "no Equibase" rule even though that
       // specific subdomain didn't trigger Incapsula on a plain fetch, so
       // SmartPony is used instead — see SMARTPONY_TRACK_CODE in the worker.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     gulfstreampark: {
       id: "gulfstreampark", name: "Gulfstream Park", shortName: "Gulfstream Park",
@@ -3637,7 +3637,7 @@
       // bot-detection) but only via a client-side Next.js Server Action
       // with an opaque per-deploy action id, not fetchable server-side —
       // see SMARTPONY_TRACK_CODE in the worker for the actual source used.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     oaklawnpark: {
       id: "oaklawnpark", name: "Oaklawn Park", shortName: "Oaklawn",
@@ -3671,7 +3671,7 @@
       // oaklawn.com/equibase/entries/ has an "Entries Data" section but
       // it's an empty container fed by a client-side Equibase JS widget —
       // see SMARTPONY_TRACK_CODE in the worker for the actual source used.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     ellispark: {
       id: "ellispark", name: "Ellis Park", shortName: "Ellis Park",
@@ -3698,7 +3698,7 @@
       // No independent official source exists for this track — only an
       // external link to equibase.com (bot-walled) — see
       // SMARTPONY_TRACK_CODE in the worker for the actual source used.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     kentuckydowns: {
       id: "kentuckydowns", name: "Kentucky Downs", shortName: "Kentucky Downs",
@@ -3738,7 +3738,7 @@
       // calendar — see SMARTPONY_TRACK_CODE in the worker for the actual
       // source used (2026-09-04, superseding the earlier "left unset" plan
       // from when this track was first added).
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
     fairgrounds: {
       id: "fairgrounds", name: "Fair Grounds Race Course", shortName: "Fair Grounds",
@@ -3760,7 +3760,7 @@
       tideStationId: null, tideRangeFt: null,
       // No free source publishes real entries for this track directly —
       // see SMARTPONY_TRACK_CODE in the worker.
-      entriesSource: "smartpony",
+      entriesSource: "smartpony", resultsSource: "smartpony",
     },
 
     // ---- UK / International: no entries/tide/NYRA wiring (not applicable
@@ -4543,7 +4543,11 @@
   // the worker's job #13 comment for how it dispatches NYRA vs. DMTC).
   // Gated by activeTrack.resultsSource, same pattern as entriesSource:
   // only tracks with a verified results source are wired up here.
-  const RESULTS_SOURCE_LABEL = { nyra: "Official — NYRA Results", dmtc: "Official — DMTC/Equibase Results", sportinglife: "Official — Sporting Life Results" };
+  // "smartpony" deliberately drops the "Official —" prefix the other
+  // sources use — it's a friend's third-party database (see the worker's
+  // SMARTPONY_TRACK_CODE comment), not each track's own official results
+  // feed, so the label shouldn't imply the same provenance.
+  const RESULTS_SOURCE_LABEL = { nyra: "Official — NYRA Results", dmtc: "Official — DMTC/Equibase Results", sportinglife: "Official — Sporting Life Results", smartpony: "SmartPony Results" };
   let lastResultsByRace = {}; // { [raceNumber]: {isFinal, finishOrder, payouts, alsoRan?, scratched?} } for lastEntriesDate — reset on track/date switch
   async function resultsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/results?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });

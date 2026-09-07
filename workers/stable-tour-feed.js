@@ -1275,6 +1275,7 @@ async function handleRequest(request, env) {
       try {
         result = resultsSource === "dmtc" ? await fetchDmtcResultsDay(date)
           : resultsSource === "sportinglife" ? await fetchSportingLifeResultsDay(track, date)
+          : resultsSource === "smartpony" ? await fetchSmartPonyResultsDay(track, date)
           : await fetchNyraResultsDay(track, date);
       } catch (err) {
         return json({ error: `Results fetch failed: ${err.message}` }, 502);
@@ -2352,6 +2353,7 @@ async function backfillRaceDayResults(env) {
     try {
       result = resultsSource === "dmtc" ? await fetchDmtcResultsDay(date)
         : resultsSource === "sportinglife" ? await fetchSportingLifeResultsDay(track, date)
+        : resultsSource === "smartpony" ? await fetchSmartPonyResultsDay(track, date)
         : await fetchNyraResultsDay(track, date);
     } catch (err) {
       continue; // best-effort — one bad fetch shouldn't block the rest of the batch
@@ -3031,6 +3033,12 @@ const RESULTS_SOURCE_BY_TRACK = {
   york: "sportinglife", ascot: "sportinglife", epsomdowns: "sportinglife", newmarket: "sportinglife",
   curragh: "sportinglife", longchamp: "sportinglife",
   shatin: "sportinglife", happyvalley: "sportinglife", meydan: "sportinglife",
+  // Verified directly against real completed races at Kentucky Downs,
+  // Gulfstream Park, and Colonial Downs (2026-09-06) — see
+  // fetchSmartPonyResultsDay()'s own comment for the real data gaps found.
+  churchilldowns: "smartpony", santaanita: "smartpony", oaklawnpark: "smartpony",
+  keeneland: "smartpony", gulfstreampark: "smartpony", colonialdowns: "smartpony",
+  kentuckydowns: "smartpony", ellispark: "smartpony", fairgrounds: "smartpony",
 };
 
 // Same idea again, for the /changes route (DMTC's free-text race-notes
@@ -6348,5 +6356,91 @@ async function fetchSmartPonyEntriesDay(track, date) {
     surface: r.is_hurdle_race ? `${r.surface || ""} (Hurdle)`.trim() : (r.surface || null),
     horses: entriesByRace[r.id] || [],
   }));
+  return { date, races };
+}
+
+// SmartPony's race_results table, same public-anon-key access as races/
+// race_entries/horses above (see fetchSmartPonyEntriesDay's own comment on
+// why that's OK) — one row per horse per race, horse_name pre-resolved (no
+// join needed, unlike race_entries). Real gaps confirmed directly against
+// live data (Kentucky Downs/Gulfstream Park/Colonial Downs, 2026-09-06):
+// `trainer` is null on every row seen so far, `jockey` only populated for
+// the top 3 finishers, `final_time`/`margin` always null, and payouts
+// (win/place/show) only appear on the placing horses — same real-world
+// pattern as DMTC's results (no exotic-wager payout data either), so
+// `payouts` here is always `[]`. `finish_position` itself can be null on a
+// row that still exists — see the isFinal/alsoRan logic below for how that
+// case is told apart from a race that just hasn't been backfilled at all.
+async function fetchSmartPonyResultsDay(track, date) {
+  const code = SMARTPONY_TRACK_CODE[track];
+  if (!code) return { date, races: [] };
+
+  const racesRes = await fetch(
+    `${SMARTPONY_SUPABASE_URL}/rest/v1/races?track=eq.${code}&race_date=eq.${date}&select=id,race_num&order=race_num.asc`,
+    { headers: { apikey: SMARTPONY_ANON_KEY }, cf: { cacheTtl: 90, cacheEverything: true } } // short — a race can go final mid-poll-interval, same as NYRA/DMTC results
+  );
+  if (!racesRes.ok) throw new Error(`SmartPony races returned HTTP ${racesRes.status}`);
+  const raceRows = await racesRes.json();
+  if (!raceRows.length) return { date, races: [] };
+
+  const raceIdList = raceRows.map((r) => r.id).join(",");
+  const resultsRes = await fetch(
+    `${SMARTPONY_SUPABASE_URL}/rest/v1/race_results?race_id=in.(${raceIdList})` +
+      `&select=race_id,finish_position,post_position,program_number,horse_name,jockey,trainer,win_payout,place_payout,show_payout` +
+      `&order=finish_position.asc`,
+    { headers: { apikey: SMARTPONY_ANON_KEY }, cf: { cacheTtl: 90, cacheEverything: true } }
+  );
+  if (!resultsRes.ok) throw new Error(`SmartPony race_results returned HTTP ${resultsRes.status}`);
+  const resultRows = await resultsRes.json();
+
+  const moneyLabel = (v) => (v != null ? `$${Number(v).toFixed(2)}` : null);
+  const rowsByRace = {};
+  for (const r of resultRows) (rowsByRace[r.race_id] ??= []).push(r);
+
+  const races = raceRows.map((r) => {
+    const rows = rowsByRace[r.id] || [];
+    // A results row can exist with finish_position null for two very
+    // different reasons, confirmed by directly comparing real races: (1) a
+    // real, final race where a beaten horse finished too far back for an
+    // exact call — real racing's "also ran" — verified against a genuine
+    // completed Gulfstream Park race (2026-09-04) where the top 4 had a
+    // numbered finish and 3 trailing horses were null; or (2) the results
+    // for that race just haven't been backfilled at all yet, even though
+    // its actual post time has long passed — verified live for Gulfstream
+    // Park and Colonial Downs (2026-09-06): EVERY row for every race that
+    // day was null, hours after post time. Telling these apart: if ANY row
+    // has a real finish_position, the race is genuinely final and the null
+    // rows are "also ran"; if EVERY row is null, nothing is known yet and
+    // the whole race is treated as not final (same as NYRA/DMTC when no
+    // results table exists at all) rather than misrepresenting an
+    // unfinished race as final with everyone "also ran".
+    const ranked = rows.filter((row) => row.finish_position != null);
+    const isFinal = ranked.length > 0;
+    const finishOrder = isFinal
+      ? ranked
+          .sort((a, b) => a.finish_position - b.finish_position)
+          .map((row) => ({
+            finishPosition: row.finish_position,
+            postPosition: row.program_number || (row.post_position != null ? String(row.post_position) : null),
+            horseName: row.horse_name ? titleCaseName(row.horse_name) : "Unknown",
+            // Unlike race_entries (see fetchSmartPonyEntriesDay), race_results'
+            // jockey/trainer are already "First Last" ("Flavien Prat"), not
+            // "LAST FIRST" — verified directly against the same real race in
+            // both tables ("PRAT FLAVIEN" in race_entries vs "Flavien Prat"
+            // here). reformatLastFirstName() would incorrectly flip these,
+            // so just normalize casing instead.
+            jockey: row.jockey ? titleCaseName(row.jockey) : null,
+            trainer: row.trainer ? titleCaseName(row.trainer) : null,
+            winPayout: moneyLabel(row.win_payout),
+            placePayout: moneyLabel(row.place_payout),
+            showPayout: moneyLabel(row.show_payout),
+          }))
+      : [];
+    const alsoRan = isFinal
+      ? rows.filter((row) => row.finish_position == null && row.horse_name).map((row) => titleCaseName(row.horse_name))
+      : [];
+    return { raceNumber: r.race_num, isFinal, finishOrder, alsoRan, payouts: [] };
+  });
+  races.sort((a, b) => a.raceNumber - b.raceNumber);
   return { date, races };
 }
