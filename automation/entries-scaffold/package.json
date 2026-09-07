@@ -1,0 +1,13 @@
+{
+  "name": "gupb-entries-scaffold",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone (no Claude/AI at runtime) daily job: fetches Saratoga/Belmont entries and uploads a formatted Google Doc scaffold to the shared GupB Daily Entries Drive folder. Scheduled via macOS launchd, independent of the desktop app.",
+  "main": "run.js",
+  "scripts": {
+    "start": "node run.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  }
+}

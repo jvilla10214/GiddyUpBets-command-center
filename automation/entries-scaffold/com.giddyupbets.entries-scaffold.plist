@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.giddyupbets.entries-scaffold</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/VILLA/Downloads/GiddyUpBets-command-center/automation/entries-scaffold/run.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/VILLA/Downloads/GiddyUpBets-command-center/automation/entries-scaffold</string>
+
+    <!-- Fires once per listed hour, 6am-12pm ET, every day. launchd catches up a missed
+         fire (e.g. Mac was asleep) the next time the machine wakes, so no cron-style
+         "run on wake" logic is needed separately. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/VILLA/Downloads/GiddyUpBets-command-center/automation/entries-scaffold/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/VILLA/Downloads/GiddyUpBets-command-center/automation/entries-scaffold/logs/launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
