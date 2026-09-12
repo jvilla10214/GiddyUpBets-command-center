@@ -2641,7 +2641,7 @@
            document order below it on mobile — see the max-width:480px rule. -->
       <div class="track-condition-group">
         <div class="track-condition" id="dirtConditionTile">
-          <span class="label">Main Track (Dirt)</span>
+          <span class="label" id="dirtConditionLabel">Main Track (Dirt)</span>
           <span class="tc-value skel" id="dirtConditionValue">—</span>
           <span class="tc-source" id="dirtSourceTag" hidden></span>
         </div>
@@ -3998,6 +3998,65 @@
       // reads as "no races" until then, same as any other dark day.
       entriesSource: "sportinglife", resultsSource: "sportinglife",
     },
+    woodbine: {
+      id: "woodbine", name: "Woodbine Racetrack", shortName: "Woodbine",
+      city: "Toronto, Canada", flag: "🇨🇦",
+      // Center of the main oval itself, not the much larger recreation_ground
+      // site boundary (which stretches into distant parking lots and the
+      // casino/entertainment complex) — measured directly off the sourced
+      // aerial imagery's own pixel bounds for the track surface, not the
+      // OSM landuse polygon. Within ~15m of Nominatim's whole-site centroid
+      // (43.7123437, -79.6028216), so both agree this is the right area.
+      lat: 43.71286, lon: -79.60285,
+      timezone: "America/Toronto",
+      // Left-handed (counterclockwise), confirmed via WebSearch — standard
+      // North American convention (Woodbine ran a one-off experiment with
+      // clockwise turf racing one season, but that's not the norm and isn't
+      // what these numbers reflect). No OSM way exists for the actual rail,
+      // so — same fallback as Kentucky Downs — this is a direct measurement
+      // off the sourced aerial imagery: isolated the reddish Tapeta main
+      // track's own color from the image programmatically, fit a line to
+      // the north straight's outer rail (72 sampled points, well clear of
+      // both turns), and converted that pixel slope to a true compass
+      // bearing using the image's own known lon/lat bounds. The grandstand/
+      // paddock complex sits clearly on the NORTH side of the oval in that
+      // same imagery, so under the counterclockwise convention (infield
+      // stays on the horses' left) the direction of travel on that straight
+      // is westward.
+      heading: { homestretch: 268, backstretch: 88 },
+      // woodbine.com/horsepeople/ links a "Racing Surface Updates" section,
+      // but (checked directly) its content loads via JS with nothing in the
+      // static page — same dead end as most other tracks' own conditions
+      // pages here. Falls back to the generic scratches panel for now.
+      nyraCode: null, scratchesUrl: null,
+      // Esri World Imagery (server.arcgisonline.com/ArcGIS/rest/services/
+      // World_Imagery/MapServer/export) — a different source than the
+      // USGS/NAIP used for the US tracks here (NAIP is US-only, doesn't
+      // cover Canada), but the same idea: a free, keyless export endpoint,
+      // bbox framed the same way (oval's own extent, padded, forced to this
+      // app's standard 945x566 crop aspect). Genuinely higher resolution
+      // than NAIP for this location — sharp enough to see the reddish
+      // Tapeta surface color distinctly from the green turf course.
+      photo: "assets/track-woodbine.png", photoAlt: "Aerial view of Woodbine Racetrack",
+      tideStationId: null, tideRangeFt: null,
+      // Real main-track surface is synthetic Tapeta, not dirt — this drives
+      // the "Main Track (Dirt)" tile's label (see dirtConditionLabel/
+      // renderStaticTrackChrome) to correctly say "Tapeta" instead for this
+      // track only. NOT added to TURF_ONLY_TRACKS — Woodbine has a real
+      // main track surface (just not dirt), unlike Ascot/Epsom/York/
+      // Newmarket/Kentucky Downs, which have no main dirt-equivalent track
+      // at all. Known limitation, not fixed here: the dirt-condition
+      // heuristic estimator (see updateTrackConditionTiles()'s own comment)
+      // was built assuming a dirt/turf drainage split — Tapeta is
+      // engineered to be far more rain-resistant than either, so that
+      // heuristic's numeric estimate is likely less accurate here than for
+      // a real dirt track. Revisit if this ever matters for a close call.
+      mainSurfaceLabel: "Tapeta",
+      // SmartPony's own feed just calls this surface "Dirt" (see
+      // fetchSmartPonyEntriesDay's own comment in the worker) — relabeled
+      // there specifically for this track, same reasoning as above.
+      entriesSource: "smartpony", resultsSource: "smartpony",
+    },
   };
 
   // Dropdown grouping only — doesn't touch the TRACKS objects themselves.
@@ -4006,7 +4065,7 @@
   const TRACK_REGIONS = {
     US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds", "kentuckydowns"],
     UK: ["ascot", "epsomdowns", "newmarket", "york"],
-    International: ["shatin", "happyvalley", "longchamp", "curragh", "meydan"],
+    International: ["shatin", "happyvalley", "longchamp", "curragh", "meydan", "woodbine"],
   };
 
   // Full names for the dropdown's state optgroup labels — falls back to the
@@ -11743,6 +11802,11 @@
       $("trackPhotoPlaceholderText").textContent = `${track.name} — aerial photo coming soon`;
     }
     $("dirtConditionTile").hidden = TURF_ONLY_TRACKS.has(track.id);
+    // Was a hardcoded "Main Track (Dirt)" until Woodbine (a real synthetic
+    // Tapeta main track, not dirt) exposed the gap — see track.mainSurfaceLabel's
+    // own comment. Every other track leaves mainSurfaceLabel unset and keeps
+    // the same "Dirt" text this always showed.
+    $("dirtConditionLabel").textContent = `Main Track (${track.mainSurfaceLabel || "Dirt"})`;
     $("nyraFrame").title = `${track.name} scratches, official track conditions, and turf rail settings from NYRA`;
     $("radarFrame").title = `${track.name} radar and storm forecast`;
     $("radarPanelTrackName").textContent = track.shortName;

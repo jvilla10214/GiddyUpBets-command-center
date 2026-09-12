@@ -2995,6 +2995,7 @@ const ENTRIES_SOURCE_BY_TRACK = {
   churchilldowns: "smartpony", santaanita: "smartpony", oaklawnpark: "smartpony",
   keeneland: "smartpony", gulfstreampark: "smartpony", colonialdowns: "smartpony",
   kentuckydowns: "smartpony", ellispark: "smartpony", fairgrounds: "smartpony",
+  woodbine: "smartpony",
 };
 
 // Tracks job #16's entry alerts actually scans — a deliberate subset of
@@ -3039,6 +3040,7 @@ const RESULTS_SOURCE_BY_TRACK = {
   churchilldowns: "smartpony", santaanita: "smartpony", oaklawnpark: "smartpony",
   keeneland: "smartpony", gulfstreampark: "smartpony", colonialdowns: "smartpony",
   kentuckydowns: "smartpony", ellispark: "smartpony", fairgrounds: "smartpony",
+  woodbine: "smartpony",
 };
 
 // Same idea again, for the /changes route (DMTC's free-text race-notes
@@ -6221,6 +6223,10 @@ const SMARTPONY_TRACK_CODE = {
   churchilldowns: "CD", santaanita: "SA", oaklawnpark: "OP", keeneland: "KEE",
   gulfstreampark: "GP", colonialdowns: "CNL", kentuckydowns: "KD",
   ellispark: "ELP", fairgrounds: "FG",
+  // Woodbine (Toronto) — confirmed real, current data under this code
+  // (2026-09-12), not assumed: race classes match real Woodbine stakes
+  // ("BullPageB150k" = Bull Page Stakes, a genuine Woodbine race).
+  woodbine: "WO",
 };
 // IANA timezone per SmartPony-sourced track — needed to convert
 // races.post_time_utc (a real timestamptz) into the local naive
@@ -6233,7 +6239,7 @@ const SMARTPONY_TRACK_TIMEZONE = {
   oaklawnpark: "America/Chicago", keeneland: "America/New_York",
   gulfstreampark: "America/New_York", colonialdowns: "America/New_York",
   kentuckydowns: "America/Chicago", ellispark: "America/Chicago",
-  fairgrounds: "America/Chicago",
+  fairgrounds: "America/Chicago", woodbine: "America/Toronto",
 };
 
 function toTrackLocalIso(utcIso, timeZone) {
@@ -6345,6 +6351,18 @@ async function fetchSmartPonyEntriesDay(track, date) {
     });
   }
 
+  // Woodbine's real main track is synthetic Tapeta, but SmartPony's feed
+  // just calls it "Dirt" the same as every other track's real dirt surface
+  // (confirmed directly, 2026-09-12 — a real Woodbine card's races came back
+  // "Dirt"/"Turf" only, no "Tapeta" value at all). Relabeled here so the app
+  // doesn't show a factually wrong surface specifically for this track — no
+  // other SmartPony-sourced track needs this today.
+  const rawSurface = (r) => (r.is_hurdle_race ? `${r.surface || ""} (Hurdle)`.trim() : (r.surface || null));
+  const surfaceLabel = (r) => {
+    const s = rawSurface(r);
+    return track === "woodbine" && s === "Dirt" ? "Tapeta" : s;
+  };
+
   const races = raceRows.map((r) => ({
     raceNumber: r.race_num,
     postTimeIso: toTrackLocalIso(r.post_time_utc, timeZone),
@@ -6353,7 +6371,7 @@ async function fetchSmartPonyEntriesDay(track, date) {
     raceType: r.race_class || null,
     raceName: null, // SmartPony's feed has no stakes-name field to draw from
     distanceLabel: yardsToDistanceLabel(r.distance_yards),
-    surface: r.is_hurdle_race ? `${r.surface || ""} (Hurdle)`.trim() : (r.surface || null),
+    surface: surfaceLabel(r),
     horses: entriesByRace[r.id] || [],
   }));
   return { date, races };
