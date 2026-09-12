@@ -3513,6 +3513,17 @@
       // ordering direction) gives homestretch ~109°, not 72°.
       heading: { homestretch: 109, backstretch: 289 },
       nyraCode: "BEL", scratchesUrl: null,
+      // Replaced 2026-09-12: the previous photo was a stale mid-renovation
+      // capture (bare sand infield, no turf visible, construction staging
+      // areas where the training track now sits) — a poor match for the
+      // track everyone will actually be handicapping against once the fall
+      // meet opens. Re-sourced from the same free/keyless USGS/NAIP
+      // ImageServer used for Oaklawn/Ellis Park/Kentucky Downs/Fair Grounds
+      // (see Oaklawn's comment), bbox framed from OSM's own surveyed
+      // racetrack way (way 61130050, leisure=stadium/sport=horse_racing,
+      // operator=NYRA) padded 5% and forced to this app's standard 945x566
+      // crop aspect — same tight, oval-fills-the-frame framing Saratoga's
+      // photo uses, not the wider zoomed-out crop the old photo had.
       photo: "assets/track-belmont.png", photoAlt: "Aerial view of Belmont Park",
       tideStationId: null, tideRangeFt: null,
       // Reuses NYRA's own rdl/race endpoint (same as Saratoga), but the
