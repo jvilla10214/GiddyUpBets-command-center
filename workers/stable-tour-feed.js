@@ -3023,6 +3023,9 @@ const ALERT_TRACKS = [
   "saratoga", "delmar",
   "churchilldowns", "santaanita", "oaklawnpark", "keeneland",
   "gulfstreampark", "colonialdowns", "kentuckydowns", "ellispark", "fairgrounds",
+  // Added 2026-09-12, same reasoning as the 9 SmartPony tracks above — real
+  // relational-DB data (SMARTPONY_TRACK_CODE.woodbine), not a scrape.
+  "woodbine",
 ];
 
 // Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
@@ -4358,6 +4361,7 @@ const ENTRIES_TRACK_LABEL = {
   churchilldowns: "Churchill Downs", santaanita: "Santa Anita", oaklawnpark: "Oaklawn Park",
   keeneland: "Keeneland", gulfstreampark: "Gulfstream Park", colonialdowns: "Colonial Downs",
   kentuckydowns: "Kentucky Downs", ellispark: "Ellis Park", fairgrounds: "Fair Grounds",
+  woodbine: "Woodbine",
 };
 
 // One combined digest per track per day instead of a separate email per
@@ -4515,6 +4519,13 @@ const STYLED_DIGEST_TRACK_THEME = {
   kentuckydowns: { accent: "#4a5a1f", bg: "#f8f6ee", ink: "#22240f", dim: "#7c7a5c", hairline: "#e6e3d0" },
   ellispark: { accent: "#b5772c", bg: "#fdf9f3", ink: "#2e2013", dim: "#8a7458", hairline: "#ede2d0" },
   fairgrounds: { accent: "#5b2c83", bg: "#faf7fd", ink: "#201530", dim: "#7a6b8a", hairline: "#e6ddf0" },
+  // Sampled directly from woodbine.com's own apple-touch-icon.png (the "W"
+  // + star mark, RGB 225/39/38) — a real, distinctive brand red, not a
+  // generic site theme-color (that meta tag is just white here) or the
+  // mask-icon's teal (a stock Safari-pinned-tab default, not Woodbine's).
+  // Bright/saturated enough to read clearly apart from Saratoga's cooler,
+  // darker brick-red (#a3241f) and Churchill Downs' burgundy (#8a1538).
+  woodbine: { accent: "#e12726", bg: "#fdf7f7", ink: "#2e1211", dim: "#8a5f5d", hairline: "#f0dcdb" },
 };
 
 // Site-domain tag on a note (e.g. "drf.com") — derived from the note's own
