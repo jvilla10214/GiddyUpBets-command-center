@@ -4659,7 +4659,12 @@
   // for a track that races almost daily.
   // null = defer to today in track TZ.
   const ENTRIES_DATE_PICKER_TRACKS = new Set([
-    "saratoga", "delmar", "york", "ascot", "epsomdowns", "newmarket",
+    // Belmont added 2026-09-12 once its opening-day (Sept 18) card was
+    // confirmed real and fetchable (see fetchNyraEntriesDay's
+    // NYRA_TRACK_MEET_WINDOWS guard) — same NYRA date-dropdown mechanism
+    // Saratoga already uses, just previously left out since there was no
+    // live Belmont card to point it at yet.
+    "saratoga", "belmont", "delmar", "york", "ascot", "epsomdowns", "newmarket",
     "curragh", "longchamp", "shatin", "happyvalley", "meydan",
     // SmartPony-sourced tracks (see the worker's SMARTPONY_TRACK_CODE) —
     // several of these are boutique/short meets (Kentucky Downs, Colonial
