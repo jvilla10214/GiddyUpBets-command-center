@@ -3003,13 +3003,15 @@ const ENTRIES_SOURCE_BY_TRACK = {
 // which is fine showing every track it supports for manual browsing).
 // Confirmed real ask 2026-08-26: alerts should stay focused on the US
 // tracks that matter here, not fire on every international/UK track the
-// Entries tab happens to support. Belmont deliberately isn't in this list
-// yet even though it's now in ENTRIES_SOURCE_BY_TRACK/RESULTS_SOURCE_BY_TRACK
-// (2026-09-04) — NYRA_TRACK_MEET_WINDOWS stops it from ever returning
-// Saratoga's card mislabeled as Belmont, but that guard alone isn't the
-// same thing as fetching and verifying a REAL live Belmont card, which
-// still hasn't happened (meet opens Sept 18, 2026). Add belmont here once
-// that's done.
+// Entries tab happens to support. Belmont was deliberately held out of
+// this list until a real live card could be fetched and verified (not
+// just the NYRA_TRACK_MEET_WINDOWS guard existing) — done 2026-09-12
+// against the real opening-day (Sept 18) card, 9 races/10 horses in race 1
+// parsed correctly. Same fetch also surfaced a real parser bug (see
+// parseNyraRaceFragment's horseRe comment): NYRA's own page omits the
+// Morning Line Odds div entirely this far ahead of race day, which used to
+// make every horse fail to match at all — fixed alongside adding Belmont
+// here.
 //
 // The 9 SmartPony-sourced tracks (see SMARTPONY_TRACK_CODE) went straight
 // in on 2026-09-04, no staged wait like Belmont's — SmartPony's data is
@@ -3020,7 +3022,7 @@ const ENTRIES_SOURCE_BY_TRACK = {
 // Most of them are still dark right now (off-season) — nothing fires
 // until each meet actually has a race carded, same as any other track.
 const ALERT_TRACKS = [
-  "saratoga", "delmar",
+  "saratoga", "belmont", "delmar",
   "churchilldowns", "santaanita", "oaklawnpark", "keeneland",
   "gulfstreampark", "colonialdowns", "kentuckydowns", "ellispark", "fairgrounds",
   // Added 2026-09-12, same reasoning as the 9 SmartPony tracks above — real
@@ -3129,7 +3131,18 @@ function parseNyraRaceFragment(html, date) {
   }
 
   const horses = [];
-  const horseRe = /<div class="order-3 flex-1 leading-none"><div class="font-semibold text-lg lg:text-2xl -mt-1 mb-1 leading-tight blend-links"><a href="[^"]*"[^>]*>\s*([^<]+?)\s*<\/a><\/div><div class="text-zinc-800 dark:text-white">([^<]*)<\/div><div class="text-zinc-800 dark:text-white mt-1 text-xs lg:text-sm">([^<]*)<\/div><\/div><div class="order-1[^"]*"><div class="[^"]*">\s*([^<]*?)\s*<\/div><\/div><div class="order-5[^"]*"><div class="[^"]*" title="Current Odds">([^<]*)<\/div><div class="[^"]*" title="Morning Line Odds">\s*ML\s*([^<]*)<\/div>/g;
+  // The trailing "Morning Line Odds" div is OPTIONAL — confirmed real gap
+  // (2026-09-12): NYRA's own Belmont entries page, fetched 6 days ahead of
+  // that meet's opening day, renders every horse's "Current Odds" div
+  // completely EMPTY with no Morning Line Odds div at all following it (ML
+  // odds apparently aren't set that far in advance). The regex used to
+  // require that div unconditionally, so it silently matched ZERO horses
+  // for the entire card — race-level metadata (distance/surface/raceType)
+  // still parsed fine since that comes from separate regexes above, which
+  // is what made this look like "0 horses" rather than an obvious fetch
+  // failure. Wrapping it in a non-capturing optional group lets a horse
+  // still parse correctly with mlOdds simply null until NYRA posts it.
+  const horseRe = /<div class="order-3 flex-1 leading-none"><div class="font-semibold text-lg lg:text-2xl -mt-1 mb-1 leading-tight blend-links"><a href="[^"]*"[^>]*>\s*([^<]+?)\s*<\/a><\/div><div class="text-zinc-800 dark:text-white">([^<]*)<\/div><div class="text-zinc-800 dark:text-white mt-1 text-xs lg:text-sm">([^<]*)<\/div><\/div><div class="order-1[^"]*"><div class="[^"]*">\s*([^<]*?)\s*<\/div><\/div><div class="order-5[^"]*"><div class="[^"]*" title="Current Odds">([^<]*)<\/div>(?:<div class="[^"]*" title="Morning Line Odds">\s*ML\s*([^<]*)<\/div>)?/g;
   let m;
   while ((m = horseRe.exec(html))) {
     const [, nameRaw, jockeyTrainerRaw, weightRaw, postRaw, currentOddsRaw, mlOddsRaw] = m;
@@ -3149,7 +3162,7 @@ function parseNyraRaceFragment(html, date) {
       ageSex: ageSexRaw ? decodeEntities(ageSexRaw).trim() : null,
       scratched,
       currentOdds: scratched ? null : (currentOdds || null),
-      mlOdds: decodeEntities(mlOddsRaw).trim() || null,
+      mlOdds: mlOddsRaw ? decodeEntities(mlOddsRaw).trim() || null : null,
     });
   }
 
