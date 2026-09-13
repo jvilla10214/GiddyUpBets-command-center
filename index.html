@@ -1834,6 +1834,56 @@
   .entries-addnote-save{ background: var(--tote-amber); color: var(--ink); }
   .entries-addnote-save:disabled{ opacity: 0.6; cursor: default; }
   .entries-addnote-cancel{ background: none; border: 1px solid var(--panel-border); color: var(--parchment-dim); }
+
+  /* ---------- Race Insight Strip — per-horse note+wind verdict ---------- */
+  .entries-insights-toggle{
+    margin-left: 6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    background: none;
+    border: 1px solid var(--panel-border);
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .entries-insights-toggle:hover{ border-color: var(--tote-amber); color: var(--tote-amber); }
+  .entries-insights-toggle[aria-pressed="true"]{
+    border-color: var(--tote-amber); color: var(--tote-amber); background: rgba(240,180,41,0.1);
+  }
+  .entries-insight-row td{ padding-top: 0; padding-bottom: 6px; border-top: none; }
+  .entries-insight-toggle{
+    all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer; padding: 3px 4px; border-radius: 4px;
+  }
+  .entries-insight-toggle:focus-visible{ outline: 1px solid var(--tote-amber); }
+  .entries-insight-pill{
+    font-family:'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 4px;
+  }
+  .entries-insight-aligned .entries-insight-pill{ background: var(--rail-green); color: var(--ink); }
+  .entries-insight-caution .entries-insight-pill{ background: var(--tote-amber); color: var(--ink); }
+  .entries-insight-no-signal .entries-insight-pill{ background: var(--panel-2); color: var(--parchment-dim); border: 1px solid var(--panel-border); }
+  .entries-insight-chevron{ font-size: 9px; color: var(--parchment-dim); }
+  .entries-insight-detail{
+    margin-top: 4px; padding: 8px 10px; max-width: 520px;
+    background: var(--panel-2); border: 1px solid var(--panel-border); border-radius: 6px;
+  }
+  .entries-insight-aligned .entries-insight-detail{ border-left: 3px solid var(--rail-green); }
+  .entries-insight-caution .entries-insight-detail{ border-left: 3px solid var(--tote-amber); }
+  .entries-insight-line{
+    font-family:'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 600;
+    color: var(--parchment); margin-bottom: 6px;
+  }
+  .entries-insight-source{ display: flex; gap: 8px; font-size: 11px; margin-top: 4px; }
+  .entries-insight-source-label{
+    flex: 0 0 auto; width: 62px; font-family:'IBM Plex Mono', monospace;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--parchment-dim); padding-top: 1px;
+  }
+  .entries-insight-source-text{ font-family:'IBM Plex Sans', sans-serif; font-size: 12px; color: var(--parchment-dim); line-height: 1.4; }
+
   .odds-arrow{ margin-left: 4px; font-size: 10px; font-weight: 700; }
   .odds-arrow-down{ color: var(--rail-green); } /* shortened — more money coming in */
   .odds-arrow-up{ color: var(--silk-red); } /* drifted — less money */
@@ -3321,6 +3371,7 @@
         Today's Entries
         <span class="tag" id="entriesTag">LOADING</span>
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="entriesInfo" title="Why this works this way">ⓘ</button>
+        <button type="button" class="entries-insights-toggle" id="entriesInsightsToggle" aria-pressed="true" title="Combines each horse's latest Stable Tour note with today's wind read into one verdict">Insights: On</button>
       </div>
       <div class="entries-date-picker" id="entriesDatePicker" hidden></div>
       <div id="entriesBody">
@@ -4115,6 +4166,10 @@
   }
   const DEFAULT_TRACK_ID = "saratoga";
   const ACTIVE_TRACK_KEY = "giddyupbets_active_track_v1";
+  // Persisted per-device on/off for the Entries tab's Race Insight Strip
+  // (combines a horse's most recent Stable Tour note with today's wind read
+  // at that race's post time — see raceInsightVerdict()). Defaults on.
+  const ENTRIES_INSIGHTS_ENABLED_KEY = "giddyupbets_entries_insights_enabled_v1";
   let activeTrack = TRACKS[DEFAULT_TRACK_ID];
 
   // Saratoga keeps its original unsuffixed key so existing users don't lose
@@ -4585,6 +4640,13 @@
   // Same idea again, for which horses' "owner also runs elsewhere today"
   // lists are expanded — keyed "raceNumber|horse|owner".
   let entriesOpenOwnerKeys = new Set();
+  // Same idea again, for which horses' Race Insight Strip is expanded past
+  // just its verdict pill — keyed "trainer|horse", same convention.
+  let entriesInsightOpenKeys = new Set();
+  // Whether the Race Insight Strip renders at all — module-level so
+  // entriesInsightHtml() can check it without threading a param through
+  // every call site. Set from localStorage at startup (see bottom of file).
+  let entriesInsightsEnabled = true;
 
   // Only tracks whose entries source is verified to accept an arbitrary
   // future date and return that day's real card (NYRA's own site does this
@@ -5656,6 +5718,93 @@
     return html;
   }
 
+  // Combines a horse's most recent Stable Tour note with the same live
+  // wind-vs-running-style rule already used for the Track Play Analysis/AI
+  // Racing Summary panels (describeStretchWind(), via weatherAtPostTime() —
+  // both already compute this once per race render; this just reuses that
+  // result rather than re-deriving it). Rule-based, same as scoreBiasText/
+  // scoreRunningStyleText above — no LLM, every verdict traces back to the
+  // exact note text and wind reading shown when expanded. Returns null when
+  // there's no tracked note for this horse at all (nothing to show — the
+  // Insight Strip should never render an empty "no signal" row for a horse
+  // with zero notes).
+  function raceInsightVerdict(trainer, horseName, race){
+    const notes = findHorseStableNotes(trainer, horseName);
+    if (!notes.length) return null;
+    const topNote = notes[0];
+    const styleScore = scoreRunningStyleText(topNote.note);
+    const weather = weatherAtPostTime(race.postTimeIso);
+    const stretchWind = weather?.stretchWind || null;
+    const windFavors = stretchWind && (stretchWind.kind === "headwind" || stretchWind.kind === "tailwind")
+      ? (stretchWind.kind === "headwind" ? "Speed-favoring" : "Closer-favoring")
+      : null;
+
+    let state, line;
+    if (!styleScore.suggestion || styleScore.suggestion === "Mixed / Inconsistent"){
+      state = "no-signal";
+      line = "This note doesn't say enough about running style to weigh against today's wind.";
+    } else if (!windFavors){
+      state = "no-signal";
+      line = "No clear headwind or tailwind read for this race yet — nothing to weigh the note against.";
+    } else if (styleScore.suggestion === windFavors){
+      state = "aligned";
+      line = styleScore.suggestion === "Closer-favoring"
+        ? "Wants a pace to run into — today's wind matches that same closer-favoring read."
+        : "Wants to be forward early — today's wind matches that same speed-favoring read.";
+    } else {
+      state = "caution";
+      line = styleScore.suggestion === "Closer-favoring"
+        ? "Wants a pace to run into, but today's wind reads speed-favoring, not closer-favoring — worth a second look."
+        : "Wants to be forward early, but today's wind reads closer-favoring, not speed-favoring — worth a second look.";
+    }
+
+    return { state, line, note: topNote, stretchWind };
+  }
+
+  const ENTRIES_INSIGHT_STATE_LABEL = { aligned: "Aligned", caution: "Worth a look", "no-signal": "No signal" };
+
+  // Renders as its own full-width <tr> (not inside the horse's own narrow
+  // "Horse" cell like entriesNoteIndicatorHtml/entriesAddNoteHtml above) —
+  // entries-horse-table is 6 columns, so this spans all of them via
+  // colspan. Collapsed state shows ONLY the verdict pill, no wording and no
+  // note text at all (explicit user correction on the mockup this was built
+  // from) — expanding reveals the one-line synthesis plus the actual note
+  // quote and wind reading it was built from.
+  function entriesInsightHtml(trainer, horseName, race){
+    if (!entriesInsightsEnabled) return "";
+    const verdict = raceInsightVerdict(trainer, horseName, race);
+    if (!verdict) return "";
+    const key = `${trainer}|${horseName}`;
+    const isOpen = entriesInsightOpenKeys.has(key);
+    const safeKey = escapeHtml(key);
+    let detail = "";
+    if (isOpen){
+      const windText = verdict.stretchWind ? verdict.stretchWind.text : "No clear wind read for this race's post time yet.";
+      detail = `
+        <div class="entries-insight-detail">
+          <div class="entries-insight-line">${escapeHtml(verdict.line)}</div>
+          <div class="entries-insight-source">
+            <span class="entries-insight-source-label">Stable Tour</span>
+            <span class="entries-insight-source-text">&ldquo;${escapeHtml(verdict.note.note)}&rdquo; — ${escapeHtml(verdict.note.trainer || trainer)}, ${escapeHtml(fmtStableDate(verdict.note.date))}</span>
+          </div>
+          <div class="entries-insight-source">
+            <span class="entries-insight-source-label">Wind read</span>
+            <span class="entries-insight-source-text">${escapeHtml(windText)}</span>
+          </div>
+        </div>`;
+    }
+    return `
+      <tr class="entries-insight-row entries-insight-${verdict.state}">
+        <td colspan="6">
+          <button type="button" class="entries-insight-toggle" data-insight-key="${safeKey}" aria-expanded="${isOpen}">
+            <span class="entries-insight-pill">${escapeHtml(ENTRIES_INSIGHT_STATE_LABEL[verdict.state])}</span>
+            <span class="entries-insight-chevron">&#9660;</span>
+          </button>
+          ${detail}
+        </td>
+      </tr>`;
+  }
+
   // Every OTHER horse on this same race day sharing this exact owner
   // string, across every race — not just the one this horse happens to be
   // in. Exact (case/whitespace-insensitive) match only, same reasoning as
@@ -5783,6 +5932,7 @@
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
       </tr>
+      ${entriesInsightHtml(h.trainer, h.name, race)}
     `;
     }).join("");
 
@@ -5908,6 +6058,48 @@
       suggestion = "Closer-favoring";
     } else {
       suggestion = "Mixed / Inconsistent"; // present on both sides, no clear lean
+    }
+
+    return { speedHits, closerHits, speedTotal, closerTotal, suggestion };
+  }
+
+  // Same phrase-list + 2x-margin-rule shape as scoreBiasText() above, but
+  // tuned for forward-looking TRAINER-QUOTE language (a Stable Tour note
+  // about how a horse is expected to run) rather than POST-RACE CHART
+  // language (what scoreBiasText's own phrase lists are tuned for — "wire
+  // to wire," "rallied," etc. describe what already happened in a race,
+  // not what a trainer expects going in). A heuristic, not a verified
+  // classification, same explicit caveat as scoreBiasText — expected to
+  // correctly return null on genuine confidence talk with no running-style
+  // content (e.g. "I think he's the best turf horse in North America"),
+  // not force a guess just because SOME quote exists.
+  const CLOSER_STYLE_PHRASES = [
+    "closer", "off the pace", "needs a hot pace", "needs a strong pace",
+    "pace to aim at", "pace to run into", "pace to close into",
+    "finishing kick", "unhurried", "rating off the pace",
+  ];
+  const SPEED_STYLE_PHRASES = [
+    "need to be forward", "need the lead", "gate speed", "forwardly placed",
+    "on the engine", "go to the front", "on the lead", "quick from the gate",
+  ];
+
+  function scoreRunningStyleText(text){
+    const lower = (text || "").toLowerCase();
+    const countPhrase = (p) => lower.split(p).length - 1;
+    const closerHits = CLOSER_STYLE_PHRASES.map(p => ({ phrase: p, count: countPhrase(p) })).filter(h => h.count > 0);
+    const speedHits = SPEED_STYLE_PHRASES.map(p => ({ phrase: p, count: countPhrase(p) })).filter(h => h.count > 0);
+    const closerTotal = closerHits.reduce((s, h) => s + h.count, 0);
+    const speedTotal = speedHits.reduce((s, h) => s + h.count, 0);
+
+    let suggestion = null;
+    if (speedTotal === 0 && closerTotal === 0){
+      suggestion = null; // no running-style content in this note at all
+    } else if (speedTotal >= closerTotal * 2 && speedTotal > closerTotal){
+      suggestion = "Speed-favoring";
+    } else if (closerTotal >= speedTotal * 2 && closerTotal > speedTotal){
+      suggestion = "Closer-favoring";
+    } else {
+      suggestion = "Mixed / Inconsistent";
     }
 
     return { speedHits, closerHits, speedTotal, closerTotal, suggestion };
@@ -12086,6 +12278,14 @@
       renderEntriesPage(lastEntriesDate, lastEntriesRaces);
       return;
     }
+    const insightToggle = e.target.closest(".entries-insight-toggle");
+    if (insightToggle){
+      const key = insightToggle.dataset.insightKey;
+      if (entriesInsightOpenKeys.has(key)) entriesInsightOpenKeys.delete(key);
+      else entriesInsightOpenKeys.add(key);
+      renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+      return;
+    }
     // Jumps to the Stable Tour tab with this exact trainer expanded and the
     // search narrowed to this horse — reuses that tab's own existing
     // expand/search state rather than building a second notes list here.
@@ -12283,6 +12483,18 @@
   refreshAllTracksWeather();
   setInterval(refreshAllTracksWeather, SLOW_REFRESH_MS);
   renderStaticTrackChrome(activeTrack);
+
+  entriesInsightsEnabled = localStorage.getItem(ENTRIES_INSIGHTS_ENABLED_KEY) !== "off";
+  const insightsToggleBtn = $("entriesInsightsToggle");
+  insightsToggleBtn.setAttribute("aria-pressed", String(entriesInsightsEnabled));
+  insightsToggleBtn.textContent = `Insights: ${entriesInsightsEnabled ? "On" : "Off"}`;
+  insightsToggleBtn.addEventListener("click", () => {
+    entriesInsightsEnabled = !entriesInsightsEnabled;
+    localStorage.setItem(ENTRIES_INSIGHTS_ENABLED_KEY, entriesInsightsEnabled ? "on" : "off");
+    insightsToggleBtn.setAttribute("aria-pressed", String(entriesInsightsEnabled));
+    insightsToggleBtn.textContent = `Insights: ${entriesInsightsEnabled ? "On" : "Off"}`;
+    if (lastEntriesDate && lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+  });
 
   loadWeatherLog().then(entries => {
     weatherLog = entries;
