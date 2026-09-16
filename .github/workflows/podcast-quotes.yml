@@ -1,0 +1,54 @@
+name: Steve Byk podcast — trainer quote extraction
+
+on:
+  schedule:
+    # 11:00 UTC = 7:00am America/New_York (6:00am during EDT) — ahead of the
+    # morning entries/Stable Tour email pipeline, so anything new lands in
+    # time for that day's send.
+    - cron: "0 11 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: podcast-quotes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: automation/podcast-quotes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add automation/podcast-quotes/state/processed_guids.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Podcast quote pipeline: update processed-episode state [skip ci]"
+            git push
+          else
+            echo "Nothing to commit."
+          fi

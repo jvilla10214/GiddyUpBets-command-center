@@ -1,0 +1,4 @@
+{
+  "_comment": "Press nicknames that show up in Byk's episode titles but don't match a tracked trainer's first+last name. Key is the nickname as it appears in titles (lowercase), value is the exact tracked trainer name. Add to this as new mismatches turn up.",
+  "rusty arnold": "George Arnold"
+}

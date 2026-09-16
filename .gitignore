@@ -4,3 +4,9 @@ analysis/reports/
 automation/entries-scaffold/node_modules/
 automation/entries-scaffold/credentials/
 automation/entries-scaffold/logs/
+automation/podcast-quotes/credentials/
+automation/podcast-quotes/logs/
+automation/podcast-quotes/tmp/
+automation/podcast-quotes/.env
+automation/podcast-quotes/venv/
+.wrangler/
