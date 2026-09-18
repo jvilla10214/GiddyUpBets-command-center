@@ -418,20 +418,30 @@
 //    DRF_RACE_NAME_SUFFIXES/DRF_BARE_RACE_NAMES are all necessarily
 //    incomplete, so an untracked track or race name occasionally still
 //    reads as a horse.
-// 20. NYRA News (GET /nyra-news) — NYRA's own Saratoga press releases
-//    (nyra.com/saratoga/news/), first-party rather than third-party
+// 20. NYRA News (GET /nyra-news?track=saratoga|belmont) — NYRA's own press
+//    releases (nyra.com/{track}/news/), first-party rather than third-party
 //    coverage like #7/#17/#19. Plain static HTML, no auth, no robots.txt
-//    restriction. The real wrinkle: a single "Stakes Advance" preview
-//    routinely profiles 3+ horses, each introduced as "OWNER's HORSE NAME
-//    [post N, Jockey]" in prose with no inline horse link and no <meta
-//    keywords> tag to lean on (unlike HRN/DRF) — extractNyraBracketHorse()
-//    reads that bracket convention structurally, falling back to
-//    extractNyraTitleHorse() (the headline's own leading words) only for
-//    the article's lead horse before its own bracket appears later in the
-//    piece. stripNyraPossessivePrefix() handles both "'s "/"’s " and the
-//    bare plural "' "/"’ " an owner name can end in; stripNyraBreedingDescriptor()
-//    then strips a breeding descriptor ("Kentucky homebred", "New
-//    York-bred") that can sit between the owner and the actual horse.
+//    restriction. Saratoga-only when this shipped; Belmont added
+//    2026-09-18 (confirmed real ask) once the same listing/article markup
+//    was verified to serve nyra.com/belmont/news/ identically — one parser
+//    for every NYRA track, ?track= just picks the URL. The real wrinkle: a
+//    single "Stakes Advance" preview routinely profiles 3+ horses, each
+//    introduced as "OWNER's HORSE NAME [post N, Jockey]" in prose with no
+//    inline horse link and no <meta keywords> tag to lean on (unlike
+//    HRN/DRF) — extractNyraBracketHorse() reads that bracket convention
+//    structurally, falling back to extractNyraTitleHorse() (the headline's
+//    own leading words) only for the article's lead horse before its own
+//    bracket appears later in the piece. stripNyraPossessivePrefix()
+//    handles both "'s "/"’s " and the bare plural "' "/"’ " an owner name
+//    can end in; stripNyraBreedingDescriptor() then strips a breeding
+//    descriptor ("Kentucky homebred", "New York-bred") that can sit between
+//    the owner and the actual horse. NYRA_RETIRED_HORSE_SIGNAL_RE (added
+//    2026-09-18, confirmed real need) skips retirement/legacy pieces —
+//    NYRA's news mixes those in with active-race coverage (e.g. a horse's
+//    retirement-farm homecoming, or a 20-years-later retrospective) — both
+//    at the article-title level (before fetching the body) and again
+//    per-paragraph inside extractNyraSections(), for a retired-horse aside
+//    inside an otherwise-current piece.
 // 21. Stable Tour note dedupe (Cron Trigger -> scheduled(), plus manual GET
 //    /debug-dedupe-notes) — deletes exact-duplicate notes (same trainer,
 //    same horse, byte-identical text after whitespace normalization),
@@ -1154,9 +1164,14 @@ async function handleRequest(request, env) {
     }
 
     if (url.pathname === "/nyra-news" && request.method === "GET") {
+      // ?track= added 2026-09-18 alongside Belmont support — defaults to
+      // Saratoga (the original, only track this covered before) so any
+      // existing caller that doesn't pass one keeps working unchanged.
+      const trackParam = url.searchParams.get("track");
+      const track = NYRA_NEWS_TRACKS.includes(trackParam) ? trackParam : "saratoga";
       let result;
       try {
-        result = await fetchNyraNews();
+        result = await fetchNyraNews(track);
       } catch (err) {
         return json({ error: `NYRA News fetch failed: ${err.message}` }, 502);
       }
@@ -5678,13 +5693,18 @@ async function fetchDrfNews() {
 }
 
 // ---------- NYRA News (job #20) ----------
-// NYRA's own Saratoga press releases (nyra.com/saratoga/news/) — first-
-// party, not third-party coverage like TDN/HRN/DRF. Verified directly:
-// plain unauthenticated static HTML (a bare curl with no JS execution
-// already returns full article text, unlike DRF's Next.js hydration data),
-// no robots.txt restriction, and real substantial trainer quotes in the
+// NYRA's own press releases (nyra.com/{track}/news/) — first-party, not
+// third-party coverage like TDN/HRN/DRF. Verified directly: plain
+// unauthenticated static HTML (a bare curl with no JS execution already
+// returns full article text, unlike DRF's Next.js hydration data), no
+// robots.txt restriction, and real substantial trainer quotes in the
 // site's "Stakes Advance" articles — a single preview piece can profile
 // 3+ horses, each with its own trainer and its own run of quote paragraphs.
+// Parameterized by track since 2026-09-18 (originally Saratoga-only) —
+// verified the same listing-page markup and article template (same
+// "format-text" body container, same <a ...class="block"> listing links)
+// serves nyra.com/belmont/news/ identically, so this is one parser for
+// every NYRA track, not a Belmont-specific rebuild.
 //
 // Horse identification is the one real wrinkle here: unlike HRN (inline
 // horse links) or DRF (a <meta keywords> tag naming every horse), NYRA's
@@ -5696,8 +5716,23 @@ async function fetchDrfNews() {
 // the horse's name, e.g. "Awesome Czech looks to defend her title...") for
 // the lead horse, which never gets its own bracket until well after its
 // first quote.
-const NYRA_NEWS_LIST_URL = "https://www.nyra.com/saratoga/news/";
+//
+// Confirmed real need (2026-09-18): NYRA's news mixes in retirement/legacy
+// pieces alongside active-race coverage — e.g. "Diversify returns to his
+// New York roots in retirement at Old Friends at Cabin Creek" and a
+// "Mineshaft: A Jockey Club Gold Cup win that cemented a championship
+// season" retrospective on a horse retired for two decades. Neither is
+// about a currently-competing horse, so NYRA_RETIRED_HORSE_SIGNAL_RE below
+// skips them — checked against the article title (before even fetching the
+// body, in fetchNyraNews()) and again per-paragraph (in
+// extractNyraSections(), in case an otherwise-current article has a
+// retired-horse aside). Biased toward over-excluding rather than guessing:
+// a real current-horse quote sharing a paragraph with one of these phrases
+// is an acceptable miss given the explicit ask was "only current horses."
+const NYRA_RETIRED_HORSE_SIGNAL_RE = /\bretir(?:ed|ement|es|ing)\b|\bfinal (?:start|race) of (?:his|her) career\b|\bcareer-ending\b|\bhangs? up\b|\bhung up\b|\bpensioned\b|\bOld Friends\b|\bsanctuary for retired\b|\b(?:standing|stands|enters?) at stud\b|\bstud duty\b|\bbreeding career\b|\bbroodmare career\b/i;
+const NYRA_NEWS_TRACKS = ["saratoga", "belmont"];
 const NYRA_BASE = "https://www.nyra.com";
+function nyraNewsListUrl(track) { return `${NYRA_BASE}/${track}/news/`; }
 
 // Strips an owner's possessive prefix off the FRONT of a name run, cutting
 // at the LAST possessive marker found — an owner name is itself often
@@ -5812,6 +5847,13 @@ function extractNyraSections(paragraphs, titleHorseGuess) {
     // hyphenated accolade word like "Award-winner" can't itself get
     // captured as if it were the first name word).
     /Trained by\s+(?:\S+\s+){0,6}?([A-Z][A-Za-z’']+(?:\s+[A-Z][A-Za-z’']+){0,2})[,.]/g,
+    // "Trained by NAME for OWNER" — confirmed real gap (2026-09-18): the
+    // pattern above requires a comma/period right after the name, but this
+    // construction puts the owner's name there instead ("Trained by Yoshito
+    // Yahagi for Susumu Fujita, the 5-year-old..."), so it never matched at
+    // all — the exact article that prompted this fix. Anchored on "for"
+    // instead of a trailing punctuation mark.
+    /Trained by\s+(?:\S+\s+){0,6}?([A-Z][A-Za-z’']+(?:\s+[A-Z][A-Za-z’']+){0,2})\s+for\b/g,
     // "trainer NAME" / "Trainer NAME," — with or without a leading "for",
     // with or without an accolade clause before "trainer" (that clause is
     // simply ignored since the name is captured AFTER the trigger word).
@@ -5850,11 +5892,29 @@ function extractNyraSections(paragraphs, titleHorseGuess) {
   // a trainer this article already names, it's not a horse, so drop it and
   // let the bracket convention (or nothing, if none appears) take over
   // instead of guessing wrong.
-  const titleGuessIsActuallyTrainer = titleHorseGuess && trainerFullNameByKey[lastNameKey(titleHorseGuess)];
+  // Confirmed real gap (2026-09-18): the exact-match check alone missed a
+  // headline that leads with a "Trainer NAME declares... contender HORSE"
+  // construction — the whole clause up to "HORSE" is one unbroken run of
+  // capitalized words, so extractNyraTitleHorse() grabbed the ENTIRE
+  // headline as the "horse name" rather than just the trainer's own name.
+  // Generalized from an exact match to "does a known trainer's full name
+  // appear ANYWHERE inside the guess" — catches a contaminated guess even
+  // when it's much longer than just the trainer's name, still without a
+  // hand-maintained phrasing blocklist.
+  const titleGuessIsActuallyTrainer = titleHorseGuess && (
+    trainerFullNameByKey[lastNameKey(titleHorseGuess)] ||
+    Object.values(trainerFullNameByKey).some((name) => titleHorseGuess.includes(name))
+  );
   let currentHorse = titleGuessIsActuallyTrainer ? null : titleHorseGuess;
   const sections = {}; // `${trainerKey}|${horse}` -> { trainerName, horse, parts: [] }
 
   for (const para of paragraphs) {
+    // See NYRA_RETIRED_HORSE_SIGNAL_RE's own comment — this article-level
+    // gate already skipped whole retirement/legacy pieces in
+    // fetchNyraNews(), but this catches a retired-horse aside inside an
+    // otherwise-current article too (e.g. a stakes preview that mentions a
+    // stablemate's past retirement in passing).
+    if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(para)) continue;
     const bracketHorse = extractNyraBracketHorse(para);
     if (bracketHorse) currentHorse = bracketHorse;
     if (!currentHorse) continue;
@@ -5887,8 +5947,10 @@ function extractNyraSections(paragraphs, titleHorseGuess) {
   }));
 }
 
-async function fetchNyraNews() {
-  const listRes = await fetch(NYRA_NEWS_LIST_URL, {
+async function fetchNyraNews(track) {
+  if (!NYRA_NEWS_TRACKS.includes(track)) throw new Error(`Unknown NYRA news track: ${track}`);
+  const listUrl = nyraNewsListUrl(track);
+  const listRes = await fetch(listUrl, {
     headers: { "User-Agent": BROWSER_UA },
     cf: { cacheTtl: 300, cacheEverything: true },
   });
@@ -5897,11 +5959,15 @@ async function fetchNyraNews() {
 
   const items = [];
   const seenLinks = new Set();
-  for (const m of listHtml.matchAll(/<a href="(\/saratoga\/news\/[^"]+\/)" class="block">[\s\S]*?<h2[^>]*>\s*([\s\S]*?)\s*<\/h2>[\s\S]*?<span>([^<]+)<\/span>/g)) {
+  const linkPattern = new RegExp(`<a href="(/${track}/news/[^"]+/)" class="block">[\\s\\S]*?<h2[^>]*>\\s*([\\s\\S]*?)\\s*</h2>[\\s\\S]*?<span>([^<]+)</span>`, "g");
+  for (const m of listHtml.matchAll(linkPattern)) {
     const link = NYRA_BASE + m[1];
     if (seenLinks.has(link)) continue;
     seenLinks.add(link);
     const title = decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    // Skip retirement/legacy pieces before even fetching the article body —
+    // see NYRA_RETIRED_HORSE_SIGNAL_RE's own comment.
+    if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(title)) continue;
     const dateLabel = m[3].trim(); // e.g. "Aug 26 2026"
     const pubDate = new Date(dateLabel);
     items.push({ link, title, pubDate: isNaN(pubDate) ? null : pubDate.toISOString() });
@@ -5933,7 +5999,7 @@ async function fetchNyraNews() {
     articles.push({ guid: item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
   }
 
-  return { source: NYRA_NEWS_LIST_URL, fetchedAt: new Date().toISOString(), articles };
+  return { source: listUrl, track, fetchedAt: new Date().toISOString(), articles };
 }
 
 // ---------- SmartPony partner quotes (job #18) ----------

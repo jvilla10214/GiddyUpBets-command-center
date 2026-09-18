@@ -9419,38 +9419,48 @@
   }
 
   // Job #20 — same shape as autoImportHrnNews()/autoImportDrfNews() above,
-  // pointed at the worker's /nyra-news route (NYRA's own Saratoga press
-  // releases — first-party, not third-party coverage). One real difference
+  // pointed at the worker's /nyra-news route (NYRA's own press releases —
+  // first-party, not third-party coverage). Polls both NYRA tracks the
+  // Worker supports (NYRA_NEWS_CLIENT_TRACKS — Belmont added 2026-09-18,
+  // confirmed real ask; was Saratoga-only before) — one shared dedup set is
+  // fine across both since seenKey already includes the article's own link,
+  // and Saratoga/Belmont articles never share a URL. One real difference
   // from HRN/DRF: NYRA's stakes-preview articles routinely profile several
   // horses in one piece, each with its own trainer and its own run of quote
   // paragraphs — the worker's extractNyraSections() already merges every
   // paragraph for the same trainer+horse pair into one combined section
   // before this ever sees it, so section.text here is already the full,
-  // untruncated run of that trainer's quotes about that one horse.
+  // untruncated run of that trainer's quotes about that one horse. The
+  // worker also already excludes retirement/legacy pieces on its own side
+  // (NYRA_RETIRED_HORSE_SIGNAL_RE) — nothing extra needed here for that.
+  const NYRA_NEWS_CLIENT_TRACKS = ["saratoga", "belmont"];
   async function autoImportNyraNews(){
     if (!stableTrainers.length) return; // nothing to match against
-    let data;
-    try{ data = await stableApiGet("/nyra-news"); }
-    catch(err){ console.error("NYRA News fetch failed", err); return; }
 
     const noteItems = [];
-    for (const article of data.articles || []){
-      for (const section of article.sections || []){
-        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
-        if (!matchedTrainer) continue;
-        for (const horseName of section.horseNames || []){
-          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
-          if (stableNyraNewsSeen.has(seenKey)) continue;
-          noteItems.push({
-            trainer: matchedTrainer,
-            horse: horseName,
-            note: section.text,
-            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
-            source: article.title,
-            link: article.link,
-            autoImported: true,
-          });
-          stableNyraNewsSeen.add(seenKey);
+    for (const track of NYRA_NEWS_CLIENT_TRACKS){
+      let data;
+      try{ data = await stableApiGet(`/nyra-news?track=${track}`); }
+      catch(err){ console.error(`NYRA News fetch failed (${track})`, err); continue; }
+
+      for (const article of data.articles || []){
+        for (const section of article.sections || []){
+          const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
+          if (!matchedTrainer) continue;
+          for (const horseName of section.horseNames || []){
+            const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
+            if (stableNyraNewsSeen.has(seenKey)) continue;
+            noteItems.push({
+              trainer: matchedTrainer,
+              horse: horseName,
+              note: section.text,
+              date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
+              source: article.title,
+              link: article.link,
+              autoImported: true,
+            });
+            stableNyraNewsSeen.add(seenKey);
+          }
         }
       }
     }
