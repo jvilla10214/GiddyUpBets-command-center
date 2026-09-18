@@ -952,6 +952,44 @@ async function handleRequest(request, env) {
       return json({ results }, 200, { "Cache-Control": "no-store" });
     }
 
+    // One read-modify-write for a whole batch of note deletes/edits at
+    // once — same reasoning as /notes/bulk's own comment above: many rapid
+    // individual DELETE/PATCH calls race against each other under this
+    // store's KV read-modify-write behavior (confirmed real, worse than
+    // documented elsewhere in this file — see the podcast-pipeline memory
+    // on POST *and* DELETE both being affected), silently losing some.
+    // Built for the 2026-09-18 full-database accuracy/duplicate audit;
+    // reusable for any future large cleanup pass rather than a one-off.
+    // Admin-only (same passphrase gate as every other mutating debug
+    // route) — this is a bulk data-editing tool, not something the client
+    // app calls. Body: { deleteIds: string[], patches: [{ id, source?,
+    // note?, trainer?, horse?, date? }] }. deleteIds are removed FIRST,
+    // then patches are applied to whatever's left — so patching an id
+    // that's also in deleteIds is a no-op (already gone), never an error.
+    if (url.pathname === "/notes/bulk-cleanup" && request.method === "POST") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const body = await request.json().catch(() => ({}));
+      const deleteIds = new Set(Array.isArray(body.deleteIds) ? body.deleteIds : []);
+      const patches = Array.isArray(body.patches) ? body.patches : [];
+      let notes = await readNotes(env);
+      const beforeCount = notes.length;
+      notes = notes.filter((n) => !deleteIds.has(n.id));
+      let patched = 0;
+      for (const p of patches) {
+        const note = notes.find((n) => n.id === p.id);
+        if (!note) continue;
+        if (typeof p.source === "string") note.source = p.source;
+        if (typeof p.note === "string") note.note = p.note;
+        if (typeof p.trainer === "string") note.trainer = p.trainer;
+        if (typeof p.horse === "string") note.horse = p.horse;
+        if (typeof p.date === "string") note.date = p.date;
+        patched++;
+      }
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+      return json({ deleted: beforeCount - notes.length, patched, remaining: notes.length }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/notes" && request.method === "DELETE") {
       const body = await request.json().catch(() => ({}));
       const notes = (await readNotes(env)).filter(n => n.id !== body.id);
