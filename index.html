@@ -2389,6 +2389,32 @@
     background: rgba(240,180,41,0.14);
     color: var(--tote-amber);
   }
+  /* Shown next to a trainer field (Quick Add, edit-note) whenever the typed
+     name doesn't match any tracked trainer — same amber "add" language as
+     .entries-addnote-toggle, positioned like .stable-autocomplete-dropdown
+     since it floats next to whichever field currently has focus. Doubles as
+     a typo guard: several real duplicate-trainer bugs this project has hit
+     (Bill Mott/William Mott, Chad Brown/Chad C. Brown, etc.) trace back to
+     a typed name silently auto-tracking as a brand-new trainer on save with
+     no visible cue that it didn't match — seeing this pill appear is the
+     tell that a name is about to become a NEW trainer, not reuse an
+     existing one. Not shown for #stableTrainerInput, which already has its
+     own permanent "+ Add Trainer" button right next to it. */
+  .stable-add-trainer-pill{
+    position: fixed;
+    z-index: 500;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.12);
+    border: 1px solid rgba(240,180,41,0.3);
+    padding: 3px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .stable-add-trainer-pill:hover{ background: rgba(240,180,41,0.2); }
+  .stable-add-trainer-pill[hidden]{ display:none; }
   .stable-extract-results{ display:flex; flex-direction:column; gap:10px; margin-bottom: 14px; }
   .stable-extract-item{
     background: var(--panel-2);
@@ -3280,6 +3306,10 @@
            every browser since it's plain DOM/CSS, not delegated to the
            browser's own inconsistent implementation). -->
       <div class="stable-autocomplete-dropdown" id="stableAutocompleteDropdown" hidden></div>
+      <!-- Shared "+ Add Trainer" pill, shown next to whichever trainer field
+           currently has a typed value that matches no tracked trainer — see
+           this class's own CSS comment for why. -->
+      <div class="stable-add-trainer-pill" id="stableAddTrainerPill" hidden>+ Add Trainer</div>
 
       <div class="stable-trainer-list" id="stableTrainerList">
         <div class="log-empty">No trainers added yet — add one below to get started.</div>
@@ -8306,16 +8336,55 @@
   function stableIsAutocompleteField(el){
     return !!el?.classList?.contains && (el.classList.contains("stable-autocomplete-trainer") || el.classList.contains("stable-autocomplete-horse"));
   }
+  // "+ Add Trainer" pill — see its own CSS comment for why this exists.
+  // #stableTrainerInput is excluded since it already has a permanent
+  // dedicated add-button right next to it (#addTrainerBtn); this pill is
+  // for the note forms (Quick Add, edit-note) where no such button exists.
+  let stableAddTrainerPillInput = null;
+  // Call AFTER stableAutocompleteShow() for the same field/event — this
+  // reads the dropdown's resulting hidden state to decide whether to show
+  // the pill at all.
+  function stableAddTrainerPillCheck(el){
+    const pill = $("stableAddTrainerPill");
+    if (!el?.classList?.contains?.("stable-autocomplete-trainer") || el.id === "stableTrainerInput"){
+      pill.hidden = true; stableAddTrainerPillInput = null; return;
+    }
+    const value = el.value.trim();
+    const exactMatch = value && stableTrainers.some(t => t.toLowerCase() === value.toLowerCase());
+    // Suppress the pill whenever the autocomplete dropdown has ANY
+    // suggestion open for this field, exact match or not — the two floated
+    // at the same position otherwise (confirmed real overlap typing
+    // "Jorge" while "Jorge Abreu" is tracked), and a visible suggestion is
+    // already the right nudge; offering "+ Add Trainer" alongside it invites
+    // creating an unwanted near-duplicate instead of just picking the
+    // suggestion.
+    const dropdownOpenForThisField = stableAutocompleteInput === el && !$("stableAutocompleteDropdown").hidden;
+    if (!value || exactMatch || dropdownOpenForThisField){ pill.hidden = true; stableAddTrainerPillInput = null; return; }
+    stableAddTrainerPillInput = el;
+    const rect = el.getBoundingClientRect();
+    pill.style.left = `${rect.left}px`;
+    pill.style.top = `${rect.bottom + 4}px`;
+    pill.hidden = false;
+  }
+  // mousedown, not click — same reason as the autocomplete dropdown below:
+  // fires before the input's blur/focusout, so stableAddTrainerPillInput is
+  // still set when this runs.
+  $("stableAddTrainerPill").addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    if (!stableAddTrainerPillInput) return;
+    addStableTrainer(stableAddTrainerPillInput.value);
+    $("stableAddTrainerPill").hidden = true;
+  });
   // Delegated on document (not a specific container) since these fields
   // live in three different places — the Quick Add form, the standalone
   // "+Add Trainer" input, and per-trainer panels rendered inside
   // #stableTrainerList — one listener covers all of them, present or not
   // yet rendered.
-  document.addEventListener("input", (e) => { if (stableIsAutocompleteField(e.target)) stableAutocompleteShow(e.target); });
-  document.addEventListener("focusin", (e) => { if (stableIsAutocompleteField(e.target) && e.target.value.trim()) stableAutocompleteShow(e.target); });
+  document.addEventListener("input", (e) => { if (stableIsAutocompleteField(e.target)) stableAutocompleteShow(e.target); stableAddTrainerPillCheck(e.target); });
+  document.addEventListener("focusin", (e) => { if (stableIsAutocompleteField(e.target) && e.target.value.trim()) stableAutocompleteShow(e.target); stableAddTrainerPillCheck(e.target); });
   // Delayed so a mousedown on a dropdown option (below) has already run
   // and repopulated the field before this hides it out from under the click.
-  document.addEventListener("focusout", (e) => { if (stableIsAutocompleteField(e.target)) setTimeout(stableAutocompleteHide, 150); });
+  document.addEventListener("focusout", (e) => { if (stableIsAutocompleteField(e.target)) setTimeout(stableAutocompleteHide, 150); if (e.target === stableAddTrainerPillInput) setTimeout(() => { $("stableAddTrainerPill").hidden = true; stableAddTrainerPillInput = null; }, 150); });
   document.addEventListener("keydown", (e) => {
     if (!stableAutocompleteInput || e.target !== stableAutocompleteInput) return;
     if (e.key === "ArrowDown"){ e.preventDefault(); stableAutocompleteHighlight(1); }
@@ -8324,7 +8393,7 @@
       e.preventDefault();
       const options = [...$("stableAutocompleteDropdown").querySelectorAll(".stable-autocomplete-option")];
       const chosen = options[stableAutocompleteIndex];
-      if (chosen){ stableAutocompleteInput.value = chosen.dataset.value; stableAutocompleteHide(); }
+      if (chosen){ stableAutocompleteInput.value = chosen.dataset.value; stableAddTrainerPillCheck(stableAutocompleteInput); stableAutocompleteHide(); }
     } else if (e.key === "Escape"){
       stableAutocompleteHide();
     }
@@ -8337,6 +8406,7 @@
     if (!opt || !stableAutocompleteInput) return;
     e.preventDefault();
     stableAutocompleteInput.value = opt.dataset.value;
+    stableAddTrainerPillCheck(stableAutocompleteInput);
     stableAutocompleteHide();
   });
 
