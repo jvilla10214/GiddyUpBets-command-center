@@ -288,11 +288,22 @@
 //
 // 16. Tracked-horse entry alert emails (Cron Trigger -> scheduled(), plus a
 //    manual GET /debug-run-scheduled for on-demand testing without waiting
-//    for the schedule) — a once-daily, race-day-only digest, not a
-//    continuous "email the moment I notice you" watcher: the Cron Trigger
-//    itself fires once a day around 8am Eastern (see the Deploy note below
-//    for the exact UTC expression and its DST caveat), and each run only
-//    checks TODAY's card (entryAlertTodayDate(), America/New_York) — for
+//    for the schedule) — a twice-daily, race-day-only digest, not a
+//    continuous "email the moment I notice you" watcher: two Cron Triggers
+//    fire the same handler daily, around 8am Eastern (day-of card,
+//    entryAlertDateForOffset(0)) and around 4pm Eastern the day before
+//    (day-before card, entryAlertDateForOffset(1) — added 2026-09-17,
+//    confirmed real ask: an evening heads-up IN ADDITION TO the existing
+//    morning send, not a replacement for it) — see the Deploy note below
+//    for the exact UTC expressions and their DST caveat. scheduled() tells
+//    the two apart by checking the actual current Eastern hour (its own
+//    comment explains why, not by trusting the exact configured cron
+//    string). Both runs send a FULL digest independently — raceNotifyKvKey()
+//    is scoped per run (runLabel "am"/"eve") specifically so the morning
+//    send never comes back empty just because the evening one already
+//    covered the same horses; a horse genuinely does appear in both emails
+//    when nothing changed overnight, by design. Each run checks its own
+//    date (today for the morning run, tomorrow for the evening one) for
 //    every track in ALERT_TRACKS (currently Saratoga and Del Mar; a
 //    deliberate subset of job #6's broader ENTRIES_SOURCE_BY_TRACK, which
 //    also covers Monmouth and several international/UK tracks the Entries
@@ -314,8 +325,9 @@
 //    every matching note (both manual and auto-imported) — not a separate
 //    Resend send per horse the way this originally shipped; that was too
 //    noisy in practice (confirmed real complaint 2026-08-26). raceNotifyKvKey()
-//    still dedupes per horse+race so the same horse never appears in a
-//    digest twice, TTL'd at 30 days so the keys don't accumulate forever;
+//    still dedupes per horse+race+run (see its own comment on why "+run" was
+//    added) so the same horse never appears twice in the SAME run's digest,
+//    TTL'd at 30 days so the keys don't accumulate forever;
 //    those dedup keys are only written after the digest send actually
 //    succeeds, so a failed Resend call doesn't silently mark horses as
 //    already-notified. A no-notes horse is deliberately left un-dedup'd so
@@ -342,10 +354,15 @@
 //    reasoning doesn't apply to them. Every run
 //    (real cron or
 //    manual) records its own outcome via recordEntryAlertsRun(), readable
-//    at GET /debug-last-run — the way to confirm the Cron Trigger is
-//    actually firing on its own, since "0 emails" alone is ambiguous (it's
-//    the expected result on most days once nothing new needs sending, not
-//    evidence the schedule itself ran).
+//    at GET /debug-last-run — which reports the morning and evening runs'
+//    last outcomes separately ({ am: {...}, eve: {...} }) since 2026-09-17,
+//    so a missing/stale entry on just one of them is diagnosable without
+//    the other run's more-recent record masking it. This is the way to
+//    confirm each Cron Trigger is actually firing on its own, since
+//    "0 emails" alone is ambiguous (it's the expected result on most days
+//    once nothing new needs sending, not evidence the schedule itself ran).
+//    GET /debug-run-scheduled?mode=evening tests the day-before run
+//    on-demand; omit mode (or anything else) for the day-of run.
 //
 // 17. Horse Racing Nation news (GET /hrn-news) — same idea as job #7's TDN
 //    parser (per-article, per-trainer sections with the horse names
@@ -450,14 +467,23 @@
 // secret (Worker settings -> Variables and Secrets -> Add, type "Secret") —
 // get a free key at pirateweather.net. Job #16 additionally requires a
 // RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
-// at resend.com) and a Cron Trigger (Worker settings -> Triggers -> Cron
-// Triggers -> Add Cron Trigger, "0 12 * * *" — once daily, 8am Eastern
-// while EDT/daylight time is in effect (roughly mid-March to early
-// November). Eastern falls back to EST (UTC-5) the rest of the year, which
-// shifts that same "0 12 * * *" tick to 7am local — change it to "0 13 * *
-// *" then, and back again in spring, since there's no wrangler.toml here to
-// express DST-aware scheduling in code) — this has to be added/changed by
-// hand in the dashboard. Job #18 additionally requires SMARTPONY_EMAIL and
+// at resend.com) and TWO Cron Triggers (Worker settings -> Triggers -> Cron
+// Triggers -> Add Cron Trigger), both firing the same scheduled() handler —
+// it tells them apart itself by checking the actual current Eastern hour
+// (see scheduled()'s own comment), so which literal cron string is
+// configured for which trigger doesn't matter as long as one lands in the
+// morning and one in the afternoon/evening:
+//   - Morning (day-of card): "0 12 * * *" — 8am Eastern while EDT/daylight
+//     time is in effect (roughly mid-March to early November). Eastern
+//     falls back to EST (UTC-5) the rest of the year, which shifts that
+//     same tick to 7am local — change it to "0 13 * * *" then, and back
+//     again in spring.
+//   - Evening (day-before card, added 2026-09-17): "0 20 * * *" — 4pm
+//     Eastern during EDT; shifts to "0 21 * * *" for EST, same seasonal
+//     swap as the morning one.
+// Neither of these can be expressed DST-aware in code since there's no
+// wrangler.toml here — both have to be added/changed by hand in the
+// dashboard, twice a year. Job #18 additionally requires SMARTPONY_EMAIL and
 // SMARTPONY_PASSWORD secrets (same Variables and Secrets screen) — the
 // partner login credentials for smartpony.ai.
 // -----------------------------------------------------------------------
@@ -592,15 +618,37 @@ export default {
     // daily, deployment version with 1 error/day. Recreating the Cron
     // Trigger itself never could have fixed this — the trigger was working,
     // the code calling it was wrong.
+    //
+    // Two Cron Triggers now fire this same handler (added 2026-09-17): the
+    // original ~8am Eastern one (day-of card) and a new ~4pm Eastern one
+    // (day-before card, sent in addition to the morning one — see
+    // runEntryAlerts()'s own comment). Rather than matching event.cron
+    // against the exact configured expression — which has to be hand-edited
+    // twice a year for DST (see the Deploy note) and would silently
+    // misclassify a run for a day someone forgot that edit — this checks
+    // the ACTUAL current Eastern hour instead. 14:00 is a wide, safe cutoff
+    // roughly in the middle of the ~6 hour gap between the two triggers, so
+    // it stays correct even if a DST edit is missed (worst case that shifts
+    // a trigger by exactly 1 hour, nowhere near this boundary).
+    const { hour } = nyNowParts();
+    const isEveningRun = hour >= 14;
+    const alertOptions = isEveningRun ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
     ctx.waitUntil(
-      runEntryAlerts(env, "scheduled").catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
+      runEntryAlerts(env, "scheduled", alertOptions).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
     );
-    ctx.waitUntil(
-      backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
-    );
-    ctx.waitUntil(
-      dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
-    );
+    // These two piggyback on job #16's Cron Trigger rather than needing
+    // their own, but only make sense once a day — gated to the morning fire
+    // only so adding the evening trigger doesn't silently double their
+    // frequency (and KV read/write volume; see the KV write-quota incident
+    // this project already had once).
+    if (!isEveningRun) {
+      ctx.waitUntil(
+        backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
+      );
+      ctx.waitUntil(
+        dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
+      );
+    }
   },
 };
 
@@ -1457,9 +1505,13 @@ async function handleRequest(request, env) {
     // Today's Snapshot Now" manual-trigger button).
     if (url.pathname === "/debug-run-scheduled" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      // ?mode=evening added 2026-09-17 to test the new day-before send
+      // on-demand without waiting for the real 4pm Eastern trigger.
+      const isEvening = url.searchParams.get("mode") === "evening";
+      const alertOptions = isEvening ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
       let result;
       try {
-        result = await runEntryAlerts(env);
+        result = await runEntryAlerts(env, "manual", alertOptions);
       } catch (err) {
         return json({ error: `Entry alerts run failed: ${err.message}` }, 500);
       }
@@ -1636,8 +1688,14 @@ async function handleRequest(request, env) {
     // proof the schedule itself is invoking the worker.
     if (url.pathname === "/debug-last-run" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
-      const raw = await env.STABLE_KV.get("entryalerts:lastrun");
-      return json(raw ? JSON.parse(raw) : { ranAt: null }, 200, { "Cache-Control": "no-store" });
+      const [amRaw, eveRaw] = await Promise.all([
+        env.STABLE_KV.get("entryalerts:lastrun:am"),
+        env.STABLE_KV.get("entryalerts:lastrun:eve"),
+      ]);
+      return json({
+        am: amRaw ? JSON.parse(amRaw) : { ranAt: null },
+        eve: eveRaw ? JSON.parse(eveRaw) : { ranAt: null },
+      }, 200, { "Cache-Control": "no-store" });
     }
 
     // Wipes every job #16 dedup record (see raceNotifyKvKey()) — a reset
@@ -2372,11 +2430,19 @@ async function backfillRaceDayResults(env) {
 // as its card firms up) only ever triggers one email. TTL'd (see
 // runEntryAlerts()) rather than kept forever, since once a date is long
 // past there's no reason to keep remembering it was already notified.
-function raceNotifyKvKey(track, date, raceNumber, horseName) {
+// runLabel added 2026-09-17 ("am" | "eve") so the new evening (day-before)
+// send and the existing morning (day-of) send never suppress each other —
+// confirmed real ask: both sends should go out in full even when nothing
+// changed between them, not have the morning email come back empty because
+// the evening one already covered those horses. Each label still dedupes
+// against itself (a retried/duplicate firing of the SAME run won't re-send),
+// it just no longer dedupes across the other run.
+function raceNotifyKvKey(track, date, raceNumber, horseName, runLabel = "am") {
   const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
   const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "invalid";
   const safeHorse = (horseName || "").trim().toLowerCase().replace(/[^a-z0-9]/gi, "").slice(0, 60);
-  return `racenotify:${safeTrack}:${safeDate}:${raceNumber}:${safeHorse}`;
+  const safeRunLabel = runLabel === "eve" ? "eve" : "am";
+  return `racenotify:${safeTrack}:${safeDate}:${raceNumber}:${safeHorse}:${safeRunLabel}`;
 }
 
 async function readBiasLog(env, track) {
@@ -4280,19 +4346,32 @@ async function fetchTdnNotebook() {
 // londonNowParts() above (job #12) — Saratoga and Belmont are both this one
 // timezone, so no per-track lookup is needed the way the client's
 // activeTrack.timezone is.
+// `hour` (24h, NY-local) added 2026-09-17 for job #16's morning/evening
+// self-detection — see scheduled()'s own comment. Existing callers that
+// destructure only { year, month, day } are unaffected by the extra field.
 function nyNowParts() {
   const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false,
   }).formatToParts(new Date());
   const get = (t) => Number(parts.find((p) => p.type === t)?.value);
-  return { year: get("year"), month: get("month"), day: get("day") };
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour") };
 }
 
-// Only today's card — race-day alerts, not a lookahead. See
-// runEntryAlerts()'s own comment for why this replaced a 7-day window.
-function entryAlertTodayDate() {
+// Race-day alerts, not a lookahead — see runEntryAlerts()'s own comment for
+// why this replaced a 7-day window. daysAhead added 2026-09-17 for the new
+// evening (day-before) send, which targets TOMORROW's card while running
+// today; pure calendar-date arithmetic via Date.UTC (no timezone conversion
+// needed once year/month/day are already NY-local) so this stays correct
+// across a month/year boundary, not just within one month.
+function entryAlertDateForOffset(daysAhead = 0) {
   const { year, month, day } = nyNowParts();
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  d.setUTCDate(d.getUTCDate() + daysAhead);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+function entryAlertTodayDate() {
+  return entryAlertDateForOffset(0);
 }
 
 // Direct port of index.html's findHorseStableNotes() — trainer match reuses
@@ -4388,8 +4467,8 @@ const ENTRIES_TRACK_LABEL = {
 // red/white for Saratoga, green/gold for Belmont, turquoise/coral for Del
 // Mar — see STYLED_DIGEST_TRACK_THEME). This replaced an earlier plain
 // <h2>/<h3>/<ul> template that shipped first.
-async function sendEntryDigestEmail(env, track, trackLabel, date, raceGroups) {
-  const { subject, html } = buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups);
+async function sendEntryDigestEmail(env, track, trackLabel, date, raceGroups, { cardLabel = "today" } = {}) {
+  const { subject, html } = buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { cardLabel });
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -4569,11 +4648,14 @@ function formatEmailDateLabel(dateStr) {
 // subject prefix and the header's date line — everything else (colors,
 // layout, badges, full quotes) is identical between a real send and a
 // preview one.
-function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest = false } = {}) {
+// cardLabel added 2026-09-17 ("today" | "tomorrow") for the new evening
+// (day-before) send — that digest covers TOMORROW's card while it's sent
+// today, so the template can no longer hardcode "today" everywhere.
+function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest = false, cardLabel = "today" } = {}) {
   const theme = STYLED_DIGEST_TRACK_THEME[track] || STYLED_DIGEST_TRACK_THEME.saratoga;
   const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
   const dateLabel = formatEmailDateLabel(date);
-  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${trackLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} today (${dateLabel})`;
+  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${trackLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} ${cardLabel} (${dateLabel})`;
   const racesHtml = raceGroups.map(({ race, horses }) => {
     const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
@@ -4640,7 +4722,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     <div style="background:${theme.bg}; color:${theme.ink}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
       <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double ${theme.accent};">
         <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:${theme.accent}; margin-bottom:6px;">GiddyUpQuotes &mdash; ${escapeHtmlForEmail(trackLabel)} Edition</div>
-        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:${theme.dim};">${isTest ? "TEST SEND &middot; " : ""}${escapeHtmlForEmail(dateLabel)} &middot; ${horseCount} tracked horse${horseCount === 1 ? "" : "s"} today</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:${theme.dim};">${isTest ? "TEST SEND &middot; " : ""}${escapeHtmlForEmail(dateLabel)} &middot; ${horseCount} tracked horse${horseCount === 1 ? "" : "s"} ${cardLabel}</div>
       </div>
       ${racesHtml}
     </div>
@@ -4679,7 +4761,12 @@ async function sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to)
 // Eastern (see the Deploy note's DST caveat) — this function itself doesn't
 // gate on the hour, it just checks whatever "today" is whenever it's
 // called, real cron or manual alike.
-async function runEntryAlerts(env, source = "manual") {
+// dayOffset/runLabel added 2026-09-17 for the new evening (day-before) send
+// alongside the original morning (day-of) one — dayOffset picks which
+// calendar date's card to check (0 = today, 1 = tomorrow), runLabel keeps
+// the two sends' dedup state independent (see raceNotifyKvKey()) and tags
+// which run's outcome this is in /debug-last-run (see recordEntryAlertsRun()).
+async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel = "am" } = {}) {
   // Whole body wrapped in one try/catch so a mid-run crash still leaves a
   // record behind — confirmed real gap: before this, an exception anywhere
   // in the per-horse loop would skip the final recordEntryAlertsRun() call
@@ -4701,11 +4788,12 @@ async function runEntryAlerts(env, source = "manual") {
     );
     if (!state.trainers.length && !untrackedHorseNames.size) {
       const empty = { checked: 0, sent: 0 };
-      await recordEntryAlertsRun(env, source, empty);
+      await recordEntryAlertsRun(env, source, empty, runLabel);
       return empty; // nothing to match against
     }
     const trackedLastNames = new Set(state.trainers.map(lastNameKey));
-    const date = entryAlertTodayDate();
+    const date = entryAlertDateForOffset(dayOffset);
+    const cardLabel = dayOffset === 0 ? "today" : "tomorrow";
     // Per-track outcome for this run — confirmed real gap 2026-09-05:
     // Kentucky Downs' entries fetch failed silently on a real cron run (a
     // transient SmartPony hiccup, not a code bug — a manual re-run minutes
@@ -4782,7 +4870,7 @@ async function runEntryAlerts(env, source = "manual") {
           // before the 8am window still gets caught at the next run.
           const notes = notesForHorse(state.notes, horse.trainer, horse.name);
           if (!notes.length && !recaps.length) continue;
-          const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name);
+          const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name, runLabel);
           const already = await env.STABLE_KV.get(key);
           if (already) continue;
           matchedHorses.push({ horse, notes, recaps, key });
@@ -4795,7 +4883,7 @@ async function runEntryAlerts(env, source = "manual") {
       }
       const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
       try {
-        await sendEntryDigestEmail(env, track, trackLabel, date, raceGroups);
+        await sendEntryDigestEmail(env, track, trackLabel, date, raceGroups, { cardLabel });
         for (const { horses } of raceGroups) {
           for (const { key } of horses) {
             await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
@@ -4810,10 +4898,10 @@ async function runEntryAlerts(env, source = "manual") {
       }
     }
     const summary = { checked, sent, tracks: trackOutcomes };
-    await recordEntryAlertsRun(env, source, summary);
+    await recordEntryAlertsRun(env, source, summary, runLabel);
     return summary;
   } catch (err) {
-    await recordEntryAlertsRun(env, source, { checked, sent, error: err.message });
+    await recordEntryAlertsRun(env, source, { checked, sent, error: err.message }, runLabel);
     throw err;
   }
 }
@@ -4823,9 +4911,15 @@ async function runEntryAlerts(env, source = "manual") {
 // evidence instead of guessing from "did I get an email" — 0 emails sent is
 // completely expected once nothing new has entered since the last run, so
 // silence alone doesn't tell you whether the schedule itself is working.
-async function recordEntryAlertsRun(env, source, summary) {
+// Keyed per runLabel since 2026-09-17 (was one single "entryalerts:lastrun"
+// key) — now that there are two daily runs (morning day-of, evening
+// day-before), a single shared key would have the second run's record
+// silently overwrite the first's a few hours later, losing the ability to
+// tell "is the morning trigger still firing on its own" apart from "is the
+// evening one."
+async function recordEntryAlertsRun(env, source, summary, runLabel = "am") {
   try {
-    await env.STABLE_KV.put("entryalerts:lastrun", JSON.stringify({ ranAt: new Date().toISOString(), source, ...summary }));
+    await env.STABLE_KV.put(`entryalerts:lastrun:${runLabel === "eve" ? "eve" : "am"}`, JSON.stringify({ ranAt: new Date().toISOString(), source, ...summary }));
   } catch (err) {
     // best-effort — don't fail the actual run over a bookkeeping write
   }
