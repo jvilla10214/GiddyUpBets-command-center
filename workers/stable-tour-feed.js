@@ -469,11 +469,23 @@
 //    "never clears on empty match" safety rule. Also pulls that date's
 //    whole-card "Full Card Recap:" writeup (record.fullCardRecap, manual
 //    set/clear at POST /raceday/fullcard) in the same read-modify-write.
+// 24. BloodHorse News (Cron Trigger -> scheduled(), piggybacking job #16's,
+//    plus manual GET /debug-run-bloodhorse) — see runBloodHorseImport()'s
+//    own comment for the full design. Unlike jobs #7/#17/#19/#20, this one
+//    is entirely server-side: fetches BLOODHORSE_FEED_URL, matches quoted
+//    trainers against the tracked list itself (resolveTrackedTrainer()),
+//    and writes notes directly — no client polling, no localStorage dedup.
+//    Deliberate reaction to a real incident (2026-09-18): every prior
+//    auto-import job depends on a browser's localStorage to know what it's
+//    already processed, so opening the app on a device that had never run
+//    those polls replayed the ENTIRE import history from scratch. This job
+//    can't have that failure mode — its dedup (bloodhorseSeenKvKey(), one
+//    KV flag per article ID) lives in the Worker, not the browser.
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, #9, #15, #16, #21, and #22 to work — jobs #2, #4, #6, #7, #8,
-// #10, #11, #12, #13, #14, #17, #18, and #20 (fetch-and-parse only, no
-// storage) work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
+// for jobs #1, #3, #5, #9, #15, #16, #21, #22, and #24 to work — jobs #2, #4,
+// #6, #7, #8, #10, #11, #12, #13, #14, #17, #18, and #20 (fetch-and-parse
+// only, no storage) work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
 // secret (Worker settings -> Variables and Secrets -> Add, type "Secret") —
 // get a free key at pirateweather.net. Job #16 additionally requires a
 // RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
@@ -645,6 +657,12 @@ export default {
     const alertOptions = isEveningRun ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
     ctx.waitUntil(
       runEntryAlerts(env, "scheduled", alertOptions).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
+    );
+    // Job #24 — runs on both fires (its own KV dedup makes that safe, and
+    // twice-daily freshness is worth it for a news source), unlike the two
+    // below which are gated to once a day.
+    ctx.waitUntil(
+      runBloodHorseImport(env).catch((err) => console.error("BloodHorse import failed", err.message))
     );
     // These two piggyback on job #16's Cron Trigger rather than needing
     // their own, but only make sense once a day — gated to the morning fire
@@ -1530,6 +1548,16 @@ async function handleRequest(request, env) {
       } catch (err) {
         return json({ error: `Entry alerts run failed: ${err.message}` }, 500);
       }
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual trigger for job #24's runBloodHorseImport() — same reasoning
+    // as /debug-run-scheduled above (also piggybacks the real Cron Trigger
+    // already; this is the on-demand equivalent for testing without waiting
+    // for the next firing).
+    if (url.pathname === "/debug-run-bloodhorse" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runBloodHorseImport(env);
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -6017,6 +6045,212 @@ async function fetchNyraNews(track) {
   }
 
   return { source: listUrl, track, fetchedAt: new Date().toISOString(), articles };
+}
+
+// ---------- BloodHorse News (job #24) ----------
+// Confirmed real ask 2026-09-18: "pull quotes from these rss feeds as well"
+// (https://www.bloodhorse.com/horse-racing/pages/rss — a landing page
+// listing several category feeds, not a feed itself; BLOODHORSE_FEED_URL
+// below is the real one, verified directly). Existing prior research in
+// this codebase (see job #17's own comment) flagged bloodhorse.com as
+// Incapsula-blocked — re-verified 2026-09-18 and that's now stale: both the
+// RSS feed and individual article pages return real content to a plain
+// fetch with a browser User-Agent, no challenge shell. Worth re-checking
+// occasionally rather than trusting either finding forever.
+//
+// Architecturally different from jobs #7/#17/#19/#20 on purpose. Those are
+// entirely client-triggered (index.html polls the Worker's read-only
+// endpoint, matches trainers, dedupes via localStorage, writes the notes
+// itself) — which is exactly what caused a real incident this same day:
+// opening the app in a browser that had never run those polls before
+// replayed the ENTIRE import history from scratch, since localStorage is
+// per-device with no server memory of what had already been processed.
+// This job instead runs entirely inside the Worker — fetch, parse, match
+// against tracked trainers (resolveTrackedTrainer(), same function jobs
+// #7/#17 rely on client-side), and write, all in one place — piggybacking
+// job #16's Cron Trigger (both daily fires, see runBloodHorseImport()'s own
+// comment) rather than depending on anyone's browser ever being open.
+// Dedup is server-side KV, one key per article ID (bloodhorseSeenKvKey(),
+// same one-flag-per-item shape as raceNotifyKvKey() — deliberately NOT one
+// big JSON set, which would need a read-modify-write on every single check
+// and reintroduce exactly the KV race this project has already hit more
+// than once), TTL'd so the keys don't accumulate forever. GET
+// /debug-run-bloodhorse triggers this on demand, same passphrase gate as
+// every other route that mutates shared state.
+//
+// Horse identification: BloodHorse's own house style doesn't use NYRA's
+// "[post N, Jockey]" bracket convention, so this doesn't attempt NYRA's
+// multi-horse-per-article tracking — extractNyraTitleHorse() (a generic
+// "does this headline lead with a capitalized name" heuristic despite the
+// name, already reused across sources the same way lastNameKey() and
+// resolveTrackedTrainer() are) supplies ONE lead horse per article from its
+// headline, and every quote found gets attached to that horse. An article
+// whose headline isn't horse-led (most BloodHorse content — facilities,
+// sales, policy news) correctly yields nothing, same "no guess" acceptance
+// as every other job here. NYRA_RETIRED_HORSE_SIGNAL_RE (also reused as-is)
+// filters retirement/legacy pieces the same way it does for job #20.
+const BLOODHORSE_FEED_URL = "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing";
+const BLOODHORSE_MAX_ARTICLES_PER_RUN = 15;
+
+function bloodhorseSeenKvKey(articleId) {
+  return `bloodhorse:seen:${String(articleId).replace(/[^a-z0-9]/gi, "").slice(0, 40)}`;
+}
+
+// Quote-attribution gate, either order ("X said Y" is the "before" form
+// here from the reader's perspective — quote first, name after — since
+// that's BloodHorse's own dominant house style; the reverse ("said X:
+// 'quote'") is checked as a fallback). Matches HRN's own "quote is the
+// relevance filter" approach (job #17) — an article with plenty of
+// "trainer X" mentions but zero actual quoted speech yields nothing, rather
+// than guessing at unattributed prose.
+function extractBloodHorseSections(paragraphs, titleHorseGuess, trackedTrainers) {
+  if (!titleHorseGuess) return [];
+  // Same contamination check added to extractNyraSections() earlier this
+  // same day, for the same reason: extractNyraTitleHorse() (reused as-is
+  // here) can't tell a trainer-led headline from a horse-led one on its
+  // own — confirmed real on a live BloodHorse title ("Our Moneyman Brings
+  // Calhoun Back to Pennsylvania Derby"), which produced the guess "Our
+  // Moneyman Brings Calhoun Back" instead of stopping at the horse's name.
+  // Rather than guess which word range is real, discard the whole guess
+  // when a tracked trainer's name shows up inside it — no note beats a
+  // wrong one. Checked by LAST NAME, not the full tracked string: the real
+  // headline above contains only "Calhoun," never the full tracked
+  // "William Bret Calhoun," so a full-string .includes() (what
+  // extractNyraSections() itself uses, working from surname-only
+  // attributions built up locally per article) missed it entirely in
+  // testing — confirmed real, not theoretical.
+  const guessWords = titleHorseGuess.split(/\s+/).map((w) => w.toLowerCase().replace(/[.,]/g, ""));
+  if (trackedTrainers.some((name) => guessWords.includes(lastNameKey(name)))) return [];
+  // Confirmed real gap testing against a live article (2026-09-18): the
+  // dominant BloodHorse house style is `"Quote," Name said.` — the name
+  // sits BETWEEN the quote and the verb, not after it. quoteFirstRe
+  // originally expected the verb before the name (matched nothing on a
+  // real article that had 18 clearly-quoted paragraphs); fixed to require
+  // the name immediately after the quote's closing punctuation, verb last.
+  // nameFirstRe covers the other real style, `Name said, "Quote."`.
+  const sections = {}; // trainerKey -> { trainerName, parts: [] }
+  const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)\b/g;
+  const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
+  for (const para of paragraphs) {
+    if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(para)) continue;
+    const found = [];
+    for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
+    for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
+    for (const { quote, name } of found) {
+      const resolved = resolveTrackedTrainer(name, trackedTrainers);
+      if (!resolved) continue; // unmatched or ambiguous surname — don't guess
+      // Known accepted limitation, not a bug: every quote found anywhere in
+      // the article gets attached to the ONE lead horse from the headline —
+      // no NYRA-style bracket convention exists here to track a horse
+      // change mid-article. A multi-horse piece that quotes a second
+      // trainer about a DIFFERENT horse (confirmed this happens in
+      // practice — a rival's reaction quote in the same recap) will
+      // misfile that second quote under the lead horse. Accepted for now
+      // given this source's unverified-in-advance structure; revisit if it
+      // turns out to happen often once this is actually running.
+      const key = lastNameKey(resolved);
+      if (!sections[key]) sections[key] = { trainerName: resolved, parts: [] };
+      sections[key].parts.push(quote);
+    }
+  }
+  return Object.values(sections).map((s) => ({
+    trainerName: s.trainerName,
+    horseNames: [titleHorseGuess],
+    text: s.parts.join(" "),
+  }));
+}
+
+// Piggybacks job #16's Cron Trigger (both the morning and evening fires —
+// unlike backfillRaceDayResults()/dedupeStableTourNotes(), which are gated
+// to morning-only, this is cheap enough (BLOODHORSE_MAX_ARTICLES_PER_RUN
+// caps it) and benefits from checking twice a day, not once) rather than
+// needing its own. Also reachable on demand at GET /debug-run-bloodhorse.
+async function runBloodHorseImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const listRes = await fetch(BLOODHORSE_FEED_URL, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 900, cacheEverything: true },
+    });
+    if (!listRes.ok) throw new Error(`BloodHorse feed returned HTTP ${listRes.status}`);
+    const listXml = await listRes.text();
+    const items = [];
+    for (const m of listXml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+      const block = m[1];
+      const link = (block.match(/<link>(.*?)<\/link>/) || [])[1];
+      const title = decodeEntities((block.match(/<title>(.*?)<\/title>/) || [])[1] || "").trim();
+      const idMatch = link && link.match(/\/articles\/(\d+)\//);
+      if (!link || !title || !idMatch) continue;
+      items.push({ link, title, id: idMatch[1] });
+    }
+
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+
+    for (const item of items.slice(0, BLOODHORSE_MAX_ARTICLES_PER_RUN)) {
+      const seenKey = bloodhorseSeenKvKey(item.id);
+      if (await env.STABLE_KV.get(seenKey)) continue;
+      checked++;
+      try {
+        if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(item.title)) continue;
+        const titleHorseGuess = extractNyraTitleHorse(item.title);
+        if (!titleHorseGuess) continue;
+        const articleRes = await fetch(item.link, {
+          headers: { "User-Agent": BROWSER_UA },
+          cf: { cacheTtl: 3600, cacheEverything: true },
+        });
+        if (!articleRes.ok) continue;
+        const html = await articleRes.text();
+        const bodyIdx = html.indexOf('class="article-body"');
+        if (bodyIdx === -1) continue;
+        const bodyHtml = html.slice(bodyIdx, Math.min(bodyIdx + 20000, html.length));
+        const paragraphs = [...bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
+          .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
+          .filter(Boolean);
+        if (!paragraphs.length) continue;
+        const sections = extractBloodHorseSections(paragraphs, titleHorseGuess, state.trainers);
+        for (const section of sections) {
+          for (const horseName of section.horseNames) {
+            const dup = notes.find((n) => n.trainer === section.trainerName && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            if (dup) continue;
+            notes.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              trainer: section.trainerName,
+              horse: horseName,
+              note: section.text,
+              date: "",
+              source: item.title,
+              link: item.link,
+              autoImported: true,
+              sentiment: null,
+              importedVia: "bloodhorse",
+              capturedAt: new Date().toISOString(),
+            });
+            addedAny = true;
+            written++;
+          }
+        }
+      } finally {
+        // Marked seen even on a no-match article (0 sections, no horse
+        // guess, retirement-filtered, fetch failure) — same reasoning as
+        // every other seen-flag in this file: an article that yielded
+        // nothing today won't yield anything on a re-check either, and not
+        // marking it would mean re-fetching it forever.
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+      }
+    }
+
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+    }
+    return { checked, written };
+  } catch (err) {
+    console.error("BloodHorse import failed", err.message);
+    return { checked, written, error: err.message };
+  }
 }
 
 // ---------- SmartPony partner quotes (job #18) ----------
