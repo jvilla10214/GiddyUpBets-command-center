@@ -487,11 +487,20 @@
 //    those polls replayed the ENTIRE import history from scratch. This job
 //    can't have that failure mode — its dedup (bloodhorseSeenKvKey(), one
 //    KV flag per article ID) lives in the Worker, not the browser.
+// 25. TDN Main Feed (Cron Trigger -> scheduled(), piggybacking job #16's,
+//    plus manual GET /debug-run-tdn-main) — see runTdnMainImport()'s own
+//    comment for the full design. Same fully-server-side shape as job #24
+//    (KV dedup, no client/localStorage involvement), widening job #7's TDN
+//    coverage beyond just the Saratoga Notebook tag feed to TDN's general
+//    news feed — reuses extractGenericQuoteSections() (shared with job #24,
+//    renamed from its original BloodHorse-only name once a second source
+//    needed the same quote-attribution logic) rather than job #7's own
+//    Notebook-specific parser, which doesn't fit general news articles.
 // Deploy: paste into the dashboard's Workers editor -> Deploy. Requires a KV
 // namespace bound as STABLE_KV (Worker settings -> Bindings -> KV Namespace)
-// for jobs #1, #3, #5, #9, #15, #16, #21, #22, and #24 to work — jobs #2, #4,
-// #6, #7, #8, #10, #11, #12, #13, #14, #17, #18, and #20 (fetch-and-parse
-// only, no storage) work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
+// for jobs #1, #3, #5, #9, #15, #16, #21, #22, #24, and #25 to work — jobs
+// #2, #4, #6, #7, #8, #10, #11, #12, #13, #14, #17, #18, and #20
+// (fetch-and-parse only, no storage) work without it. Job #8 additionally requires a PIRATE_WEATHER_API_KEY
 // secret (Worker settings -> Variables and Secrets -> Add, type "Secret") —
 // get a free key at pirateweather.net. Job #16 additionally requires a
 // RESEND_API_KEY secret (same Variables and Secrets screen — get a free key
@@ -664,11 +673,14 @@ export default {
     ctx.waitUntil(
       runEntryAlerts(env, "scheduled", alertOptions).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
     );
-    // Job #24 — runs on both fires (its own KV dedup makes that safe, and
-    // twice-daily freshness is worth it for a news source), unlike the two
-    // below which are gated to once a day.
+    // Jobs #24 and #25 — run on both fires (their own KV dedup makes that
+    // safe, and twice-daily freshness is worth it for a news source),
+    // unlike the two below which are gated to once a day.
     ctx.waitUntil(
       runBloodHorseImport(env).catch((err) => console.error("BloodHorse import failed", err.message))
+    );
+    ctx.waitUntil(
+      runTdnMainImport(env).catch((err) => console.error("TDN main feed import failed", err.message))
     );
     // These two piggyback on job #16's Cron Trigger rather than needing
     // their own, but only make sense once a day — gated to the morning fire
@@ -1564,6 +1576,14 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-bloodhorse" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runBloodHorseImport(env);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual trigger for job #25's runTdnMainImport() — same reasoning as
+    // /debug-run-bloodhorse above.
+    if (url.pathname === "/debug-run-tdn-main" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runTdnMainImport(env);
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -5837,7 +5857,16 @@ async function fetchDrfNews() {
 // like "Sandman Will Start Stud Career in 2027 at Rockridge" and
 // "Millionaire Valentine Candy to Stand at Leadem Farm" that the original
 // phrase list — built against NYRA content — didn't cover).
-const NYRA_RETIRED_HORSE_SIGNAL_RE = /\bretir(?:ed|ement|es|ing)\b|\bfinal (?:start|race) of (?:his|her) career\b|\bcareer-ending\b|\bhangs? up\b|\bhung up\b|\bpensioned\b|\bOld Friends\b|\bsanctuary for retired\b|\b(?:standing|stands|enters?) at stud\b|\bstud duty\b|\bstud career\b|\bto stand at\b|\bwill stand at\b|\bbreeding career\b|\bbroodmare career\b/i;
+// "to/will stand ... at" allows one "in COUNTRY" gap between "stand" and
+// "at" — added after job #25 (TDN main feed) turned up a real miss
+// against a live title, "Antiquarian to Stand in Japan at Arrow Stud"
+// (an international stallion-relocation announcement), which the
+// original bare "to stand at"/"will stand at" phrases didn't cover.
+// Verified this doesn't introduce a false positive against unrelated
+// "stands ... at" racing prose ("Horse Stands a Good Chance at Winning
+// the Derby") — the optional gap is anchored to look like "in <country>",
+// not any arbitrary phrase.
+const NYRA_RETIRED_HORSE_SIGNAL_RE = /\bretir(?:ed|ement|es|ing)\b|\bfinal (?:start|race) of (?:his|her) career\b|\bcareer-ending\b|\bhangs? up\b|\bhung up\b|\bpensioned\b|\bOld Friends\b|\bsanctuary for retired\b|\b(?:standing|stands|enters?) at stud\b|\bstud duty\b|\bstud career\b|\b(?:to|will) stand(?:\s+in\s+\w+)?\s+at\b|\bbreeding career\b|\bbroodmare career\b/i;
 const NYRA_NEWS_TRACKS = ["saratoga", "belmont"];
 const NYRA_BASE = "https://www.nyra.com";
 function nyraNewsListUrl(track) { return `${NYRA_BASE}/${track}/news/`; }
@@ -5929,6 +5958,15 @@ function extractNyraTitleHorse(title) {
   // likely a swallowed verb phrase than a real name, so it's discarded
   // rather than risked.
   if (guess.split(/\s+/).length > 4) return null;
+  // A single-word guess that's just a capitalized sentence-starting
+  // article ("A $25,000 Claim Pays Off at Keeneland for Owner-Trainer Sam
+  // Wilensky" guessed bare "A") is never a real horse name — confirmed
+  // real on a live TDN title (job #25). Deliberately a tiny, purely
+  // grammatical stoplist (not an attempt to catch every bad guess — see
+  // extractGenericQuoteSections()'s own body-cross-check for the broader
+  // net) since "A"/"An"/"The" alone can never legitimately be what's
+  // left after the capitalized-word-run logic above, regardless of source.
+  if (["a", "an", "the"].includes(guess.toLowerCase())) return null;
   return guess;
 }
 
@@ -6200,17 +6238,22 @@ const BLOODHORSE_FEED_URLS = [
 const BLOODHORSE_MAX_ARTICLES_PER_RUN = 15;
 
 // Title-level topic filter, checked before extractNyraTitleHorse() (and
-// before the article fetch, saving a wasted request) — added after the
-// widened 3-feed pull's first real backlog run produced two live false
-// positives: a Keeneland yearling-sale purchase ("Amo Racing Lands $1.65M
-// Up to the Mark Colt") got its buyer's name extracted as a "horse," and a
-// jockey-hospitalization story ("Geroux 'In Good Spirits' While Remaining
-// in ICU") got the JOCKEY's surname extracted as a horse entirely — neither
-// is a race-recap trainer quote, and the second isn't even about a horse.
-// Same "no guess beats a wrong guess" philosophy as NYRA_RETIRED_HORSE_SIGNAL_RE,
-// just aimed at a different pair of off-topic categories this wider feed
-// set pulls in that a single race-only feed didn't.
-const BLOODHORSE_NON_RACE_SIGNAL_RE =
+// before the article fetch, saving a wasted request) — added after
+// BloodHorse's widened 3-feed pull's first real backlog run produced two
+// live false positives: a Keeneland yearling-sale purchase ("Amo Racing
+// Lands $1.65M Up to the Mark Colt") got its buyer's name extracted as a
+// "horse," and a jockey-hospitalization story ("Geroux 'In Good Spirits'
+// While Remaining in ICU") got the JOCKEY's surname extracted as a horse
+// entirely — neither is a race-recap trainer quote, and the second isn't
+// even about a horse. Same "no guess beats a wrong guess" philosophy as
+// NYRA_RETIRED_HORSE_SIGNAL_RE, just aimed at a different pair of off-topic
+// categories a wide industry-news feed pulls in that a single race-only
+// feed didn't. Not BloodHorse-specific despite where it was first needed —
+// TDN's main feed (job #25) is the same kind of general industry-news mix
+// (sale recaps, injury news, race recaps all mixed together) and hits the
+// exact same two categories, so this is shared across both rather than
+// duplicated per source.
+const NON_RACE_SIGNAL_RE =
   /\$[\d,.]+\s?(?:million|thousand|[MK]\b)|\bKeeneland Sale\b|\byearling\b|\bauction\b|\bsale-topping\b|\bBook \d\b|\bhospitalized\b|\bhospital\b|\bICU\b|\bintensive care\b|\bsurgery\b|\bcritical condition\b/i;
 
 
@@ -6220,13 +6263,38 @@ function bloodhorseSeenKvKey(articleId) {
 
 // Quote-attribution gate, either order ("X said Y" is the "before" form
 // here from the reader's perspective — quote first, name after — since
-// that's BloodHorse's own dominant house style; the reverse ("said X:
-// 'quote'") is checked as a fallback). Matches HRN's own "quote is the
-// relevance filter" approach (job #17) — an article with plenty of
-// "trainer X" mentions but zero actual quoted speech yields nothing, rather
-// than guessing at unattributed prose.
-function extractBloodHorseSections(paragraphs, titleHorseGuess, trackedTrainers) {
+// that's the dominant house style at both sources this is used for
+// (BloodHorse and TDN's main feed, confirmed directly against real
+// articles from each); the reverse ("said X: 'quote'") is checked as a
+// fallback). Matches HRN's own "quote is the relevance filter" approach
+// (job #17) — an article with plenty of "trainer X" mentions but zero
+// actual quoted speech yields nothing, rather than guessing at
+// unattributed prose. Not BloodHorse-specific despite the name it was
+// first written under — genuinely generic given paragraphs/a title
+// horse guess/the tracked trainer list, so job #25 (TDN main feed) reuses
+// it as-is rather than duplicating the same regex pair a second time.
+function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainers) {
   if (!titleHorseGuess) return [];
+  // Body cross-check: the guessed phrase must actually appear somewhere in
+  // the article's own paragraphs, verbatim, or it's discarded — added
+  // after testing job #25 (TDN main feed) against a real random batch of
+  // fetched titles turned up a materially higher garbage-guess rate than
+  // BloodHorse ever showed (TDN's headlines are far more editorial/punny —
+  // "Daughter Of Group 1 Winner Ballydoyle Set For Gowran Debut" guessed
+  // "Daughter Of Group" instead of the real horse "Ballydoyle"; "Render
+  // Judgment Vet Scratch from Jockey Club Gold Cup" over-captured "Vet
+  // Scratch" onto the real horse "Render Judgment"; "Stewart Elliott
+  // Reaches 6000 Win Milestone..." guessed a JOCKEY's own name, not a
+  // horse at all). Confirmed directly against these three real articles:
+  // the bad guess appears ZERO times in the body in every case, while a
+  // real horse name (even one only mentioned once in a short article,
+  // like "Render Judgment") still clears a >=1 bar — so ">=1 occurrence"
+  // is the right threshold, not >=2, which would have wrongly rejected
+  // that legitimate single-mention case. This check is here (not only in
+  // the BloodHorse/TDN callers) so every current and future caller of this
+  // shared function gets the same safety net for free.
+  const guessAppearsInBody = paragraphs.some((p) => p.includes(titleHorseGuess));
+  if (!guessAppearsInBody) return [];
   // Same contamination check added to extractNyraSections() earlier this
   // same day, for the same reason: extractNyraTitleHorse() (reused as-is
   // here) can't tell a trainer-led headline from a horse-led one on its
@@ -6342,7 +6410,7 @@ async function runBloodHorseImport(env) {
       checked++;
       try {
         if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(item.title)) continue;
-        if (BLOODHORSE_NON_RACE_SIGNAL_RE.test(item.title)) continue;
+        if (NON_RACE_SIGNAL_RE.test(item.title)) continue;
         const titleHorseGuess = extractNyraTitleHorse(item.title);
         if (!titleHorseGuess) continue;
         const articleRes = await fetch(item.link, {
@@ -6358,7 +6426,7 @@ async function runBloodHorseImport(env) {
           .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
           .filter(Boolean);
         if (!paragraphs.length) continue;
-        const sections = extractBloodHorseSections(paragraphs, titleHorseGuess, state.trainers);
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers);
         for (const section of sections) {
           for (const horseName of section.horseNames) {
             const dup = notes.find((n) => n.trainer === section.trainerName && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
@@ -6397,6 +6465,138 @@ async function runBloodHorseImport(env) {
     return { checked, written };
   } catch (err) {
     console.error("BloodHorse import failed", err.message);
+    return { checked, written, error: err.message };
+  }
+}
+
+// ---------- TDN main feed (job #25) ----------
+// Widens job #7's TDN coverage beyond just the Saratoga Notebook tag feed
+// (TDN_NOTEBOOK_FEED_URL) — that job's parser (extractTdnSections) is
+// finely tuned to the Notebook column's own sequential-blurb format
+// (multiple trainers back to back, "trainer NAME" triggers), which
+// doesn't fit TDN's general news articles at all. This instead treats
+// TDN's main feed the same generic way BloodHorse (job #24) is treated:
+// one lead horse guessed from the headline, every quote found in the body
+// attached to it — reusing extractGenericQuoteSections() as-is rather
+// than writing a third copy of the same quote-attribution regex pair.
+//
+// Confirmed directly against real fetched articles (2026-09-18): TDN's
+// main-feed articles use the SAME itemprop="articleBody" marker job #7's
+// extractTdnArticleBody() already parses (reused as-is here — it returns
+// the raw body HTML, so the <p> extraction/decode step below matches
+// BloodHorse's own inline version exactly, not something new), and the
+// SAME dominant "Quote," Name said. attribution style BloodHorse uses.
+//
+// Dedup key is the URL SLUG, not a numeric article ID — TDN's RSS <item>
+// carries no <guid> separate from its <link>, and the link itself has no
+// number anywhere (https://www.thoroughbreddailynews.com/some-slug/,
+// confirmed real), unlike BloodHorse's /articles/NNNN/ convention. A
+// WordPress permalink slug doesn't change once published, so it's just as
+// stable a per-article key as a numeric ID would be.
+const TDN_MAIN_FEED_URL = "https://www.thoroughbreddailynews.com/feed/";
+const TDN_MAIN_MAX_ARTICLES_PER_RUN = 15;
+
+function tdnMainSlugFromLink(link) {
+  const m = /\/([a-z0-9-]+)\/?$/i.exec((link || "").split(/[?#]/)[0]);
+  return m ? m[1] : null;
+}
+function tdnMainSeenKvKey(slug) {
+  return `tdnmain:seen:${String(slug).replace(/[^a-z0-9]/gi, "").slice(0, 40)}`;
+}
+
+// Piggybacks job #16's Cron Trigger the same way BloodHorse (job #24)
+// does — see that job's own comment on why both daily fires (not just the
+// morning one) make sense here. Also reachable on demand at GET
+// /debug-run-tdn-main.
+async function runTdnMainImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const listRes = await fetch(TDN_MAIN_FEED_URL, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 900, cacheEverything: true },
+    });
+    if (!listRes.ok) throw new Error(`TDN main feed returned HTTP ${listRes.status}`);
+    const listXml = await listRes.text();
+    const items = [];
+    for (const m of listXml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+      const block = m[1];
+      const link = (block.match(/<link>(.*?)<\/link>/) || [])[1];
+      const title = decodeEntities((block.match(/<title>(.*?)<\/title>/) || [])[1] || "").trim();
+      const slug = link ? tdnMainSlugFromLink(link) : null;
+      if (!link || !title || !slug) continue;
+      items.push({ link, title, slug });
+    }
+
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+
+    // Feed's own order is already newest-first (standard RSS convention,
+    // confirmed against a real fetch) — no cross-feed merge/re-sort needed
+    // the way BloodHorse's 3-feed pull required, since this job only
+    // watches one feed. Still walks the FULL list rather than a fixed
+    // top-N slice, same fix BloodHorse needed for its own stalled-window
+    // bug — an already-seen item costs only a cheap KV read and doesn't
+    // block the run from reaching older unseen articles further down.
+    for (const item of items) {
+      if (checked >= TDN_MAIN_MAX_ARTICLES_PER_RUN) break;
+      const seenKey = tdnMainSeenKvKey(item.slug);
+      if (await env.STABLE_KV.get(seenKey)) continue;
+      checked++;
+      try {
+        if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(item.title)) continue;
+        if (NON_RACE_SIGNAL_RE.test(item.title)) continue;
+        const titleHorseGuess = extractNyraTitleHorse(item.title);
+        if (!titleHorseGuess) continue;
+        const articleRes = await fetch(item.link, {
+          headers: { "User-Agent": BROWSER_UA },
+          cf: { cacheTtl: 3600, cacheEverything: true },
+        });
+        if (!articleRes.ok) continue;
+        const html = await articleRes.text();
+        const bodyHtml = extractTdnArticleBody(html);
+        if (!bodyHtml) continue;
+        const paragraphs = [...bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
+          .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
+          .filter(Boolean);
+        if (!paragraphs.length) continue;
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers);
+        for (const section of sections) {
+          for (const horseName of section.horseNames) {
+            const dup = notes.find((n) => n.trainer === section.trainerName && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            if (dup) continue;
+            notes.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              trainer: section.trainerName,
+              horse: horseName,
+              note: section.text,
+              date: "",
+              source: item.title,
+              link: item.link,
+              autoImported: true,
+              sentiment: null,
+              importedVia: "tdn-main",
+              capturedAt: new Date().toISOString(),
+            });
+            addedAny = true;
+            written++;
+          }
+        }
+      } finally {
+        // Same "an article that yielded nothing today won't yield anything
+        // on a re-check either" reasoning as every other seen-flag here.
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+      }
+    }
+
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+    }
+    return { checked, written };
+  } catch (err) {
+    console.error("TDN main feed import failed", err.message);
     return { checked, written, error: err.message };
   }
 }
