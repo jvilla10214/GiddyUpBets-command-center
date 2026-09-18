@@ -5773,13 +5773,30 @@ function stripNyraBreedingDescriptor(text) {
 // capitalized again (i.e. the lowercase word is bridging two more name
 // words, not starting the headline's verb). Verified against every title
 // in a real /saratoga/news/ listing pull (see the job's own commit).
+//
+// Confirmed real bug (2026-09-18): that bridging rule alone treats ANY
+// lowercase word followed by a capitalized one as still-part-of-the-name —
+// but a headline verb ("tops", "wins", "returns", "eyes"...) is *also*
+// lowercase and *also* followed by a capitalized word (the rest of the
+// sentence, e.g. a stakes name or "G1"), so "Forever Young tops G1 Jockey
+// Club Gold Cup field..." consumed the entire clause as the "horse name"
+// instead of stopping at "Young". NYRA_TITLE_BRIDGE_WORDS narrows bridging
+// to the small, closed set of connector words real horse names actually
+// use — a verb is never in this list, so it now correctly ends the name.
+// "homebred" included specifically for "Blue Heaven Farm's Kentucky
+// homebred Go for Launch saved ground..." — without it, the loop stops
+// right at "Kentucky" (before stripNyraBreedingDescriptor() ever gets a
+// "bred " substring to strip through), losing the actual horse name
+// entirely instead of just leaving the descriptor in. Confirmed as a real
+// regression risk while narrowing this list, not theoretical.
+const NYRA_TITLE_BRIDGE_WORDS = new Set(["the", "a", "an", "of", "in", "and", "or", "for", "de", "la", "el", "homebred"]);
 function extractNyraTitleHorse(title) {
   const words = title.split(/\s+/);
   const nameWords = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const isCap = /^[A-Z]/.test(w);
-    const bridgesToCap = !isCap && i + 1 < words.length && /^[A-Z]/.test(words[i + 1]);
+    const bridgesToCap = !isCap && NYRA_TITLE_BRIDGE_WORDS.has(w.toLowerCase()) && i + 1 < words.length && /^[A-Z]/.test(words[i + 1]);
     if (isCap || bridgesToCap) { nameWords.push(w); continue; }
     break;
   }
