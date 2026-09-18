@@ -6104,7 +6104,19 @@ async function fetchNyraNews(track) {
 // sales, policy news) correctly yields nothing, same "no guess" acceptance
 // as every other job here. NYRA_RETIRED_HORSE_SIGNAL_RE (also reused as-is)
 // filters retirement/legacy pieces the same way it does for job #20.
-const BLOODHORSE_FEED_URL = "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing";
+// Widened from a single feed ("thoroughbred-racing") after a direct
+// same-day comparison of all 5 of BloodHorse's category feeds: confirmed
+// most of the real race-recap trainer-quote content (post-race stakes
+// wrap-ups like "Leading Change Pulls the Upset in Travers Stakes") lives
+// in "thoroughbred-breaking-news" and "todays-headlines" instead, which
+// "thoroughbred-racing" alone was missing entirely. Left off
+// "thoroughbred-breeding" and "thoroughbred-sales" — confirmed those two
+// don't carry race-recap trainer-quote content, just breeding/sales news.
+const BLOODHORSE_FEED_URLS = [
+  "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing",
+  "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-breaking-news",
+  "https://www.bloodhorse.com/horse-racing/feeds/news/todays-headlines",
+];
 const BLOODHORSE_MAX_ARTICLES_PER_RUN = 15;
 
 function bloodhorseSeenKvKey(articleId) {
@@ -6184,21 +6196,31 @@ async function runBloodHorseImport(env) {
   let checked = 0;
   let written = 0;
   try {
-    const listRes = await fetch(BLOODHORSE_FEED_URL, {
-      headers: { "User-Agent": BROWSER_UA },
-      cf: { cacheTtl: 900, cacheEverything: true },
-    });
-    if (!listRes.ok) throw new Error(`BloodHorse feed returned HTTP ${listRes.status}`);
-    const listXml = await listRes.text();
-    const items = [];
-    for (const m of listXml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
-      const block = m[1];
-      const link = (block.match(/<link>(.*?)<\/link>/) || [])[1];
-      const title = decodeEntities((block.match(/<title>(.*?)<\/title>/) || [])[1] || "").trim();
-      const idMatch = link && link.match(/\/articles\/(\d+)\//);
-      if (!link || !title || !idMatch) continue;
-      items.push({ link, title, id: idMatch[1] });
+    // One article (e.g. a Travers recap) routinely appears in more than one
+    // of these feeds — dedupe by article id across all of them BEFORE the
+    // per-article seen-check below, so a cross-listed article is only
+    // fetched/processed once per run.
+    const itemsById = new Map();
+    for (const feedUrl of BLOODHORSE_FEED_URLS) {
+      const listRes = await fetch(feedUrl, {
+        headers: { "User-Agent": BROWSER_UA },
+        cf: { cacheTtl: 900, cacheEverything: true },
+      });
+      if (!listRes.ok) {
+        console.error(`BloodHorse feed ${feedUrl} returned HTTP ${listRes.status}`);
+        continue; // one bad feed shouldn't sink the whole run
+      }
+      const listXml = await listRes.text();
+      for (const m of listXml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+        const block = m[1];
+        const link = (block.match(/<link>(.*?)<\/link>/) || [])[1];
+        const title = decodeEntities((block.match(/<title>(.*?)<\/title>/) || [])[1] || "").trim();
+        const idMatch = link && link.match(/\/articles\/(\d+)\//);
+        if (!link || !title || !idMatch) continue;
+        if (!itemsById.has(idMatch[1])) itemsById.set(idMatch[1], { link, title, id: idMatch[1] });
+      }
     }
+    const items = [...itemsById.values()];
 
     const state = await readNotesAndTrainers(env);
     const notes = state.notes;
