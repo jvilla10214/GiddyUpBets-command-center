@@ -461,6 +461,12 @@
 //    horse's full recorded race recap whenever it's entered again — a
 //    trigger independent of tracked-trainer status or regular notes; a
 //    horse can appear in the digest purely because it has a recap on file.
+//    The index is per-track at rest (one racerecap-index:{track} KV key
+//    per track, written by whichever track's raceday record the recap was
+//    attached to), but read CROSS-track (readAllRecapIndexes(), added
+//    2026-09-18) — a horse's recap follows the horse, not the track it
+//    happened at, so a Saratoga recap still surfaces in a Belmont or
+//    Keeneland entry-alert email once that horse is entered there next.
 // 23. Race Recap Doc re-sync (POST /raceday/recap/resync) — re-pulls ONE
 //    date's recaps straight from the shared Google Doc the user writes them
 //    in by hand, so an edit made there after the original import doesn't
@@ -1681,7 +1687,9 @@ async function handleRequest(request, env) {
         const untrackedHorseNames = new Set(
           state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
         );
-        const recapIndex = await readRecapIndex(env, track);
+        // Cross-track recap lookup, same as runEntryAlerts() — see
+        // readAllRecapIndexes()'s own comment.
+        const recapIndex = await readAllRecapIndexes(env);
         const fullCardRecapCache = {};
         const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
         let result;
@@ -1702,7 +1710,7 @@ async function handleRequest(request, env) {
             const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
             const recaps = [];
             for (const r of recapsRaw) {
-              recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, track, r.date, fullCardRecapCache) });
+              recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, r.track, r.date, fullCardRecapCache) });
             }
             if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
             const notes = notesForHorse(state.notes, horse.trainer, horse.name);
@@ -2100,22 +2108,56 @@ async function readRecapIndex(env, track) {
   return parsed && typeof parsed === "object" ? parsed : {};
 }
 
-// The horse->recap reverse index (readRecapIndex above) only ever stores
-// per-race recap text, not the whole-card writeup — that lives on the
-// raceday record itself (record.fullCardRecap), not per-horse, so it can't
-// be denormalized into the index the same way without going stale: the
-// manual "Full Card Recap" edit button (POST /raceday/fullcard) writes it
-// with an EMPTY recapsByRace, which would leave any already-indexed horses
-// for that date pointing at a stale/missing value if it were baked in at
-// index-write time instead of looked up here. `cache` is a plain object the
-// caller passes in and reuses across every horse in one runEntryAlerts()/
-// collectTodaysRaceGroupsForPreview() call, so two horses who ran on the
-// same date only cost one KV read between them, not one each.
+// Merges every track's own recap index into one horse -> recaps map, each
+// entry tagged with which track it actually happened at. Confirmed real
+// ask (2026-09-18): a recap should follow the HORSE, not stay siloed to
+// whichever track it originally ran at — a horse that ran (and got a
+// recap) at Saratoga and is now entered at Belmont or Keeneland should
+// still surface that Saratoga recap in the new track's entry-alert email.
+// Reads every known track's own racerecap-index:{track} KV key (one per
+// ENTRIES_SOURCE_BY_TRACK entry — a cheap miss for a track with no recaps
+// on file yet) rather than switching to one combined global index, so the
+// existing per-track write path (upsertRaceRecapsBulk) needs no changes
+// at all — this only touches the read side. Called once per
+// runEntryAlerts()/collectTodaysRaceGroupsForPreview() invocation (not
+// once per track inside their per-track loops), so a run covering all of
+// ALERT_TRACKS still costs one read per KNOWN track, not
+// tracks-times-known-tracks.
+async function readAllRecapIndexes(env) {
+  const tracks = Object.keys(ENTRIES_SOURCE_BY_TRACK);
+  const perTrackIndexes = await Promise.all(tracks.map((t) => readRecapIndex(env, t)));
+  const merged = {};
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i];
+    for (const [horseKey, entries] of Object.entries(perTrackIndexes[i])) {
+      if (!merged[horseKey]) merged[horseKey] = [];
+      for (const entry of entries) merged[horseKey].push({ ...entry, track });
+    }
+  }
+  return merged;
+}
+
+// The horse->recap reverse index (readRecapIndex/readAllRecapIndexes above)
+// only ever stores per-race recap text, not the whole-card writeup — that
+// lives on the raceday record itself (record.fullCardRecap), not per-horse,
+// so it can't be denormalized into the index the same way without going
+// stale: the manual "Full Card Recap" edit button (POST /raceday/fullcard)
+// writes it with an EMPTY recapsByRace, which would leave any already-
+// indexed horses for that date pointing at a stale/missing value if it
+// were baked in at index-write time instead of looked up here. `cache` is
+// a plain object the caller passes in and reuses across every horse in one
+// runEntryAlerts()/collectTodaysRaceGroupsForPreview() call, so two horses
+// who ran on the same track+date only cost one KV read between them, not
+// one each. Cache key includes `track` (not just `date`) — now that a
+// horse's recaps can come from more than one track in the same run (see
+// readAllRecapIndexes), two different tracks' same-numbered date (e.g. two
+// tracks both having an "08-30") must not collide on one cache entry.
 async function readFullCardRecapForDate(env, track, date, cache) {
-  if (Object.prototype.hasOwnProperty.call(cache, date)) return cache[date];
+  const cacheKey = `${track}:${date}`;
+  if (Object.prototype.hasOwnProperty.call(cache, cacheKey)) return cache[cacheKey];
   const raw = await env.STABLE_KV.get(racedayKvKey(track, date));
   const value = raw ? (JSON.parse(raw).fullCardRecap || null) : null;
-  cache[date] = value;
+  cache[cacheKey] = value;
   return value;
 }
 
@@ -4587,7 +4629,9 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
   // asks), not the real scheduled one, so it can't just call that function
   // directly, but the matching logic itself (including job #22's recap
   // trigger) needs to stay identical or a test send stops meaning anything.
-  const recapIndex = await readRecapIndex(env, track);
+  // Cross-track recap lookup, same as runEntryAlerts() — see
+  // readAllRecapIndexes()'s own comment.
+  const recapIndex = await readAllRecapIndexes(env);
   const fullCardRecapCache = {};
   const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
   let result;
@@ -4607,7 +4651,7 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
       const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
       const recaps = [];
       for (const r of recapsRaw) {
-        recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, track, r.date, fullCardRecapCache) });
+        recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, r.track, r.date, fullCardRecapCache) });
       }
       if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
       const notes = notesForHorse(state.notes, horse.trainer, horse.name);
@@ -4747,16 +4791,23 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
       // not stored on the horse/note data itself.
       const recapsHtml = (recaps || []).map((r) => {
         const dateLabel = r.date ? formatEmailDateLabel(r.date) : "—";
+        // A recap can now come from a DIFFERENT track than this email's own
+        // (see readAllRecapIndexes()) — a horse that ran at Saratoga and is
+        // entered today at Belmont still gets that Saratoga recap surfaced
+        // here, so the label calls out the origin track whenever it isn't
+        // this email's own, rather than letting it read as if it happened
+        // at the track this email is actually about.
+        const originTrackTag = r.track && r.track !== track ? ` &middot; ${escapeHtmlForEmail(ENTRIES_TRACK_LABEL[r.track] || r.track)}` : "";
         const fullCardHtml = r.fullCardRecap ? `
           <div style="background:rgba(0,0,0,0.03); border:1px dashed ${theme.dim}; border-radius:6px; padding:10px 12px; margin:4px 0 6px;">
-            <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.dim}; margin-bottom:4px;">FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}</span>
+            <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.dim}; margin-bottom:4px;">FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${originTrackTag}</span>
             <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.fullCardRecap)}</div>
           </div>
         ` : "";
         return `
         ${fullCardHtml}
         <div style="background:rgba(0,0,0,0.05); border:1px solid ${theme.accent}; border-radius:6px; padding:10px 12px; margin:4px 0 10px;">
-          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}</span>
+          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}${originTrackTag}</span>
           <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.recap)}</div>
         </div>
       `;
@@ -4863,6 +4914,13 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
     // "why didn't track X send" question is answerable by just reading
     // that route, no manual re-test needed.
     const trackOutcomes = {};
+    // One merged, cross-track recap lookup for the whole run (see
+    // readAllRecapIndexes()'s own comment) — read once here, outside the
+    // per-track loop below, and reused for every track in this run rather
+    // than re-reading all known tracks' indexes once per ALERT_TRACKS
+    // entry.
+    const recapIndex = await readAllRecapIndexes(env);
+    const fullCardRecapCache = {};
     // Scans ALERT_TRACKS (a deliberate subset of ENTRIES_SOURCE_BY_TRACK —
     // see that constant's own comment on why), dispatched to the same
     // per-source fetcher the /entries route uses so this never drifts out
@@ -4899,11 +4957,6 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
       // (raceNotifyKvKey), checked here before a horse is added to the
       // digest, but only actually written after the digest send succeeds —
       // so a failed send doesn't silently mark horses as already-notified.
-      // One read of this track's whole recap index up front — cheap (one
-      // KV get), and reused for every horse on the card below instead of a
-      // per-horse lookup.
-      const recapIndex = await readRecapIndex(env, track);
-      const fullCardRecapCache = {};
       const raceGroups = [];
       for (const race of result.races || []) {
         const matchedHorses = [];
@@ -4915,7 +4968,13 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
           const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
           const recaps = [];
           for (const r of recapsRaw) {
-            recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, track, r.date, fullCardRecapCache) });
+            // r.track is the recap's own origin track (see
+            // readAllRecapIndexes()) — a horse now entered at THIS track
+            // can carry a recap from a DIFFERENT track it last ran at, so
+            // the matching full-card recap has to come from that same
+            // origin track's raceday record, not the track this loop
+            // iteration happens to be processing.
+            recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, r.track, r.date, fullCardRecapCache) });
           }
           // A race recap is its own independent reason to include a horse —
           // it doesn't require a tracked trainer or an existing note, since
