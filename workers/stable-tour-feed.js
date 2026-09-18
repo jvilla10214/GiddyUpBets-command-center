@@ -6220,7 +6220,13 @@ async function runBloodHorseImport(env) {
         if (!itemsById.has(idMatch[1])) itemsById.set(idMatch[1], { link, title, id: idMatch[1] });
       }
     }
-    const items = [...itemsById.values()];
+    // Sorted newest-first by article id before the per-run cap below —
+    // without this, merged-in-feed-order meant the cap could fill up
+    // entirely from one feed's (already-seen) items before ever reaching
+    // the other feeds' items, confirmed real on the first live run after
+    // widening to 3 feeds (checked:0 while 39 genuinely new articles sat
+    // unprocessed in the other two feeds).
+    const items = [...itemsById.values()].sort((a, b) => Number(b.id) - Number(a.id));
 
     const state = await readNotesAndTrainers(env);
     const notes = state.notes;
