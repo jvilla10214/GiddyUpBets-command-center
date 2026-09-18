@@ -3076,11 +3076,27 @@ const NYRA_ENTRIES_BASE = { saratoga: "https://www.nyra.com/saratoga", belmont: 
 // caught silently substituting another track's live card while dark (see
 // NYRA_ENTRIES_BASE's own comment on Belmont) — fetchNyraEntriesDay() and
 // fetchNyraResultsDay() both refuse to fetch for a date outside this
-// window. Saratoga isn't listed here: its own meet dates were never the
-// problem (it's the track that gets wrongly substituted IN, not the one
-// needing a guard), so it stays ungated. Update this window by hand if
-// Belmont's fall meet dates ever change from what NYRA has published.
-const NYRA_TRACK_MEET_WINDOWS = { belmont: { start: "2026-09-18", end: "2026-12-06" } };
+// window. Update these by hand if either track's dates ever change from
+// what NYRA has published.
+//
+// Saratoga added 2026-09-18 after the exact same substitution bug this
+// file already caught and fixed for Belmont happened again, just with the
+// two tracks' roles reversed: Belmont's meet went live that same day while
+// Saratoga's had already closed (confirmed via NYRA's own 2026 schedule
+// announcement — Saratoga's summer meet ran July 3 through Labor Day,
+// Sept 7), and a dark Saratoga started silently getting Belmont's live
+// card back instead of an empty one — real user report ("Belmont entries
+// bled over into Saratoga... Saratoga is closed now"). The original
+// comment here claimed Saratoga could stay ungated forever because "it's
+// the track that gets wrongly substituted IN, not the one needing a
+// guard" — that was only true while Belmont happened to be the dark one;
+// nothing about NYRA's endpoint actually ties the substitution direction
+// to a specific track, so both NYRA tracks need this gate, not just
+// whichever one happened to be dark first.
+const NYRA_TRACK_MEET_WINDOWS = {
+  belmont: { start: "2026-09-18", end: "2026-12-06" },
+  saratoga: { start: "2026-07-03", end: "2026-09-07" },
+};
 
 function nyraTrackMeetIsDark(track, date) {
   const window = NYRA_TRACK_MEET_WINDOWS[track];
