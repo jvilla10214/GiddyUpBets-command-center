@@ -5834,7 +5834,22 @@ function extractNyraTitleHorse(title) {
   // owner off, then any breeding descriptor between it and the actual horse
   // name, the same two-step extractNyraBracketHorse() uses.
   const guess = stripNyraBreedingDescriptor(stripNyraPossessivePrefix(nameWords.join(" ").trim()));
-  return guess || null;
+  if (!guess) return null;
+  // Confirmed real bug (2026-09-18, caught in production on the very first
+  // real BloodHorse run): a headline that Title-Cases EVERY word, verbs
+  // included — not this project's own NYRA-house-style assumption of only
+  // proper nouns being capitalized — defeats the capitalization-based logic
+  // above entirely, since there's no lowercase word to stop at. A real
+  // headline, "War Court Must Catch Maycocks Bay to Take Durham Cup" (two
+  // horses either side of "Must Catch"), produced the six-word guess "War
+  // Court Must Catch Maycocks Bay" as if it were one horse's name, and got
+  // written as a real note before this was caught. Every confirmed-real
+  // horse name in this codebase's own examples tops out at 4 words after
+  // stripping ("Sail With the Wind") — a guess longer than that is more
+  // likely a swallowed verb phrase than a real name, so it's discarded
+  // rather than risked.
+  if (guess.split(/\s+/).length > 4) return null;
+  return guess;
 }
 
 // Reads the "OWNER's HORSE NAME [post N, Jockey]" bracket convention — the
