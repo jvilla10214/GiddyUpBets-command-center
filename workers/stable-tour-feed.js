@@ -5757,7 +5757,12 @@ async function fetchDrfNews() {
 // retired-horse aside). Biased toward over-excluding rather than guessing:
 // a real current-horse quote sharing a paragraph with one of these phrases
 // is an acceptable miss given the explicit ask was "only current horses."
-const NYRA_RETIRED_HORSE_SIGNAL_RE = /\bretir(?:ed|ement|es|ing)\b|\bfinal (?:start|race) of (?:his|her) career\b|\bcareer-ending\b|\bhangs? up\b|\bhung up\b|\bpensioned\b|\bOld Friends\b|\bsanctuary for retired\b|\b(?:standing|stands|enters?) at stud\b|\bstud duty\b|\bbreeding career\b|\bbroodmare career\b/i;
+// "stud career"/"to stand at [Farm]" added after a real BloodHorse miss
+// (job #24's wider 3-feed pull surfaced stallion-announcement headlines
+// like "Sandman Will Start Stud Career in 2027 at Rockridge" and
+// "Millionaire Valentine Candy to Stand at Leadem Farm" that the original
+// phrase list — built against NYRA content — didn't cover).
+const NYRA_RETIRED_HORSE_SIGNAL_RE = /\bretir(?:ed|ement|es|ing)\b|\bfinal (?:start|race) of (?:his|her) career\b|\bcareer-ending\b|\bhangs? up\b|\bhung up\b|\bpensioned\b|\bOld Friends\b|\bsanctuary for retired\b|\b(?:standing|stands|enters?) at stud\b|\bstud duty\b|\bstud career\b|\bto stand at\b|\bwill stand at\b|\bbreeding career\b|\bbroodmare career\b/i;
 const NYRA_NEWS_TRACKS = ["saratoga", "belmont"];
 const NYRA_BASE = "https://www.nyra.com";
 function nyraNewsListUrl(track) { return `${NYRA_BASE}/${track}/news/`; }
@@ -6119,6 +6124,21 @@ const BLOODHORSE_FEED_URLS = [
 ];
 const BLOODHORSE_MAX_ARTICLES_PER_RUN = 15;
 
+// Title-level topic filter, checked before extractNyraTitleHorse() (and
+// before the article fetch, saving a wasted request) — added after the
+// widened 3-feed pull's first real backlog run produced two live false
+// positives: a Keeneland yearling-sale purchase ("Amo Racing Lands $1.65M
+// Up to the Mark Colt") got its buyer's name extracted as a "horse," and a
+// jockey-hospitalization story ("Geroux 'In Good Spirits' While Remaining
+// in ICU") got the JOCKEY's surname extracted as a horse entirely — neither
+// is a race-recap trainer quote, and the second isn't even about a horse.
+// Same "no guess beats a wrong guess" philosophy as NYRA_RETIRED_HORSE_SIGNAL_RE,
+// just aimed at a different pair of off-topic categories this wider feed
+// set pulls in that a single race-only feed didn't.
+const BLOODHORSE_NON_RACE_SIGNAL_RE =
+  /\$[\d,.]+\s?(?:million|thousand|[MK]\b)|\bKeeneland Sale\b|\byearling\b|\bauction\b|\bsale-topping\b|\bBook \d\b|\bhospitalized\b|\bhospital\b|\bICU\b|\bintensive care\b|\bsurgery\b|\bcritical condition\b/i;
+
+
 function bloodhorseSeenKvKey(articleId) {
   return `bloodhorse:seen:${String(articleId).replace(/[^a-z0-9]/gi, "").slice(0, 40)}`;
 }
@@ -6247,6 +6267,7 @@ async function runBloodHorseImport(env) {
       checked++;
       try {
         if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(item.title)) continue;
+        if (BLOODHORSE_NON_RACE_SIGNAL_RE.test(item.title)) continue;
         const titleHorseGuess = extractNyraTitleHorse(item.title);
         if (!titleHorseGuess) continue;
         const articleRes = await fetch(item.link, {
