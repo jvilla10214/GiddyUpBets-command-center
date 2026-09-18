@@ -6232,7 +6232,16 @@ async function runBloodHorseImport(env) {
     const notes = state.notes;
     let addedAny = false;
 
-    for (const item of items.slice(0, BLOODHORSE_MAX_ARTICLES_PER_RUN)) {
+    // Walks the FULL merged/sorted list, not just its first
+    // BLOODHORSE_MAX_ARTICLES_PER_RUN entries — an already-seen item costs
+    // only a cheap KV read and doesn't count against the cap, so the run
+    // keeps advancing past a seen prefix into older unseen articles rather
+    // than idling once the newest N happen to already be seen. Confirmed
+    // real: with the top 15 (by id) already marked seen, the old
+    // items.slice(0, 15) version returned checked:0 forever even with ~49
+    // genuinely unseen older articles still sitting further down the list.
+    for (const item of items) {
+      if (checked >= BLOODHORSE_MAX_ARTICLES_PER_RUN) break;
       const seenKey = bloodhorseSeenKvKey(item.id);
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
