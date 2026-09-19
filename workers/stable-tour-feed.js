@@ -31,12 +31,14 @@
 //    worth the setup step here — this is meant to Just Work for every
 //    visitor with zero configuration.
 //
-// 4. NYRA Track Trends scrape (GET /nyra-trends?track=saratoga) — fetches
-//    NYRA's own official Saratoga track-trends page (Andy Serling's daily
+// 4. NYRA Track Trends scrape (GET /nyra-trends?track=<saratoga|belmont>) —
+//    fetches NYRA's own official track-trends page (Andy Serling's daily
 //    bias analysis) and parses each day into structured fields. Same CORS
 //    problem as job #2 (nyra.com sets no Access-Control-Allow-Origin), same
-//    fix. Only Saratoga is wired up — that's the only track-trends URL NYRA
-//    publishes at this path. The client does the bias-category inference
+//    fix. Belmont added 2026-09-19 (see NYRA_TRENDS_URL_BY_TRACK's own
+//    comment) once its meet opened and its page had real content to
+//    verify against — every other NYRA track without its own track-trends
+//    URL still isn't supported. The client does the bias-category inference
 //    and Bias Tracker upsert; this endpoint only returns the raw parsed
 //    fields, same division of labor as job #2 (worker extracts structure,
 //    client interprets it). Two client-side consumers: the Bias Tracker
@@ -527,11 +529,18 @@
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
 // Per-track config, not a single hardcoded URL — adding another NYRA track
-// later (e.g. Belmont, at nyra.com/belmont/racing/track-trends/) is one map
-// entry, not a rebuild. Only Saratoga's URL is actually verified right now;
-// don't add another track here until its markup has been checked too (same
-// rule as every other scrape in this file).
-const NYRA_TRENDS_URL_BY_TRACK = { saratoga: "https://www.nyra.com/saratoga/racing/track-trends/" };
+// is one map entry, not a rebuild. Belmont added 2026-09-19, confirmed
+// directly (not assumed): its page's markup is byte-for-byte identical in
+// structure to Saratoga's (same <h2>YYYY</h2>/<h3 class="text-sm">/
+// "Track Condition:"/"Weather:"/"Temperature:"/"Wind:" labels and <p>
+// analysis wrapper), so parseNyraTrackTrends() below needed no changes at
+// all — real content confirmed too (opening day, Sept 18, already has a
+// real write-up on file). Don't add another track here until its markup
+// has been checked too (same rule as every other scrape in this file).
+const NYRA_TRENDS_URL_BY_TRACK = {
+  saratoga: "https://www.nyra.com/saratoga/racing/track-trends/",
+  belmont: "https://www.nyra.com/belmont/racing/track-trends/",
+};
 // Same one-entry-per-verified-track rule as NYRA_TRENDS_URL_BY_TRACK above.
 // Belmont's file exists at this same path (BELscratch.html) — added now
 // even though it was a frozen 2023 snapshot when last checked, since that

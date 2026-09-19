@@ -3214,8 +3214,9 @@
         compare at a glance.
         <br><br>
         Bias Tracker is shared — every visitor sees the same entries for this track, manual or auto-imported.
-        Rows tagged <strong>NYRA</strong> are auto-imported from NYRA's own Saratoga Track Trends page (Andy
-        Serling's daily analysis) — Dirt Bias and Turf Bias are each a keyword heuristic run separately over the
+        Rows tagged <strong>NYRA</strong> are auto-imported from NYRA's own Track Trends page for this track
+        (Andy Serling's daily analysis, currently published for Saratoga and Belmont) — Dirt Bias and Turf Bias
+        are each a keyword heuristic run separately over the
         dirt- and turf-relevant parts of his write-up, not something NYRA itself categorizes, so read the full
         note before trusting either tag. Turf Bias is left blank on days there's no turf-relevant text to read
         (usually no turf racing that day) rather than guessed. Untagged rows are someone's own manual read of
@@ -4863,7 +4864,7 @@
     }
   }
 
-  // ---------- NYRA Track Trends auto-import (Saratoga only) ----------
+  // ---------- NYRA Track Trends auto-import (NYRA_TRENDS_SUPPORTED_TRACKS) ----------
   // Andy Serling's own daily bias write-up, scraped via the Stable Tour
   // worker (see its own comment on why — same no-CORS problem as the news
   // auto-import). This is a DIFFERENT vocabulary than scoreBiasText() above
@@ -5144,8 +5145,29 @@
     };
   }
 
-  async function nyraTrendsApiGet(){
-    const res = await fetch(stableApiUrl("/nyra-trends?track=saratoga"), { cache: "no-store" });
+  // Tracks with a real, verified NYRA Track Trends page (see the worker's
+  // own NYRA_TRENDS_URL_BY_TRACK comment) — Belmont added 2026-09-19 once
+  // its meet opened and its page's markup was confirmed identical to
+  // Saratoga's, same byline too (Andy Serling writes both). Shared by
+  // autoImportNyraTrends() and backfillDailyLogFromNyra() below so both
+  // stay in sync automatically the next time a track is added here, rather
+  // than two separate hardcoded "saratoga" checks drifting apart.
+  //
+  // Known open question, not yet resolved: classifyNyraTrend()'s phrase
+  // lists (NYRA_STRONG_SPEED_PHRASES etc., further down) were calibrated by
+  // hand against Saratoga's own 34-write-up history — same author, but
+  // Belmont's very first real write-up (opening day, Sept 18) already used
+  // phrasing not in those lists ("there is an argument that saving ground
+  // was at least a slight advantage on the Inner Turf" — "argument"/"slight
+  // advantage" don't match any existing phrase or hedge pattern). Not
+  // fixed here: recalibrating off a single day would be guessing, the same
+  // mistake the Saratoga list explicitly avoided by waiting for a real
+  // sample. Revisit once Belmont has a real run of write-ups to check
+  // against, same rigor as the original Saratoga pass.
+  const NYRA_TRENDS_SUPPORTED_TRACKS = new Set(["saratoga", "belmont"]);
+
+  async function nyraTrendsApiGet(track){
+    const res = await fetch(stableApiUrl(`/nyra-trends?track=${encodeURIComponent(track)}`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     return Array.isArray(data.entries) ? data.entries : [];
@@ -5341,16 +5363,16 @@
   // importer created previously) — an NYRA re-scrape can never clobber your
   // own read of how a card played.
   async function autoImportNyraTrends(){
-    if (activeTrack.id !== "saratoga") return;
+    if (!NYRA_TRENDS_SUPPORTED_TRACKS.has(activeTrack.id)) return;
+    const trackId = activeTrack.id;
     let raws;
-    try{ raws = await nyraTrendsApiGet(); }
+    try{ raws = await nyraTrendsApiGet(trackId); }
     catch(err){ console.error("NYRA track trends fetch failed", err); return; }
 
     // Decide the whole batch locally first — never touch a date with a real
     // manual entry — then send it as one bulk write instead of one request
     // per day (32 individual POSTs on a first-ever import would be wasteful
     // and non-atomic; this way it's a single KV write on the worker side).
-    const trackId = "saratoga";
     const toUpsert = [];
     for (const raw of raws){
       const existing = biasLog.find(e => e.date === raw.date);
@@ -5398,12 +5420,12 @@
   // calls for a first-ever backfill would be slow and needless. Runs once
   // per track-load (dailyLogNyraBackfillDone), not every 5-minute refresh.
   async function backfillDailyLogFromNyra(){
-    if (activeTrack.id !== "saratoga") return;
+    if (!NYRA_TRENDS_SUPPORTED_TRACKS.has(activeTrack.id)) return;
     if (dailyLogNyraBackfillDone) return;
     dailyLogNyraBackfillDone = true; // set up front — a failed attempt shouldn't retry every render tick
 
     let raws;
-    try{ raws = await nyraTrendsApiGet(); }
+    try{ raws = await nyraTrendsApiGet(activeTrack.id); }
     catch(err){ console.error("NYRA track trends fetch failed (Daily Log backfill)", err); return; }
     if (!raws.length) return;
 
