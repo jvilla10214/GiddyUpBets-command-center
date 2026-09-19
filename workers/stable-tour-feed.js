@@ -1624,6 +1624,16 @@ async function handleRequest(request, env) {
     // (first deploy, or a fresh KV) so this never just 404s with nothing to
     // show — a real request that happens to land on the empty-cache moment
     // pays the one-time full-archive-scan cost instead of getting an error.
+    // Cache-Control is "no-store", NOT a long max-age — real incident found
+    // 2026-09-19: an earlier "public, max-age=3600" here let a stale
+    // pre-deploy fallback response get stuck in a browser's HTTP cache for
+    // up to an hour after the real Worker deploy landed, even though the
+    // server itself already had correct data. The client already keeps its
+    // own session-level cache (trainerAngleStatsCache in index.html, fetched
+    // once per session), so an HTTP-level cache here was redundant on top of
+    // that AND is exactly what caused the stale-data bug — matches why
+    // every other dynamic route in this file (/raceday, /raceday/dates,
+    // /raceday/previous-starts) already uses "no-store" instead.
     if (url.pathname === "/trainer-angle-stats" && request.method === "GET") {
       let raw = await env.STABLE_KV.get(TRAINER_ANGLE_STATS_KV_KEY);
       let stats = raw ? JSON.parse(raw) : null;
@@ -1631,7 +1641,7 @@ async function handleRequest(request, env) {
         try { stats = await computeTrainerAngleStats(env); }
         catch (err) { return json({ error: `Trainer angle stats computation failed: ${err.message}` }, 500); }
       }
-      return json(stats, 200, { "Cache-Control": "public, max-age=3600" });
+      return json(stats, 200, { "Cache-Control": "no-store" });
     }
 
     // Manual trigger for job #16's runEntryAlerts(), gated the same way as
