@@ -408,6 +408,24 @@
     border-radius: 4px;
   }
 
+  /* Heat Stress (WBGT) badge — hidden entirely below Green (see
+     wbgtFlag()'s own comment on the sourced 5-level thresholds), so a mild
+     day shows nothing extra here, same "no signal, no clutter" rule as the
+     Race Insight Strip's collapsed state. */
+  #wbgtBadge{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing:0;
+    padding: 2px 7px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-top: 4px;
+  }
+  #wbgtBadge.wbgt-yellow{ color:#e6c229; background:rgba(230,194,41,0.14); }
+  #wbgtBadge.wbgt-orange{ color:#e08a2c; background:rgba(224,138,44,0.16); }
+  #wbgtBadge.wbgt-red{ color:#e0522c; background:rgba(224,82,44,0.18); }
+  #wbgtBadge.wbgt-black{ color:#f2f2f2; background:rgba(120,20,20,0.55); }
+
   /* ---------- Track / compass panel ---------- */
   /* Positioning context for .track-condition-group, which sits OUTSIDE
      .track-wrap in the markup (see its own HTML comment for why) but still
@@ -2879,6 +2897,7 @@
       <div>
         <div class="tlabel">Temperature</div>
         <div class="tsub skel" id="feelsLike">Feels like —</div>
+        <div id="wbgtBadge" hidden></div>
       </div>
       <div class="tvalue"><span id="temp" class="skel">—</span><span class="tunit">°F</span></div>
     </div>
@@ -4266,7 +4285,13 @@
       `&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,` +
       `wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,pressure_msl,` +
       `soil_moisture_0_to_1cm,soil_moisture_9_to_27cm` +
-      `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,weather_code` +
+      // relative_humidity_2m added 2026-09-19 for the Heat Stress (WBGT)
+      // Index — previously only fetched for "current" conditions, which
+      // meant WBGT could only ever be computed for right now, never for
+      // the forecast strip. Open-Meteo already supports it at this same
+      // hourly position; this was a gap in what we asked for, not a
+      // missing capability on their end.
+      `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,weather_code` +
       `&minutely_15=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
       `&daily=precipitation_sum,precipitation_probability_max,sunrise,sunset,temperature_2m_max,temperature_2m_min,` +
       `apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max,` +
@@ -4433,6 +4458,56 @@
     if (index > 0.4) return { label: "YIELDING", cls: "cond-muddy", index };
     if (index > 0.05) return { label: "GOOD", cls: "cond-good", index };
     return { label: "FIRM", cls: "cond-fast", index };
+  }
+
+  // Heat Stress (WBGT) Index — the Australian Bureau of Meteorology's own
+  // published simplified outdoor approximation (bom.gov.au/info/
+  // thermal_stress/), used when there's no real black-globe thermometer to
+  // read from directly (which is every case here — Open-Meteo doesn't
+  // report one). Verified against BOM's own worked example on their page
+  // (Brisbane, Jan: 29.4°C/59% RH -> "a WBGT of about 30°C") before
+  // trusting this: this implementation reproduces that to within 0.1°C.
+  //
+  // Two honest limitations, straight from BOM's own page, not discovered
+  // the hard way here: this approximation doesn't account for wind speed
+  // or actual solar radiation intensity at all — it assumes "moderately
+  // high radiation in light wind conditions," so it will OVERSTATE heat
+  // stress on a windy or heavily overcast day, and again overstate it at
+  // night/early morning when the sun is low or down. Treat a Yellow/Orange
+  // reading on a breezy or cloudy day as a conservative upper bound, not a
+  // precise reading.
+  //
+  // e = water vapor pressure (hPa), Magnus-Tetens approximation.
+  function estimateWbgt(tempF, relHumidityPct){
+    if (tempF == null || relHumidityPct == null) return null;
+    const tempC = (tempF - 32) * 5 / 9;
+    const e = (relHumidityPct / 100) * 6.105 * Math.exp(17.27 * tempC / (237.7 + tempC));
+    const wbgtC = 0.567 * tempC + 0.393 * e + 3.94;
+    return wbgtC * 9 / 5 + 32;
+  }
+
+  // Flag thresholds: the widely-used 5-level Green/Yellow/Orange/Red/Black
+  // system built on American College of Sports Medicine guidelines (the
+  // same system Texas UIL, among others, publishes for school athletics —
+  // confirmed against their own published table, kestrelinstruments.com/
+  // blog/the-uil-wbgt-activity-chart-explained). This is a HUMAN-athlete
+  // heat-safety standard, not an equine-specific one — no public WBGT
+  // standard for Thoroughbred racing exists to verify against, so this is
+  // used as the best available general outdoor-athletic-activity proxy,
+  // not asserted as a horse-racing-specific threshold. Using the more
+  // humid "Class 3" (non-arid-region) thresholds from that table as the
+  // single default, since most major US racing states (NY, KY, FL, LA, PA)
+  // are closer to that climate profile than the arid West Texas/Panhandle
+  // carve-out its "Class 2" thresholds were built for.
+  const WBGT_FLAGS = [
+    { max: 82.0, flag: "Green", cls: "wbgt-green" },
+    { max: 87.0, flag: "Yellow", cls: "wbgt-yellow" },
+    { max: 90.1, flag: "Orange", cls: "wbgt-orange" },
+    { max: 92.1, flag: "Red", cls: "wbgt-red" },
+    { max: Infinity, flag: "Black", cls: "wbgt-black" },
+  ];
+  function wbgtFlag(wbgtF){
+    return WBGT_FLAGS.find(t => wbgtF < t.max);
   }
 
   // Forward-looking only — does NOT feed back into the current label above
@@ -11918,6 +11993,23 @@
 
     // Tiles not covered by the forecast scrubber (no 15-min resolution data for these)
     $("humidity").textContent = Math.round(c.relative_humidity_2m ?? 0);
+
+    // Heat Stress badge — computed from whichever temp/humidity are live
+    // right now (so it automatically picks up TurfTrax's on-site reading
+    // for Ascot, same as everything else fed by c.* above), shown only at
+    // Yellow flag or worse (see wbgtFlag()'s own comment on the sourced
+    // thresholds) — a mild day shows nothing here at all.
+    const wbgtBadgeEl = $("wbgtBadge");
+    const wbgtF = estimateWbgt(c.temperature_2m, c.relative_humidity_2m);
+    const flag = wbgtF != null ? wbgtFlag(wbgtF) : null;
+    if (flag && flag.flag !== "Green"){
+      wbgtBadgeEl.hidden = false;
+      wbgtBadgeEl.className = flag.cls;
+      wbgtBadgeEl.textContent = `Heat Stress: ${flag.flag} (WBGT ${Math.round(wbgtF)}°F)`;
+    } else {
+      wbgtBadgeEl.hidden = true;
+    }
+
     $("cloudCover").textContent = `Cloud cover ${Math.round(c.cloud_cover ?? 0)}%`;
     $("pressure").textContent = Math.round(c.pressure_msl ?? 0);
     $("weatherDesc").textContent = WMO[c.weather_code] ?? "—";
