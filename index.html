@@ -6428,10 +6428,32 @@
     "ALLOWANCE": 4,
     "STAKES": 5,
   };
+  // SmartPony-sourced tracks (Parx, Woodbine, and the rest of the 9 tracks
+  // sharing that entries source — see project_smartpony_entries_source
+  // memory) use a completely different, condensed Equibase-style raceType
+  // vocabulary than NYRA/DMTC's spelled-out one above — confirmed directly
+  // against real live Parx/Woodbine cards on 2026-09-19 (NOT guessed from
+  // Equibase's own documentation): "Md Sp Wt", "Moc 25000" (maiden optional
+  // claiming), "Clm 15000n2l" (claiming, price + condition code), "OClm
+  // 16000n1x" (an allowance-conditions optional-claiming code in every case
+  // observed so far — no distinct starter-allowance abbreviation has been
+  // seen, so OClm maps to the Allowance Optional Claiming tier, not
+  // Starter), and a graded/black-type stakes label (either an explicit
+  // "-G1"/"-G2"/"-G3" suffix or a race name ending in a purse amount like
+  // "150k"/"300k", e.g. "Cotilln-G1", "GrnwdCpL150k"). Checked AFTER the
+  // exact-match table above so a spelled-out raceType is never misread by
+  // a pattern meant for the abbreviated one.
   function classRankFor(raceTypeRaw){
     if (!raceTypeRaw) return null;
-    const key = raceTypeRaw.trim().toUpperCase();
-    return Object.prototype.hasOwnProperty.call(CLASS_RANK_BY_RACE_TYPE, key) ? CLASS_RANK_BY_RACE_TYPE[key] : null;
+    const trimmed = raceTypeRaw.trim();
+    const upper = trimmed.toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(CLASS_RANK_BY_RACE_TYPE, upper)) return CLASS_RANK_BY_RACE_TYPE[upper];
+    if (/-G[123]\b/i.test(trimmed) || /\d+K$/i.test(trimmed)) return 5;
+    if (/^MD\s*CLM\b/i.test(trimmed)) return 0;
+    if (/^(MD\s*SP\s*WT|MOC)\b/i.test(trimmed)) return 1;
+    if (/^CLM\b/i.test(trimmed)) return 2;
+    if (/^OCLM\b/i.test(trimmed)) return 4;
+    return null;
   }
   function parsePurseAmount(purseRaw){
     if (!purseRaw) return null;
