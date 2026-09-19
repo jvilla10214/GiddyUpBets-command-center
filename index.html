@@ -412,13 +412,24 @@
      wbgtFlag()'s own comment on the sourced 5-level thresholds), so a mild
      day shows nothing extra here, same "no signal, no clutter" rule as the
      Race Insight Strip's collapsed state. */
+  /* :not([hidden]) rather than a bare #wbgtBadge selector — confirmed real
+     bug (2026-09-19): an ID selector declaring `display` beats the
+     browser's own [hidden]{display:none} UA-stylesheet rule on
+     specificity, so a bare #wbgtBadge{display:inline-block} silently wins
+     over `.hidden = true` and the badge never actually disappears when a
+     track switch should clear it — it just keeps showing whatever it last
+     displayed. Scoping the display declaration to :not([hidden]) can never
+     out-specificity the hidden case, since it only ever matches when
+     hidden is absent. */
+  #wbgtBadge:not([hidden]){
+    display: inline-block;
+  }
   #wbgtBadge{
     font-family:'IBM Plex Mono', monospace;
     font-size: 10.5px;
     letter-spacing:0;
     padding: 2px 7px;
     border-radius: 4px;
-    display: inline-block;
     margin-top: 4px;
   }
   #wbgtBadge.wbgt-yellow{ color:#e6c229; background:rgba(230,194,41,0.14); }
@@ -12007,7 +12018,13 @@
       wbgtBadgeEl.className = flag.cls;
       wbgtBadgeEl.textContent = `Heat Stress: ${flag.flag} (WBGT ${Math.round(wbgtF)}°F)`;
     } else {
+      // Explicitly clear className/textContent too, not just hidden — a
+      // defensive second layer on top of the CSS fix above, so a stale
+      // color/label from the previous track can never linger in the DOM
+      // even if some other rule ever overrides [hidden] again later.
       wbgtBadgeEl.hidden = true;
+      wbgtBadgeEl.className = "";
+      wbgtBadgeEl.textContent = "";
     }
 
     $("cloudCover").textContent = `Cloud cover ${Math.round(c.cloud_cover ?? 0)}%`;
