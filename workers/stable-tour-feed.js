@@ -3221,6 +3221,10 @@ const ENTRIES_SOURCE_BY_TRACK = {
   keeneland: "smartpony", gulfstreampark: "smartpony", colonialdowns: "smartpony",
   kentuckydowns: "smartpony", ellispark: "smartpony", fairgrounds: "smartpony",
   woodbine: "smartpony",
+  // Parx (track code "PRX") — added 2026-09-19, confirmed real via
+  // SmartPony's own races/race_entries tables (real current-meet trainer/
+  // jockey names and meet-stat totals, not a coincidental code collision).
+  parx: "smartpony",
 };
 
 // Tracks job #16's entry alerts actually scans — a deliberate subset of
@@ -3253,6 +3257,12 @@ const ALERT_TRACKS = [
   // Added 2026-09-12, same reasoning as the 9 SmartPony tracks above — real
   // relational-DB data (SMARTPONY_TRACK_CODE.woodbine), not a scrape.
   "woodbine",
+  // Added 2026-09-19 — same reasoning again: SmartPony's own races/
+  // race_entries tables carry Parx (track code "PRX") with real, current
+  // data (confirmed directly: real trainer Robert E. Reid Jr., real
+  // leading rider Mychel Sanchez, plausible meet-stat totals for a track
+  // that races almost daily), not a scrape.
+  "parx",
 ];
 
 // Same idea as ENTRIES_SOURCE_BY_TRACK, for the /results route — separate
@@ -3270,7 +3280,7 @@ const RESULTS_SOURCE_BY_TRACK = {
   churchilldowns: "smartpony", santaanita: "smartpony", oaklawnpark: "smartpony",
   keeneland: "smartpony", gulfstreampark: "smartpony", colonialdowns: "smartpony",
   kentuckydowns: "smartpony", ellispark: "smartpony", fairgrounds: "smartpony",
-  woodbine: "smartpony",
+  woodbine: "smartpony", parx: "smartpony",
 };
 
 // Same idea again, for the /changes route (DMTC's free-text race-notes
@@ -4612,7 +4622,7 @@ const ENTRIES_TRACK_LABEL = {
   churchilldowns: "Churchill Downs", santaanita: "Santa Anita", oaklawnpark: "Oaklawn Park",
   keeneland: "Keeneland", gulfstreampark: "Gulfstream Park", colonialdowns: "Colonial Downs",
   kentuckydowns: "Kentucky Downs", ellispark: "Ellis Park", fairgrounds: "Fair Grounds",
-  woodbine: "Woodbine",
+  woodbine: "Woodbine", parx: "Parx",
 };
 
 // One combined digest per track per day instead of a separate email per
@@ -4779,6 +4789,16 @@ const STYLED_DIGEST_TRACK_THEME = {
   // Bright/saturated enough to read clearly apart from Saratoga's cooler,
   // darker brick-red (#a3241f) and Churchill Downs' burgundy (#8a1538).
   woodbine: { accent: "#e12726", bg: "#fdf7f7", ink: "#2e1211", dim: "#8a5f5d", hairline: "#f0dcdb" },
+  // Cross-verified two ways (2026-09-19): parxracing.com's own real logo
+  // (letsgoracingparx.com's apple-touch-icon.png, actual pixels sampled —
+  // not a generic site theme-color meta, which is absent here) lands in
+  // this exact red/crimson family, AND its own declared mask-icon color is
+  // literally "#e22439". Close to Woodbine's red (#e12726) — the real
+  // distinguishing factor is the blue channel (Parx's 0x39 vs Woodbine's
+  // 0x26), giving Parx a more crimson/pink cast next to Woodbine's pure
+  // fire-engine red; kept as-is rather than adjusted, since this is each
+  // track's own verified real color, not a free choice to separate further.
+  parx: { accent: "#e22439", bg: "#fef7f7", ink: "#2e1418", dim: "#8a5c62", hairline: "#ecdbdd" },
 };
 
 // Site-domain tag on a note (e.g. "drf.com") — derived from the note's own
@@ -7048,6 +7068,11 @@ const SMARTPONY_TRACK_CODE = {
   // (2026-09-12), not assumed: race classes match real Woodbine stakes
   // ("BullPageB150k" = Bull Page Stakes, a genuine Woodbine race).
   woodbine: "WO",
+  // Parx Racing (Bensalem, PA) — confirmed real 2026-09-19: real trainer
+  // Robert E. Reid Jr. and real leading rider Mychel Sanchez, with
+  // plausible meet-stat totals (jockey_sts_meet in the hundreds) for a
+  // track that races almost daily year-round.
+  parx: "PRX",
 };
 // IANA timezone per SmartPony-sourced track — needed to convert
 // races.post_time_utc (a real timestamptz) into the local naive
@@ -7061,6 +7086,7 @@ const SMARTPONY_TRACK_TIMEZONE = {
   gulfstreampark: "America/New_York", colonialdowns: "America/New_York",
   kentuckydowns: "America/Chicago", ellispark: "America/Chicago",
   fairgrounds: "America/Chicago", woodbine: "America/Toronto",
+  parx: "America/New_York",
 };
 
 function toTrackLocalIso(utcIso, timeZone) {

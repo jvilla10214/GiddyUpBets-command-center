@@ -4138,13 +4138,57 @@
       // there specifically for this track, same reasoning as above.
       entriesSource: "smartpony", resultsSource: "smartpony",
     },
+    parx: {
+      id: "parx", name: "Parx Racing", shortName: "Parx",
+      city: "Bensalem, PA", state: "PA",
+      // Center of the track oval's own OSM-surveyed way (highway=track,
+      // access=private — Parx's oval isn't tagged landuse=racetrack in OSM,
+      // confirmed by direct Overpass query; tag conventions vary per track
+      // here, same lesson as Belmont's own photo-fix), not the Wikipedia
+      // address centroid (which sits ~450m south, closer to the casino
+      // building than the actual track).
+      lat: 40.12267, lon: -74.94935,
+      timezone: "America/New_York",
+      // Derived from that same OSM way: found the two long straights (west
+      // side ~181°/1° reciprocal pair, east side's own pair less cleanly
+      // separable from the turns in this way's digitization), then used
+      // the real grandstand building (OSM way 655802266, name "Parx
+      // Racing") to pick which one is the homestretch — its centroid sits
+      // measurably closer to the west straight (262m) than the east one
+      // (315m), and bearing from the oval's center to the grandstand
+      // (236°, southwest) is consistent with the west side. Standard US
+      // counterclockwise convention then gives the west straight's real
+      // direction of travel as south (~181°), not its digitized-way
+      // direction (OSM way nodes are just recorded in whatever order was
+      // drawn, not direction of travel). Cross-checked visually against
+      // the sourced aerial photo below — the grandstand sits right on the
+      // west straight, exactly as this derivation predicts.
+      heading: { homestretch: 181, backstretch: 1 },
+      // parxracing.com's own changes/scratches page (linked from its own
+      // site) is just an Equibase embed (confirmed directly) — Equibase
+      // stays off-limits per this project's own hard rule regardless of
+      // which specific page, so no scratchesUrl here. SmartPony's entries
+      // already carry real-time scratch status directly per horse, so
+      // nothing functional depends on this link anyway.
+      nyraCode: null, scratchesUrl: null,
+      // USGS NAIP (same free/keyless source as every other US track here)
+      // — bbox framed the same way as Belmont's redone photo (oval's own
+      // extent, padded ~5%, forced to this app's standard 945x566 crop by
+      // expanding the shorter dimension — here that's width, since Parx's
+      // oval is a narrow north-south shape unlike Saratoga/Belmont's wider
+      // ovals, so the crop necessarily shows more surrounding context to
+      // fill the standard frame).
+      photo: "assets/track-parx.png", photoAlt: "Aerial view of Parx Racing",
+      tideStationId: null, tideRangeFt: null,
+      entriesSource: "smartpony", resultsSource: "smartpony",
+    },
   };
 
   // Dropdown grouping only — doesn't touch the TRACKS objects themselves.
   // US membership only; order within it is computed by buildUsTrackGroups()
   // below, not this array's own order.
   const TRACK_REGIONS = {
-    US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds", "kentuckydowns"],
+    US: ["saratoga", "monmouth", "delmar", "belmont", "colonialdowns", "churchilldowns", "santaanita", "keeneland", "gulfstreampark", "oaklawnpark", "ellispark", "fairgrounds", "kentuckydowns", "parx"],
     UK: ["ascot", "epsomdowns", "newmarket", "york"],
     International: ["shatin", "happyvalley", "longchamp", "curragh", "meydan", "woodbine"],
   };
@@ -4703,6 +4747,7 @@
     // equally well (no "today only" limitation to work around).
     "churchilldowns", "santaanita", "oaklawnpark", "keeneland",
     "gulfstreampark", "colonialdowns", "kentuckydowns", "ellispark", "fairgrounds",
+    "parx",
   ]);
   let selectedEntriesDate = null;
 
