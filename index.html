@@ -1880,48 +1880,50 @@
   .entries-insights-toggle[aria-pressed="true"]{
     border-color: var(--tote-amber); color: var(--tote-amber); background: rgba(240,180,41,0.1);
   }
-  .entries-insight-row td{ padding-top: 0; padding-bottom: 6px; border-top: none; }
-  .entries-insight-toggle{
-    all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px;
-    cursor: pointer; padding: 3px 4px; border-radius: 4px;
-  }
-  .entries-insight-toggle:focus-visible{ outline: 1px solid var(--tote-amber); }
-  .entries-insight-pill{
+  /* Signals row — one row per horse holding every active signal chip
+     (Race Insight Strip / Class Movement / Trainer Angle), replacing what
+     used to be up to three separate stacked rows. Colors are named by hue,
+     not by meaning, since "caution" and "elevated" have always shared
+     amber and "no-signal"/"same" have always shared neutral gray — see
+     entriesSignalsRowHtml()'s own comment. Class Movement's up/down stay
+     deliberately NOT green/red (neither direction is inherently good or
+     bad for a horse — a human judgment call), while Trainer Angle's
+     elevated/depressed ARE a real directional signal, so amber/silk-red is
+     intentional there, not an inconsistency. */
+  .entries-signals-row td{ padding-top: 2px; padding-bottom: 8px; border-top: none; }
+  .entries-signals-chips{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .entries-signal-chip{
+    all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 5px;
     font-family:'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.04em; text-transform: uppercase;
-    padding: 3px 7px; border-radius: 4px;
+    padding: 4px 8px; border-radius: 5px; cursor: pointer;
   }
-  .entries-insight-aligned .entries-insight-pill{ background: var(--rail-green); color: var(--ink); }
-  .entries-insight-caution .entries-insight-pill{ background: var(--tote-amber); color: var(--ink); }
-  .entries-insight-no-signal .entries-insight-pill{ background: var(--panel-2); color: var(--parchment-dim); border: 1px solid var(--panel-border); }
+  .entries-signal-chip:focus-visible{ outline: 1px solid var(--tote-amber); }
   .entries-insight-chevron{ font-size: 9px; color: var(--parchment-dim); }
-  .entries-insight-detail{
-    margin-top: 4px; padding: 8px 10px; max-width: 520px;
+  .entries-signal-chip .entries-insight-chevron{ color: inherit; opacity: 0.75; }
+  .entries-signal-rail-green{ background: var(--rail-green); color: var(--ink); }
+  .entries-signal-tote-amber{ background: var(--tote-amber); color: var(--ink); }
+  .entries-signal-sky{ background: var(--sky); color: var(--ink); }
+  .entries-signal-clay{ background: var(--clay); color: var(--ink); }
+  .entries-signal-silk-red{ background: var(--silk-red); color: var(--parchment); }
+  .entries-signal-neutral{ background: var(--panel-2); color: var(--parchment-dim); border: 1px solid var(--panel-border); }
+  .entries-signals-detail{
+    margin-top: 6px; padding: 9px 11px; max-width: 560px;
     background: var(--panel-2); border: 1px solid var(--panel-border); border-radius: 6px;
   }
-  .entries-insight-aligned .entries-insight-detail{ border-left: 3px solid var(--rail-green); }
-  .entries-insight-caution .entries-insight-detail{ border-left: 3px solid var(--tote-amber); }
-  /* Class Movement Indicator — deliberately NOT green/red (neither an up
-     nor a down class move is inherently "good" or "bad" for a horse; that's
-     a judgment call for the human, not this app — same reasoning as the
-     wind-insight strip's own "worth a look" framing). "Same level" reuses
-     the neutral no-signal styling since it's the least actionable of the
-     three states. */
-  .entries-classmove-up .entries-insight-pill{ background: var(--sky); color: var(--ink); }
-  .entries-classmove-down .entries-insight-pill{ background: var(--clay); color: var(--ink); }
-  .entries-classmove-same .entries-insight-pill{ background: var(--panel-2); color: var(--parchment-dim); border: 1px solid var(--panel-border); }
-  .entries-classmove-up .entries-insight-detail{ border-left: 3px solid var(--sky); }
-  .entries-classmove-down .entries-insight-detail{ border-left: 3px solid var(--clay); }
-  /* Trainer Angle Stats — unlike Class Movement, "elevated" vs "depressed"
-     really is a directional signal (a trainer's own real win rate genuinely
-     higher or lower than their baseline in this exact spot), so amber for
-     elevated (matches the approved mockup) and silk-red for depressed is
-     intentional here, not a contradiction of the neutral-color reasoning
-     above. */
-  .entries-angle-elevated .entries-insight-pill{ background: var(--tote-amber); color: var(--ink); }
-  .entries-angle-depressed .entries-insight-pill{ background: var(--silk-red); color: var(--parchment); }
-  .entries-angle-elevated .entries-insight-detail{ border-left: 3px solid var(--tote-amber); }
-  .entries-angle-depressed .entries-insight-detail{ border-left: 3px solid var(--silk-red); }
+  .entries-signal-detail-block + .entries-signal-detail-block{
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--panel-border);
+  }
+  .entries-signal-label{
+    font-family:'IBM Plex Mono', monospace; font-size: 9px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 3px; display: block;
+  }
+  .entries-signal-label.entries-signal-rail-green{ color: var(--rail-green); background: none; }
+  .entries-signal-label.entries-signal-tote-amber{ color: var(--tote-amber); background: none; }
+  .entries-signal-label.entries-signal-sky{ color: var(--sky); background: none; }
+  .entries-signal-label.entries-signal-clay{ color: var(--clay); background: none; }
+  .entries-signal-label.entries-signal-silk-red{ color: var(--silk-red); background: none; }
+  .entries-signal-label.entries-signal-neutral{ color: var(--parchment-dim); background: none; border: none; }
   .entries-insight-line{
     font-family:'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 600;
     color: var(--parchment); margin-bottom: 6px;
@@ -4825,8 +4827,9 @@
   // Same idea again, for which horses' Race Insight Strip is expanded past
   // just its verdict pill — keyed "trainer|horse", same convention.
   let entriesInsightOpenKeys = new Set();
-  // Whether the Race Insight Strip renders at all — module-level so
-  // entriesInsightHtml() can check it without threading a param through
+  // Whether the Race Insight Strip (and the other two signals sharing its
+  // row — Class Movement, Trainer Angle) renders at all — module-level so
+  // entriesSignalsRowHtml() can check it without threading a param through
   // every call site. Set from localStorage at startup (see bottom of file).
   let entriesInsightsEnabled = true;
   // Class Movement Indicator's previous-start lookup, keyed "trackId|date"
@@ -4912,7 +4915,7 @@
   // Fetches the whole card's field through the worker's batch
   // /raceday/previous-starts in ONE request (not one per horse — see that
   // route's own comment on why), caches the result under classMovementCache
-  // by "trackId|date", then re-renders so entriesClassMovementHtml() picks
+  // by "trackId|date", then re-renders so entriesSignalsRowHtml() picks
   // it up. Only fetched once per card (checked via the cache, same "no
   // 'done' flag needed" reasoning doesn't apply here — unlike odds/scratches
   // this data can't change during a card, since it's about PAST starts).
@@ -6035,146 +6038,129 @@
     return { state, line, note: topNote, stretchWind };
   }
 
-  const ENTRIES_INSIGHT_STATE_LABEL = { aligned: "Aligned", caution: "Worth a look", "no-signal": "No signal" };
+  // Consolidates the three independent per-horse verdicts (Race Insight
+  // Strip / Class Movement / Trainer Angle) into ONE row instead of three —
+  // real usability problem found after shipping all three separately: a
+  // horse triggering more than one showed multiple stacked full-width rows,
+  // easy to notice one and miss the others scrolling down a long card. The
+  // underlying verdict functions (raceInsightVerdict, compareClassLevel,
+  // trainerAngleVerdict) are completely unchanged — this only touches how
+  // their results get rendered. Each signal keeps its OWN independent
+  // expand/collapse state (same entriesInsightOpenKeys Set and the exact
+  // key each already used), so clicking one chip doesn't affect the others,
+  // and a horse with zero signals still renders nothing, same as before.
+  const SIGNAL_LABEL = {
+    insight: { aligned: "Aligned", caution: "Worth a look", "no-signal": "No signal" },
+    classmove: { up: "Up in class", down: "Down in class", same: "Same level" },
+    angle: { elevated: "Elevated", depressed: "Below average" },
+  };
+  // Named by COLOR, not by meaning — "caution" and "elevated" have always
+  // shared the same amber, "no-signal" and "same" have always shared the
+  // same neutral gray, so this reuses one set of chip/label CSS rules
+  // instead of duplicating them per verdict type.
+  const SIGNAL_COLOR_CLASS = {
+    insight: { aligned: "entries-signal-rail-green", caution: "entries-signal-tote-amber", "no-signal": "entries-signal-neutral" },
+    classmove: { up: "entries-signal-sky", down: "entries-signal-clay", same: "entries-signal-neutral" },
+    angle: { elevated: "entries-signal-tote-amber", depressed: "entries-signal-silk-red" },
+  };
 
-  // Renders as its own full-width <tr> (not inside the horse's own narrow
-  // "Horse" cell like entriesNoteIndicatorHtml/entriesAddNoteHtml above) —
-  // entries-horse-table is 6 columns, so this spans all of them via
-  // colspan. Collapsed state shows ONLY the verdict pill, no wording and no
-  // note text at all (explicit user correction on the mockup this was built
-  // from) — expanding reveals the one-line synthesis plus the actual note
-  // quote and wind reading it was built from.
-  function entriesInsightHtml(trainer, horseName, race){
-    if (!entriesInsightsEnabled) return "";
-    const verdict = raceInsightVerdict(trainer, horseName, race);
-    if (!verdict) return "";
-    const key = `${trainer}|${horseName}`;
-    const isOpen = entriesInsightOpenKeys.has(key);
-    const safeKey = escapeHtml(key);
-    let detail = "";
-    if (isOpen){
-      const windText = verdict.stretchWind ? verdict.stretchWind.text : "No clear wind read for this race's post time yet.";
-      detail = `
-        <div class="entries-insight-detail">
-          <div class="entries-insight-line">${escapeHtml(verdict.line)}</div>
-          <div class="entries-insight-source">
-            <span class="entries-insight-source-label">Stable Tour</span>
-            <span class="entries-insight-source-text">&ldquo;${escapeHtml(verdict.note.note)}&rdquo; — ${escapeHtml(verdict.note.trainer || trainer)}, ${escapeHtml(fmtStableDate(verdict.note.date))}</span>
-          </div>
-          <div class="entries-insight-source">
-            <span class="entries-insight-source-label">Wind read</span>
-            <span class="entries-insight-source-text">${escapeHtml(windText)}</span>
-          </div>
-        </div>`;
-    }
-    return `
-      <tr class="entries-insight-row entries-insight-${verdict.state}">
-        <td colspan="6">
-          <button type="button" class="entries-insight-toggle" data-insight-key="${safeKey}" aria-expanded="${isOpen}">
-            <span class="entries-insight-pill">${escapeHtml(ENTRIES_INSIGHT_STATE_LABEL[verdict.state])}</span>
-            <span class="entries-insight-chevron">&#9660;</span>
-          </button>
-          ${detail}
-        </td>
-      </tr>`;
-  }
-
-  const CLASS_MOVE_LABEL = { up: "Up in class", down: "Down in class", same: "Same level" };
-
-  // Class Movement Indicator — same rendering shape as entriesInsightHtml
-  // above (own full-width <tr>, collapsed to just the verdict pill, shares
-  // entriesInsightOpenKeys/entriesInsightsEnabled), built from
-  // classMovementCache instead of a Stable Tour note. Returns "" — nothing
-  // rendered — when the lookup hasn't resolved yet for this card, when this
-  // horse has no confirmed previous start in our own archive at all (most
-  // maidens; also any horse whose only prior runs predate the archive's
-  // 2026-08-23 start), or when compareClassLevel() couldn't rank one of the
-  // two raceTypes. A missing verdict is a real limitation of what our OWN
-  // archive has seen, not a claim the horse has never raced before.
-  function entriesClassMovementHtml(trainer, horseName, race){
+  function entriesSignalsRowHtml(trainer, horseName, race){
     if (!entriesInsightsEnabled) return "";
     const previousStarts = classMovementCache[`${activeTrack.id}|${lastEntriesDate}`];
-    if (!previousStarts) return "";
-    const prevStart = previousStarts[horseName] || null;
-    if (!prevStart) return "";
-    const move = compareClassLevel(prevStart, race);
-    if (!move) return "";
+    const prevStart = previousStarts ? (previousStarts[horseName] || null) : null;
+    const signals = [];
 
-    const key = `classmove|${trainer}|${horseName}`;
-    const isOpen = entriesInsightOpenKeys.has(key);
-    const safeKey = escapeHtml(key);
-    let detail = "";
-    if (isOpen){
-      const prevTrackLabel = TRACKS[move.prevTrack]?.shortName || move.prevTrack;
-      detail = `
-        <div class="entries-insight-detail">
-          <div class="entries-insight-source">
-            <span class="entries-insight-source-label">Last start</span>
-            <span class="entries-insight-source-text">${escapeHtml([move.prevRaceType, move.prevPurse].filter(Boolean).join(" · "))} — ${escapeHtml(prevTrackLabel)}, ${escapeHtml(fmtStableDate(move.prevDate))}</span>
-          </div>
-          <div class="entries-insight-source">
-            <span class="entries-insight-source-label">Today</span>
-            <span class="entries-insight-source-text">${escapeHtml([move.todayRaceType, move.todayPurse].filter(Boolean).join(" · "))}</span>
-          </div>
-        </div>`;
+    const insightVerdict = raceInsightVerdict(trainer, horseName, race);
+    if (insightVerdict){
+      signals.push({
+        key: `${trainer}|${horseName}`,
+        label: SIGNAL_LABEL.insight[insightVerdict.state],
+        colorClass: SIGNAL_COLOR_CLASS.insight[insightVerdict.state],
+        detail: () => {
+          const windText = insightVerdict.stretchWind ? insightVerdict.stretchWind.text : "No clear wind read for this race's post time yet.";
+          return `
+            <div class="entries-signal-detail-block">
+              <span class="entries-signal-label ${SIGNAL_COLOR_CLASS.insight[insightVerdict.state]}">Wind / running style</span>
+              <div class="entries-insight-line">${escapeHtml(insightVerdict.line)}</div>
+              <div class="entries-insight-source">
+                <span class="entries-insight-source-label">Stable Tour</span>
+                <span class="entries-insight-source-text">&ldquo;${escapeHtml(insightVerdict.note.note)}&rdquo; — ${escapeHtml(insightVerdict.note.trainer || trainer)}, ${escapeHtml(fmtStableDate(insightVerdict.note.date))}</span>
+              </div>
+              <div class="entries-insight-source">
+                <span class="entries-insight-source-label">Wind read</span>
+                <span class="entries-insight-source-text">${escapeHtml(windText)}</span>
+              </div>
+            </div>`;
+        },
+      });
     }
-    return `
-      <tr class="entries-insight-row entries-classmove-${move.direction}">
-        <td colspan="6">
-          <button type="button" class="entries-insight-toggle" data-insight-key="${safeKey}" aria-expanded="${isOpen}">
-            <span class="entries-insight-pill">${escapeHtml(CLASS_MOVE_LABEL[move.direction])}</span>
-            <span class="entries-insight-chevron">&#9660;</span>
-          </button>
-          ${detail}
-        </td>
-      </tr>`;
-  }
 
-  const TRAINER_ANGLE_LABEL = { elevated: "Elevated", depressed: "Below average" };
+    if (prevStart){
+      const move = compareClassLevel(prevStart, race);
+      if (move){
+        signals.push({
+          key: `classmove|${trainer}|${horseName}`,
+          label: SIGNAL_LABEL.classmove[move.direction],
+          colorClass: SIGNAL_COLOR_CLASS.classmove[move.direction],
+          detail: () => {
+            const prevTrackLabel = TRACKS[move.prevTrack]?.shortName || move.prevTrack;
+            return `
+              <div class="entries-signal-detail-block">
+                <span class="entries-signal-label ${SIGNAL_COLOR_CLASS.classmove[move.direction]}">Class movement</span>
+                <div class="entries-insight-source">
+                  <span class="entries-insight-source-label">Last start</span>
+                  <span class="entries-insight-source-text">${escapeHtml([move.prevRaceType, move.prevPurse].filter(Boolean).join(" · "))} — ${escapeHtml(prevTrackLabel)}, ${escapeHtml(fmtStableDate(move.prevDate))}</span>
+                </div>
+                <div class="entries-insight-source">
+                  <span class="entries-insight-source-label">Today</span>
+                  <span class="entries-insight-source-text">${escapeHtml([move.todayRaceType, move.todayPurse].filter(Boolean).join(" · "))}</span>
+                </div>
+              </div>`;
+          },
+        });
+      }
 
-  // Trainer Angle Stats row — same collapsed-pill/expand-on-click shape as
-  // entriesClassMovementHtml/entriesInsightHtml above, reusing the SAME
-  // previous-start data already fetched for Class Movement (classMovementCache)
-  // rather than a second per-horse lookup — that data already has exactly what
-  // this needs (the horse's last actual start's date). Returns "" — nothing
-  // rendered — for the common case: most horses' trainers won't have a
-  // real, big-enough-sample angle for today's specific layoff bucket, and
-  // showing nothing is the correct, honest result there, not a placeholder.
-  function entriesTrainerAngleHtml(trainer, horseName, race){
-    if (!entriesInsightsEnabled) return "";
-    const previousStarts = classMovementCache[`${activeTrack.id}|${lastEntriesDate}`];
-    if (!previousStarts) return "";
-    const prevStart = previousStarts[horseName] || null;
-    if (!prevStart) return "";
-    const angle = trainerAngleVerdict(trainer, prevStart, lastEntriesDate);
-    if (!angle) return "";
-
-    const key = `trainerangle|${trainer}|${horseName}`;
-    const isOpen = entriesInsightOpenKeys.has(key);
-    const safeKey = escapeHtml(key);
-    let detail = "";
-    if (isOpen){
-      const prevTrackLabel = TRACKS[angle.prevTrack]?.shortName || angle.prevTrack;
-      const compareWord = angle.direction === "elevated" ? "above" : "below";
-      detail = `
-        <div class="entries-insight-detail">
-          <div class="entries-insight-line">
-            ${escapeHtml(trainer)} is ${angle.bucketCell.wins}-for-${angle.bucketCell.starts} (${Math.round(angle.bucketPct)}%) with horses racing back in the ${escapeHtml(angle.bucket)} bucket this archive — ${compareWord} the ${Math.round(angle.overallPct)}% overall rate (${angle.overallCell.wins}-for-${angle.overallCell.starts}).
-          </div>
-          <div class="entries-insight-source">
-            <span class="entries-insight-source-label">This angle</span>
-            <span class="entries-insight-source-text">${escapeHtml(horseName)} last started ${escapeHtml(fmtStableDate(angle.prevDate))} at ${escapeHtml(prevTrackLabel)} — ${angle.days} days ago</span>
-          </div>
-        </div>`;
+      const angle = trainerAngleVerdict(trainer, prevStart, lastEntriesDate);
+      if (angle){
+        signals.push({
+          key: `trainerangle|${trainer}|${horseName}`,
+          label: SIGNAL_LABEL.angle[angle.direction],
+          colorClass: SIGNAL_COLOR_CLASS.angle[angle.direction],
+          detail: () => {
+            const prevTrackLabel = TRACKS[angle.prevTrack]?.shortName || angle.prevTrack;
+            const compareWord = angle.direction === "elevated" ? "above" : "below";
+            return `
+              <div class="entries-signal-detail-block">
+                <span class="entries-signal-label ${SIGNAL_COLOR_CLASS.angle[angle.direction]}">Trainer angle</span>
+                <div class="entries-insight-line">
+                  ${escapeHtml(trainer)} is ${angle.bucketCell.wins}-for-${angle.bucketCell.starts} (${Math.round(angle.bucketPct)}%) with horses racing back in the ${escapeHtml(angle.bucket)} bucket this archive — ${compareWord} the ${Math.round(angle.overallPct)}% overall rate (${angle.overallCell.wins}-for-${angle.overallCell.starts}).
+                </div>
+                <div class="entries-insight-source">
+                  <span class="entries-insight-source-label">This angle</span>
+                  <span class="entries-insight-source-text">${escapeHtml(horseName)} last started ${escapeHtml(fmtStableDate(angle.prevDate))} at ${escapeHtml(prevTrackLabel)} — ${angle.days} days ago</span>
+                </div>
+              </div>`;
+          },
+        });
+      }
     }
+
+    if (!signals.length) return "";
+
+    const chipsHtml = signals.map(s => {
+      const isOpen = entriesInsightOpenKeys.has(s.key);
+      return `
+        <button type="button" class="entries-signal-chip ${s.colorClass}" data-insight-key="${escapeHtml(s.key)}" aria-expanded="${isOpen}">
+          ${escapeHtml(s.label)} <span class="entries-insight-chevron">&#9660;</span>
+        </button>`;
+    }).join("");
+    const openDetailHtml = signals.filter(s => entriesInsightOpenKeys.has(s.key)).map(s => s.detail()).join("");
+
     return `
-      <tr class="entries-insight-row entries-angle-${angle.direction}">
+      <tr class="entries-signals-row">
         <td colspan="6">
-          <button type="button" class="entries-insight-toggle" data-insight-key="${safeKey}" aria-expanded="${isOpen}">
-            <span class="entries-insight-pill">${escapeHtml(TRAINER_ANGLE_LABEL[angle.direction])}</span>
-            <span class="entries-insight-chevron">&#9660;</span>
-          </button>
-          ${detail}
+          <div class="entries-signals-chips">${chipsHtml}</div>
+          ${openDetailHtml ? `<div class="entries-signals-detail">${openDetailHtml}</div>` : ""}
         </td>
       </tr>`;
   }
@@ -6306,9 +6292,7 @@
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
       </tr>
-      ${entriesInsightHtml(h.trainer, h.name, race)}
-      ${entriesClassMovementHtml(h.trainer, h.name, race)}
-      ${entriesTrainerAngleHtml(h.trainer, h.name, race)}
+      ${entriesSignalsRowHtml(h.trainer, h.name, race)}
     `;
     }).join("");
 
@@ -12874,7 +12858,7 @@
       renderEntriesPage(lastEntriesDate, lastEntriesRaces);
       return;
     }
-    const insightToggle = e.target.closest(".entries-insight-toggle");
+    const insightToggle = e.target.closest(".entries-signal-chip");
     if (insightToggle){
       const key = insightToggle.dataset.insightKey;
       if (entriesInsightOpenKeys.has(key)) entriesInsightOpenKeys.delete(key);
