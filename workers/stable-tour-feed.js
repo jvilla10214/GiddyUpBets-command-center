@@ -1595,6 +1595,26 @@ async function handleRequest(request, env) {
       return json({ track, dates }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Batch lookup for the class movement indicator: given a card's horse
+    // names and its own date, finds each horse's most recent ACTUAL previous
+    // start (any track, strictly before that date) in our own Race Day
+    // Archive — one archive scan for the whole field, not one scan per
+    // horse (see findPreviousStarts()'s own comment for why). A horse never
+    // found running in the archive returns null — fresh to OUR data, not
+    // necessarily fresh to racing; never asserted as a career-first start
+    // (same scoping correction already applied to the trainer-angle-stats
+    // idea, see project_handicapping_analytics_ideas_deferred memory).
+    if (url.pathname === "/raceday/previous-starts" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const horses = Array.isArray(body.horses) ? body.horses.filter((h) => typeof h === "string" && h.trim()) : [];
+      const beforeDate = body.beforeDate || "";
+      if (!horses.length || !/^\d{4}-\d{2}-\d{2}$/.test(beforeDate)) {
+        return json({ error: "Missing horses[] or invalid beforeDate" }, 400);
+      }
+      const previousStarts = await findPreviousStarts(env, horses, beforeDate);
+      return json({ beforeDate, previousStarts }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Manual trigger for job #16's runEntryAlerts(), gated the same way as
     // every other write route — this sends real email, so it isn't left
     // open. Exists because there's no way to fire a real Cron Trigger
@@ -2536,6 +2556,71 @@ async function dedupeStableTourNotes(env) {
   await env.STABLE_KV.put("notes", JSON.stringify(filtered));
   await bumpDataVersion(env);
   return { totalBefore: notes.length, totalAfter: filtered.length, duplicateGroups, removed: toRemove.size, examples };
+}
+
+// Finds each requested horse's most recent ACTUAL previous start (any
+// track) strictly before `beforeDate`, scanning the raceday:* archive ONCE
+// for every horse in the request together — a card can have 80+ horses
+// across its races, and re-running a full archive scan per horse would
+// multiply KV reads for no reason. Confirmed cheap to do this way: the
+// archive is opportunistic (only written when someone had that track/date's
+// Entries or Results tab open — see /raceday POST's own comment), so real
+// volume is tens to a few hundred keys total, not a full historical
+// database — capped at RACEDAY_LOOKUP_MAX_DAYS below purely as a defensive
+// bound, same spirit as /raceday/dates' 60-day cap.
+//
+// A horse whose entry that day was scratched doesn't count as a "start" —
+// keeps scanning further back for a day it actually ran, using the same
+// per-horse `scratched` field the rest of the app already treats as ground
+// truth (no separate results cross-check: results shape varies by source
+// and 3 of 4 sources don't repeat raceType/purse on the result object at
+// all, so entries[].scratched is the only consistently-available signal).
+const RACEDAY_LOOKUP_MAX_DAYS = 200;
+async function findPreviousStarts(env, horseNames, beforeDate) {
+  const wanted = new Set(horseNames.map((n) => (n || "").trim().toLowerCase()).filter(Boolean));
+  const found = new Map(); // lowercased horse name -> previous-start record
+  if (!wanted.size) return {};
+
+  const listed = await env.STABLE_KV.list({ prefix: "raceday:" });
+  const candidates = listed.keys
+    .map((k) => {
+      const m = k.name.match(/^raceday:([^:]+):(\d{4}-\d{2}-\d{2})$/);
+      return m ? { key: k.name, track: m[1], date: m[2] } : null;
+    })
+    .filter((c) => c && c.date < beforeDate)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)) // newest first
+    .slice(0, RACEDAY_LOOKUP_MAX_DAYS);
+
+  for (const c of candidates) {
+    if (found.size >= wanted.size) break; // every requested horse already resolved
+    const raw = await env.STABLE_KV.get(c.key);
+    if (!raw) continue;
+    let record;
+    try { record = JSON.parse(raw); } catch { continue; }
+    const races = Array.isArray(record.entries) ? record.entries : [];
+    for (const race of races) {
+      const horses = Array.isArray(race.horses) ? race.horses : [];
+      for (const h of horses) {
+        const key = (h.name || "").trim().toLowerCase();
+        if (!key || !wanted.has(key) || found.has(key) || h.scratched) continue;
+        found.set(key, {
+          track: c.track,
+          date: c.date,
+          raceNumber: race.raceNumber,
+          raceType: race.raceType || null,
+          purse: race.purse || null,
+          distanceLabel: race.distanceLabel || null,
+          surface: race.surface || null,
+        });
+      }
+    }
+  }
+
+  const result = {};
+  horseNames.forEach((n) => {
+    result[n] = found.get((n || "").trim().toLowerCase()) || null;
+  });
+  return result;
 }
 
 const RACEDAY_BACKFILL_LOOKBACK_DAYS = 10;

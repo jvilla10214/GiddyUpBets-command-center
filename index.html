@@ -1901,6 +1901,17 @@
   }
   .entries-insight-aligned .entries-insight-detail{ border-left: 3px solid var(--rail-green); }
   .entries-insight-caution .entries-insight-detail{ border-left: 3px solid var(--tote-amber); }
+  /* Class Movement Indicator — deliberately NOT green/red (neither an up
+     nor a down class move is inherently "good" or "bad" for a horse; that's
+     a judgment call for the human, not this app — same reasoning as the
+     wind-insight strip's own "worth a look" framing). "Same level" reuses
+     the neutral no-signal styling since it's the least actionable of the
+     three states. */
+  .entries-classmove-up .entries-insight-pill{ background: var(--sky); color: var(--ink); }
+  .entries-classmove-down .entries-insight-pill{ background: var(--clay); color: var(--ink); }
+  .entries-classmove-same .entries-insight-pill{ background: var(--panel-2); color: var(--parchment-dim); border: 1px solid var(--panel-border); }
+  .entries-classmove-up .entries-insight-detail{ border-left: 3px solid var(--sky); }
+  .entries-classmove-down .entries-insight-detail{ border-left: 3px solid var(--clay); }
   .entries-insight-line{
     font-family:'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 600;
     color: var(--parchment); margin-bottom: 6px;
@@ -4808,6 +4819,15 @@
   // entriesInsightHtml() can check it without threading a param through
   // every call site. Set from localStorage at startup (see bottom of file).
   let entriesInsightsEnabled = true;
+  // Class Movement Indicator's previous-start lookup, keyed "trackId|date"
+  // (one entry per card, same key shape as archiveDayCache below) ->
+  // { horseName: previousStartRecord|null }, as returned by the worker's
+  // /raceday/previous-starts. Populated by refreshClassMovement(); shares
+  // the on/off switch above (entriesInsightsEnabled) and the same expanded-
+  // row Set (entriesInsightOpenKeys, keyed "classmove|trainer|horse") as the
+  // wind-based Race Insight Strip rather than inventing a parallel toggle
+  // for what's visually the same kind of collapsed-pill row.
+  let classMovementCache = {};
 
   // Only tracks whose entries source is verified to accept an arbitrary
   // future date and return that day's real card (NYRA's own site does this
@@ -4870,6 +4890,36 @@
     lastResultsByRace = byRace;
     if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
     saveRaceDaySnapshot();
+  }
+
+  // Fetches the whole card's field through the worker's batch
+  // /raceday/previous-starts in ONE request (not one per horse — see that
+  // route's own comment on why), caches the result under classMovementCache
+  // by "trackId|date", then re-renders so entriesClassMovementHtml() picks
+  // it up. Only fetched once per card (checked via the cache, same "no
+  // 'done' flag needed" reasoning doesn't apply here — unlike odds/scratches
+  // this data can't change during a card, since it's about PAST starts).
+  async function refreshClassMovement(){
+    if (!lastEntriesDate || !lastEntriesRaces.length) return;
+    const trackId = activeTrack.id;
+    const date = lastEntriesDate;
+    const cacheKey = `${trackId}|${date}`;
+    if (classMovementCache[cacheKey]) return; // already have this card's field resolved
+    const horseNames = [];
+    lastEntriesRaces.forEach(r => (r.horses || []).forEach(h => { if (h.name) horseNames.push(h.name); }));
+    if (!horseNames.length) return;
+    let data;
+    try{
+      const res = await fetch(stableApiUrl("/raceday/previous-starts"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ horses: horseNames, beforeDate: date }),
+      });
+      data = await res.json();
+    } catch(err){ console.error("Class movement lookup failed", err); return; }
+    if (activeTrack.id !== trackId || lastEntriesDate !== date) return; // stale — switched away while this was in flight
+    classMovementCache[cacheKey] = data.previousStarts || {};
+    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
   }
 
   // Pre-shared-storage localStorage copy — read-only now, kept only as a
@@ -5634,6 +5684,7 @@
     renderEntriesPage(date, races);
     refreshRaceResults();
     refreshRaceChanges();
+    refreshClassMovement();
     saveRaceDaySnapshot();
   }
 
@@ -5993,6 +6044,57 @@
       </tr>`;
   }
 
+  const CLASS_MOVE_LABEL = { up: "Up in class", down: "Down in class", same: "Same level" };
+
+  // Class Movement Indicator — same rendering shape as entriesInsightHtml
+  // above (own full-width <tr>, collapsed to just the verdict pill, shares
+  // entriesInsightOpenKeys/entriesInsightsEnabled), built from
+  // classMovementCache instead of a Stable Tour note. Returns "" — nothing
+  // rendered — when the lookup hasn't resolved yet for this card, when this
+  // horse has no confirmed previous start in our own archive at all (most
+  // maidens; also any horse whose only prior runs predate the archive's
+  // 2026-08-23 start), or when compareClassLevel() couldn't rank one of the
+  // two raceTypes. A missing verdict is a real limitation of what our OWN
+  // archive has seen, not a claim the horse has never raced before.
+  function entriesClassMovementHtml(trainer, horseName, race){
+    if (!entriesInsightsEnabled) return "";
+    const previousStarts = classMovementCache[`${activeTrack.id}|${lastEntriesDate}`];
+    if (!previousStarts) return "";
+    const prevStart = previousStarts[horseName] || null;
+    if (!prevStart) return "";
+    const move = compareClassLevel(prevStart, race);
+    if (!move) return "";
+
+    const key = `classmove|${trainer}|${horseName}`;
+    const isOpen = entriesInsightOpenKeys.has(key);
+    const safeKey = escapeHtml(key);
+    let detail = "";
+    if (isOpen){
+      const prevTrackLabel = TRACKS[move.prevTrack]?.shortName || move.prevTrack;
+      detail = `
+        <div class="entries-insight-detail">
+          <div class="entries-insight-source">
+            <span class="entries-insight-source-label">Last start</span>
+            <span class="entries-insight-source-text">${escapeHtml([move.prevRaceType, move.prevPurse].filter(Boolean).join(" · "))} — ${escapeHtml(prevTrackLabel)}, ${escapeHtml(fmtStableDate(move.prevDate))}</span>
+          </div>
+          <div class="entries-insight-source">
+            <span class="entries-insight-source-label">Today</span>
+            <span class="entries-insight-source-text">${escapeHtml([move.todayRaceType, move.todayPurse].filter(Boolean).join(" · "))}</span>
+          </div>
+        </div>`;
+    }
+    return `
+      <tr class="entries-insight-row entries-classmove-${move.direction}">
+        <td colspan="6">
+          <button type="button" class="entries-insight-toggle" data-insight-key="${safeKey}" aria-expanded="${isOpen}">
+            <span class="entries-insight-pill">${escapeHtml(CLASS_MOVE_LABEL[move.direction])}</span>
+            <span class="entries-insight-chevron">&#9660;</span>
+          </button>
+          ${detail}
+        </td>
+      </tr>`;
+  }
+
   // Every OTHER horse on this same race day sharing this exact owner
   // string, across every race — not just the one this horse happens to be
   // in. Exact (case/whitespace-insensitive) match only, same reasoning as
@@ -6121,6 +6223,7 @@
         <td>${h.scratched ? `<span class="tag entries-scr-tag">SCR</span>` : `${escapeHtml(h.currentOdds || "—")}${oddsMoveArrow(h.mlOdds, h.currentOdds)}`}</td>
       </tr>
       ${entriesInsightHtml(h.trainer, h.name, race)}
+      ${entriesClassMovementHtml(h.trainer, h.name, race)}
     `;
     }).join("");
 
@@ -6291,6 +6394,85 @@
     }
 
     return { speedHits, closerHits, speedTotal, closerTotal, suggestion };
+  }
+
+  // Class Movement Indicator — real US class hierarchy confirmed via this
+  // session's handicapping methodology research (see the
+  // reference_handicapping_methodology_knowledge_base memory: American
+  // Graded Stakes Committee/TOBA for stakes grading, Quirin/Beyer for the
+  // maiden-through-allowance ladder), cross-checked against this app's own
+  // actual archived raceType vocabulary (real Saratoga + Del Mar cards).
+  // Maiden Special Weight and Maiden Optional Claiming are deliberately
+  // tied at the same rank, same for Starter Optional Claiming/Starter
+  // Allowance and Allowance Optional Claiming/Allowance — their exact
+  // relative order is a genuinely unsettled call among handicappers (MSW
+  // reflects protected, unraced upside; MOC gives connections price-tag
+  // flexibility instead), and this project's "no guess beats a wrong
+  // guess" rule means not inventing false precision between them. An
+  // unrecognized raceType string (a source-specific label this table
+  // hasn't seen) returns null from classRankFor() rather than a guessed
+  // rank. Deliberately does NOT try to model an actual claiming PRICE —
+  // this app's own archived entries carry only a raceType label and a
+  // race-level purse, never a per-horse claiming tag (confirmed directly
+  // against real Del Mar claiming-race data), so a claiming-to-claiming
+  // move can only be read via the purse tiebreaker below, not a real price
+  // comparison.
+  const CLASS_RANK_BY_RACE_TYPE = {
+    "MAIDEN CLAIMING": 0,
+    "MAIDEN SPECIAL WEIGHT": 1,
+    "MAIDEN OPTIONAL CLAIMING": 1,
+    "CLAIMING": 2,
+    "STARTER OPTIONAL CLAIMING": 3,
+    "STARTER ALLOWANCE": 3,
+    "ALLOWANCE OPTIONAL CLAIMING": 4,
+    "ALLOWANCE": 4,
+    "STAKES": 5,
+  };
+  function classRankFor(raceTypeRaw){
+    if (!raceTypeRaw) return null;
+    const key = raceTypeRaw.trim().toUpperCase();
+    return Object.prototype.hasOwnProperty.call(CLASS_RANK_BY_RACE_TYPE, key) ? CLASS_RANK_BY_RACE_TYPE[key] : null;
+  }
+  function parsePurseAmount(purseRaw){
+    if (!purseRaw) return null;
+    const n = Number(String(purseRaw).replace(/[^0-9.]/g, ""));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  // Compares a horse's most recent ACTUAL previous start (from our own Race
+  // Day Archive, via the worker's /raceday/previous-starts) against today's
+  // race. Category rank decides up/down first; only within the SAME
+  // category rank does purse become the tiebreaker, and even then only past
+  // a 15% move — real cards have run-of-the-mill purse noise (a Tuesday
+  // allowance vs. a Saturday allowance of the same condition) that isn't a
+  // genuine class move. Returns null when either race's raceType isn't in
+  // the rank table — never guesses at an unrecognized category.
+  function compareClassLevel(prevStart, todayRace){
+    if (!prevStart || !todayRace) return null;
+    const prevRank = classRankFor(prevStart.raceType);
+    const todayRank = classRankFor(todayRace.raceType);
+    if (prevRank == null || todayRank == null) return null;
+
+    let direction;
+    if (todayRank > prevRank) direction = "up";
+    else if (todayRank < prevRank) direction = "down";
+    else {
+      const prevPurse = parsePurseAmount(prevStart.purse);
+      const todayPurse = parsePurseAmount(todayRace.purse);
+      if (prevPurse != null && todayPurse != null){
+        const pctChange = (todayPurse - prevPurse) / prevPurse;
+        direction = pctChange >= 0.15 ? "up" : pctChange <= -0.15 ? "down" : "same";
+      } else {
+        direction = "same";
+      }
+    }
+
+    return {
+      direction,
+      prevRaceType: prevStart.raceType, prevPurse: prevStart.purse,
+      prevTrack: prevStart.track, prevDate: prevStart.date,
+      todayRaceType: todayRace.raceType, todayPurse: todayRace.purse,
+    };
   }
 
   function fmtPhraseHits(hits){
