@@ -703,6 +703,9 @@ export default {
       ctx.waitUntil(
         dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
       );
+      ctx.waitUntil(
+        computeTrainerAngleStats(env).catch((err) => console.error("Trainer angle stats computation failed", err.message))
+      );
     }
   },
 };
@@ -1615,6 +1618,22 @@ async function handleRequest(request, env) {
       return json({ beforeDate, previousStarts }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Read-only, no auth (same as /raceday GET) — serves the cached blob
+    // computeTrainerAngleStats() builds once a day on the scheduled() cron
+    // (see that function's own comment). Lazily computes it on a cold miss
+    // (first deploy, or a fresh KV) so this never just 404s with nothing to
+    // show — a real request that happens to land on the empty-cache moment
+    // pays the one-time full-archive-scan cost instead of getting an error.
+    if (url.pathname === "/trainer-angle-stats" && request.method === "GET") {
+      let raw = await env.STABLE_KV.get(TRAINER_ANGLE_STATS_KV_KEY);
+      let stats = raw ? JSON.parse(raw) : null;
+      if (!stats) {
+        try { stats = await computeTrainerAngleStats(env); }
+        catch (err) { return json({ error: `Trainer angle stats computation failed: ${err.message}` }, 500); }
+      }
+      return json(stats, 200, { "Cache-Control": "public, max-age=3600" });
+    }
+
     // Manual trigger for job #16's runEntryAlerts(), gated the same way as
     // every other write route — this sends real email, so it isn't left
     // open. Exists because there's no way to fire a real Cron Trigger
@@ -1669,6 +1688,21 @@ async function handleRequest(request, env) {
         result = await dedupeStableTourNotes(env);
       } catch (err) {
         return json({ error: `Note dedupe run failed: ${err.message}` }, 500);
+      }
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual trigger for computeTrainerAngleStats() — same reasoning as
+    // /debug-run-scheduled above (also runs on the real Cron Trigger
+    // already, once a day; this is the on-demand equivalent for testing a
+    // fresh archive day right away instead of waiting for the next firing).
+    if (url.pathname === "/debug-recompute-trainer-angles" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      let result;
+      try {
+        result = await computeTrainerAngleStats(env);
+      } catch (err) {
+        return json({ error: `Trainer angle stats computation failed: ${err.message}` }, 500);
       }
       return json(result, 200, { "Cache-Control": "no-store" });
     }
@@ -2611,6 +2645,7 @@ async function findPreviousStarts(env, horseNames, beforeDate) {
           purse: race.purse || null,
           distanceLabel: race.distanceLabel || null,
           surface: race.surface || null,
+          medication: h.medication || null,
         });
       }
     }
@@ -2621,6 +2656,109 @@ async function findPreviousStarts(env, horseNames, beforeDate) {
     result[n] = found.get((n || "").trim().toLowerCase()) || null;
   });
   return result;
+}
+
+// Trainer Angle Stats — for every trainer, real win% by "days since this
+// SAME horse's own previous archived start" bucket, compared against that
+// trainer's own overall win% (an angle only matters relative to a
+// trainer's own baseline, not as a raw number — a trainer who wins
+// everything at 27% doesn't have a "short layoff" angle just because 27%
+// sounds good). Scans the WHOLE raceday:* archive once (not a lookback
+// window like backfillRaceDayResults — real sample size needs every day on
+// record), matching each race's entries against that same day's results by
+// raceNumber, then horse name, the same way readRaceRecap-style code
+// elsewhere in this file already does. Verified by hand against the exact
+// same computation done in a standalone Python script over a real
+// downloaded copy of the Saratoga+Belmont archive (2026-09-19) — e.g.
+// Linda Rice: 21-for-79 (27%) in the 0-30 day bucket vs 40-for-207 (19%)
+// overall — before this function was written, so the JS is checked against
+// known-correct numbers, not just "looks reasonable."
+const TRAINER_ANGLE_STATS_KV_KEY = "trainer-angle-stats";
+const TRAINER_ANGLE_BUCKET_MIN_SAMPLES = 8; // below this, a bucket's win% is noise, not a real angle
+function layoffBucketFor(days) {
+  if (days <= 30) return "0-30 days";
+  if (days <= 60) return "31-60 days";
+  if (days <= 90) return "61-90 days";
+  return "91+ days";
+}
+function daysBetween(dateStrA, dateStrB) {
+  const a = Date.UTC(...dateStrA.split("-").map(Number));
+  const b = Date.UTC(...dateStrB.split("-").map(Number));
+  return Math.round((b - a) / 86400000);
+}
+async function computeTrainerAngleStats(env) {
+  const listed = await env.STABLE_KV.list({ prefix: "raceday:" });
+  const byHorse = new Map(); // lowercased horse name -> chronological start records
+
+  for (const key of listed.keys) {
+    const m = key.name.match(/^raceday:([^:]+):(\d{4}-\d{2}-\d{2})$/);
+    if (!m) continue;
+    const raw = await env.STABLE_KV.get(key.name);
+    if (!raw) continue;
+    let record;
+    try { record = JSON.parse(raw); } catch { continue; }
+    const entries = Array.isArray(record.entries) ? record.entries : [];
+    const resultsByRace = new Map((record.results || []).map((r) => [r.raceNumber, r]));
+
+    for (const race of entries) {
+      const result = resultsByRace.get(race.raceNumber);
+      let winnerKey = null;
+      if (result && Array.isArray(result.finishOrder)) {
+        const winner = result.finishOrder.find((f) => f.finishPosition === 1);
+        if (winner && winner.horseName) winnerKey = winner.horseName.trim().toLowerCase();
+      }
+      for (const h of (race.horses || [])) {
+        if (h.scratched || !h.name || !h.trainer) continue;
+        const horseKey = h.name.trim().toLowerCase();
+        if (!byHorse.has(horseKey)) byHorse.set(horseKey, []);
+        byHorse.get(horseKey).push({
+          trainer: h.trainer.trim(), date: m[2], hasResult: !!result,
+          won: winnerKey === horseKey,
+        });
+      }
+    }
+  }
+
+  const overall = new Map(); // trainer -> {starts, wins}
+  const buckets = new Map(); // trainer -> {bucketLabel -> {starts, wins}}
+  const bump = (map, key, sub, won) => {
+    if (!map.has(key)) map.set(key, new Map());
+    const inner = map.get(key);
+    if (!inner.has(sub)) inner.set(sub, { starts: 0, wins: 0 });
+    const cell = inner.get(sub);
+    cell.starts++;
+    if (won) cell.wins++;
+  };
+
+  for (const starts of byHorse.values()) {
+    starts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    for (const s of starts) {
+      if (!s.hasResult) continue;
+      bump(overall, s.trainer, "overall", s.won);
+    }
+    for (let i = 1; i < starts.length; i++) {
+      const prev = starts[i - 1];
+      const cur = starts[i];
+      if (!cur.hasResult) continue;
+      const days = daysBetween(prev.date, cur.date);
+      if (days <= 0) continue;
+      bump(buckets, cur.trainer, layoffBucketFor(days), cur.won);
+    }
+  }
+
+  const trainers = {};
+  const allTrainerNames = new Set([...overall.keys(), ...buckets.keys()]);
+  for (const trainer of allTrainerNames) {
+    const overallCell = overall.get(trainer)?.get("overall") || { starts: 0, wins: 0 };
+    const bucketMap = buckets.get(trainer);
+    const bucketOut = {};
+    if (bucketMap) for (const [label, cell] of bucketMap) bucketOut[label] = cell;
+    trainers[trainer] = { overall: overallCell, buckets: bucketOut };
+  }
+
+  const stats = { computedAt: new Date().toISOString(), minSamples: TRAINER_ANGLE_BUCKET_MIN_SAMPLES, trainers };
+  await env.STABLE_KV.put(TRAINER_ANGLE_STATS_KV_KEY, JSON.stringify(stats));
+  return stats;
 }
 
 const RACEDAY_BACKFILL_LOOKBACK_DAYS = 10;

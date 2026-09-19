@@ -1912,6 +1912,16 @@
   .entries-classmove-same .entries-insight-pill{ background: var(--panel-2); color: var(--parchment-dim); border: 1px solid var(--panel-border); }
   .entries-classmove-up .entries-insight-detail{ border-left: 3px solid var(--sky); }
   .entries-classmove-down .entries-insight-detail{ border-left: 3px solid var(--clay); }
+  /* Trainer Angle Stats — unlike Class Movement, "elevated" vs "depressed"
+     really is a directional signal (a trainer's own real win rate genuinely
+     higher or lower than their baseline in this exact spot), so amber for
+     elevated (matches the approved mockup) and silk-red for depressed is
+     intentional here, not a contradiction of the neutral-color reasoning
+     above. */
+  .entries-angle-elevated .entries-insight-pill{ background: var(--tote-amber); color: var(--ink); }
+  .entries-angle-depressed .entries-insight-pill{ background: var(--silk-red); color: var(--parchment); }
+  .entries-angle-elevated .entries-insight-detail{ border-left: 3px solid var(--tote-amber); }
+  .entries-angle-depressed .entries-insight-detail{ border-left: 3px solid var(--silk-red); }
   .entries-insight-line{
     font-family:'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 600;
     color: var(--parchment); margin-bottom: 6px;
@@ -4828,6 +4838,13 @@
   // wind-based Race Insight Strip rather than inventing a parallel toggle
   // for what's visually the same kind of collapsed-pill row.
   let classMovementCache = {};
+  // Trainer Angle Stats — the worker's cached, once-daily-computed
+  // per-trainer layoff-bucket win rates (see computeTrainerAngleStats() in
+  // the Worker). Global/cross-track (unlike classMovementCache above, this
+  // isn't keyed per card — a trainer's stats don't depend on which card is
+  // open), so it's fetched once per session and reused everywhere. null
+  // until the first fetch resolves.
+  let trainerAngleStatsCache = null;
 
   // Only tracks whose entries source is verified to accept an arbitrary
   // future date and return that day's real card (NYRA's own site does this
@@ -4919,6 +4936,23 @@
     } catch(err){ console.error("Class movement lookup failed", err); return; }
     if (activeTrack.id !== trackId || lastEntriesDate !== date) return; // stale — switched away while this was in flight
     classMovementCache[cacheKey] = data.previousStarts || {};
+    if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+  }
+
+  // Fetches the Worker's cached Trainer Angle Stats blob once per session —
+  // global/cross-track, so unlike refreshClassMovement() above this never
+  // re-fetches per card switch, just once on first need. The Worker
+  // recomputes this itself once a day (see computeTrainerAngleStats()'s own
+  // comment); this client-side cache just avoids re-fetching that same
+  // once-a-day blob on every track switch within one browsing session.
+  async function refreshTrainerAngleStats(){
+    if (trainerAngleStatsCache) return; // already have it for this session
+    let data;
+    try{
+      const res = await fetch(stableApiUrl("/trainer-angle-stats"));
+      data = await res.json();
+    } catch(err){ console.error("Trainer angle stats fetch failed", err); return; }
+    trainerAngleStatsCache = data;
     if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
   }
 
@@ -5685,6 +5719,7 @@
     refreshRaceResults();
     refreshRaceChanges();
     refreshClassMovement();
+    refreshTrainerAngleStats();
     saveRaceDaySnapshot();
   }
 
@@ -6095,6 +6130,55 @@
       </tr>`;
   }
 
+  const TRAINER_ANGLE_LABEL = { elevated: "Elevated", depressed: "Below average" };
+
+  // Trainer Angle Stats row — same collapsed-pill/expand-on-click shape as
+  // entriesClassMovementHtml/entriesInsightHtml above, reusing the SAME
+  // previous-start data already fetched for Class Movement (classMovementCache)
+  // rather than a second per-horse lookup — that data already has exactly what
+  // this needs (the horse's last actual start's date). Returns "" — nothing
+  // rendered — for the common case: most horses' trainers won't have a
+  // real, big-enough-sample angle for today's specific layoff bucket, and
+  // showing nothing is the correct, honest result there, not a placeholder.
+  function entriesTrainerAngleHtml(trainer, horseName, race){
+    if (!entriesInsightsEnabled) return "";
+    const previousStarts = classMovementCache[`${activeTrack.id}|${lastEntriesDate}`];
+    if (!previousStarts) return "";
+    const prevStart = previousStarts[horseName] || null;
+    if (!prevStart) return "";
+    const angle = trainerAngleVerdict(trainer, prevStart, lastEntriesDate);
+    if (!angle) return "";
+
+    const key = `trainerangle|${trainer}|${horseName}`;
+    const isOpen = entriesInsightOpenKeys.has(key);
+    const safeKey = escapeHtml(key);
+    let detail = "";
+    if (isOpen){
+      const prevTrackLabel = TRACKS[angle.prevTrack]?.shortName || angle.prevTrack;
+      const compareWord = angle.direction === "elevated" ? "above" : "below";
+      detail = `
+        <div class="entries-insight-detail">
+          <div class="entries-insight-line">
+            ${escapeHtml(trainer)} is ${angle.bucketCell.wins}-for-${angle.bucketCell.starts} (${Math.round(angle.bucketPct)}%) with horses racing back in the ${escapeHtml(angle.bucket)} bucket this archive — ${compareWord} the ${Math.round(angle.overallPct)}% overall rate (${angle.overallCell.wins}-for-${angle.overallCell.starts}).
+          </div>
+          <div class="entries-insight-source">
+            <span class="entries-insight-source-label">This angle</span>
+            <span class="entries-insight-source-text">${escapeHtml(horseName)} last started ${escapeHtml(fmtStableDate(angle.prevDate))} at ${escapeHtml(prevTrackLabel)} — ${angle.days} days ago</span>
+          </div>
+        </div>`;
+    }
+    return `
+      <tr class="entries-insight-row entries-angle-${angle.direction}">
+        <td colspan="6">
+          <button type="button" class="entries-insight-toggle" data-insight-key="${safeKey}" aria-expanded="${isOpen}">
+            <span class="entries-insight-pill">${escapeHtml(TRAINER_ANGLE_LABEL[angle.direction])}</span>
+            <span class="entries-insight-chevron">&#9660;</span>
+          </button>
+          ${detail}
+        </td>
+      </tr>`;
+  }
+
   // Every OTHER horse on this same race day sharing this exact owner
   // string, across every race — not just the one this horse happens to be
   // in. Exact (case/whitespace-insensitive) match only, same reasoning as
@@ -6224,6 +6308,7 @@
       </tr>
       ${entriesInsightHtml(h.trainer, h.name, race)}
       ${entriesClassMovementHtml(h.trainer, h.name, race)}
+      ${entriesTrainerAngleHtml(h.trainer, h.name, race)}
     `;
     }).join("");
 
@@ -6494,6 +6579,52 @@
       prevRaceType: prevStart.raceType, prevPurse: prevStart.purse,
       prevTrack: prevStart.track, prevDate: prevStart.date,
       todayRaceType: todayRace.raceType, todayPurse: todayRace.purse,
+    };
+  }
+
+  // Trainer Angle Stats — matches this exact horse's real layoff (days
+  // since its own last ACTUAL archived start, from classMovementCache's
+  // previous-start data — no separate lookup needed) against that
+  // trainer's own real win-rate-by-layoff-bucket numbers from the Worker's
+  // computeTrainerAngleStats(). layoffBucketFor()/daysBetween() are
+  // deliberately byte-identical in logic to the Worker's own copies (see
+  // that function's comment) — checked against the same known-correct
+  // numbers (Linda Rice: 21-for-79 in the 0-30 day bucket vs 40-for-207
+  // overall) before either side was trusted.
+  const TRAINER_ANGLE_MIN_GAP_POINTS = 7; // below this, the gap vs a trainer's own baseline is noise
+  function layoffBucketFor(days){
+    if (days <= 30) return "0-30 days";
+    if (days <= 60) return "31-60 days";
+    if (days <= 90) return "61-90 days";
+    return "91+ days";
+  }
+  function daysBetween(dateStrA, dateStrB){
+    const a = Date.UTC(...dateStrA.split("-").map(Number));
+    const b = Date.UTC(...dateStrB.split("-").map(Number));
+    return Math.round((b - a) / 86400000);
+  }
+  function trainerAngleVerdict(trainer, prevStart, todayDateStr){
+    if (!trainerAngleStatsCache || !prevStart || !trainer) return null;
+    const days = daysBetween(prevStart.date, todayDateStr);
+    if (days <= 0) return null;
+    const bucket = layoffBucketFor(days);
+    const entry = trainerAngleStatsCache.trainers?.[trainer];
+    if (!entry) return null;
+    const minSamples = trainerAngleStatsCache.minSamples || 8;
+    const bucketCell = entry.buckets?.[bucket];
+    const overallCell = entry.overall;
+    if (!bucketCell || bucketCell.starts < minSamples) return null;
+    if (!overallCell || overallCell.starts < minSamples) return null;
+
+    const bucketPct = (bucketCell.wins / bucketCell.starts) * 100;
+    const overallPct = (overallCell.wins / overallCell.starts) * 100;
+    const gap = bucketPct - overallPct;
+    if (Math.abs(gap) < TRAINER_ANGLE_MIN_GAP_POINTS) return null;
+
+    return {
+      direction: gap > 0 ? "elevated" : "depressed",
+      bucket, days, bucketCell, overallCell, bucketPct, overallPct,
+      prevDate: prevStart.date, prevTrack: prevStart.track,
     };
   }
 
