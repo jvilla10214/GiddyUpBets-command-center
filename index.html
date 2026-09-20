@@ -8770,7 +8770,7 @@
   // on .stable-note.type-* below for why only the border uses color at all.
   function stableNoteType(n){
     if (n.jockey) return "jockey";
-    if (/^(maggie|acacia)'?s paddock notes\s*-/i.test((n.note || "").trim())) return "paddock";
+    if (/^(maggie|acacia|megan)'?s paddock notes\s*-/i.test((n.note || "").trim())) return "paddock";
     if (n.trainer) return "trainer";
     return null; // untracked (manually added, no person yet) — no badge, no special border
   }
