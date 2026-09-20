@@ -2096,21 +2096,23 @@
   .stable-view-tabs{ display:flex; align-items:center; gap: 6px; margin: 10px 0; }
   .stable-note-trainer{ color: var(--sky); }
   .stable-note-jockey{ color: var(--rail-green); }
-  /* Note-type border colors — a purely categorical distinction (who
+  /* Note-type border + badge colors — a purely categorical distinction (who
      created this note), not a directional signal like Class Movement/
-     Trainer Angle, so the BADGE stays neutral-toned (see
-     .stable-notetype-badge below) and only the border carries color. Clay
-     for paddock reads specifically, not amber — amber was already the
-     single most reused accent in this app (active tabs, LIVE badges, the
-     Race Insight Strip's "Worth a look," Trainer Angle's "Elevated") before
-     this was added; piling a 5th meaning onto it was the wrong call. */
+     Trainer Angle. Clay for paddock reads specifically, not amber — amber
+     was already the single most reused accent in this app (active tabs,
+     LIVE badges, the Race Insight Strip's "Worth a look," Trainer Angle's
+     "Elevated") before this was added; piling a 5th meaning onto it was
+     the wrong call. */
   .stable-note.type-trainer{ border-left: 3px solid var(--sky); }
   .stable-note.type-jockey{ border-left: 3px solid var(--rail-green); }
   .stable-note.type-paddock{ border-left: 3px solid var(--clay); }
   .stable-notetype-badge{
-    font-size: 9px; color: var(--parchment-dim); background: rgba(169,164,150,0.12);
-    padding: 1px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 9px; padding: 1px 5px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.5px;
   }
+  .stable-notetype-trainer{ color: var(--sky); background: rgba(111,168,201,0.12); }
+  .stable-notetype-jockey{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
+  .stable-notetype-paddock{ color: var(--clay); background: rgba(192,120,48,0.12); }
   .stable-setup-section{ display:flex; flex-direction:column; gap:16px; margin-top: 18px; }
   .stable-auto-badge{
     font-size: 9px;
@@ -2172,7 +2174,7 @@
     gap: 4px;
     padding: 2px 4px 2px 14px;
   }
-  .stable-trainer-toggle{
+  .stable-trainer-toggle, .stable-jockey-toggle{
     flex:1;
     display:flex;
     align-items:center;
@@ -2188,15 +2190,16 @@
     cursor:pointer;
     text-align:left;
   }
-  .stable-trainer-toggle:hover{ color: var(--tote-amber); }
-  .stable-trainer-toggle .chevron{
+  .stable-trainer-toggle:hover, .stable-jockey-toggle:hover{ color: var(--tote-amber); }
+  .stable-trainer-toggle .chevron, .stable-jockey-toggle .chevron{
     display:inline-block;
     color: var(--parchment-dim);
     transition: transform .15s;
   }
-  .stable-trainer.open .stable-trainer-toggle .chevron{ transform: rotate(90deg); }
-  .stable-trainer-toggle .tag{ margin-left: auto; }
-  .stable-trainer-remove{
+  .stable-trainer.open .stable-trainer-toggle .chevron,
+  .stable-trainer.open .stable-jockey-toggle .chevron{ transform: rotate(90deg); }
+  .stable-trainer-toggle .tag, .stable-jockey-toggle .tag{ margin-left: auto; }
+  .stable-trainer-remove, .stable-jockey-remove{
     background:none;
     border:none;
     color: var(--parchment-dim);
@@ -2204,7 +2207,7 @@
     padding: 6px 10px;
     cursor:pointer;
   }
-  .stable-trainer-remove:hover{ color: var(--silk-red); }
+  .stable-trainer-remove:hover, .stable-jockey-remove:hover{ color: var(--silk-red); }
   .stable-trainer-body{ padding: 0 14px 14px; border-top: 1px solid var(--panel-border); }
   .stable-trainer-body[hidden]{ display:none; }
   /* Race Day Archive cards reuse .stable-trainer/-header/-toggle/-body
@@ -2344,7 +2347,7 @@
     color: var(--tote-amber);
     margin-bottom: 6px;
   }
-  .stable-save-btn{
+  .stable-save-btn, .stable-jockey-save-btn{
     background: var(--tote-amber);
     color: var(--ink);
     font-family:'Oswald', sans-serif;
@@ -2357,7 +2360,7 @@
     cursor: pointer;
     border: none;
   }
-  .stable-save-btn:hover{ background: #ffc94d; }
+  .stable-save-btn:hover, .stable-jockey-save-btn:hover{ background: #ffc94d; }
   .stable-note-list{ display:flex; flex-direction:column; gap:8px; margin-top:14px; }
   .stable-note{
     background: var(--panel);
@@ -3340,10 +3343,10 @@
 
       <div class="stable-view-tabs">
         <button type="button" class="bias-window-btn active" data-view="trainer">By Trainer</button>
+        <button type="button" class="bias-window-btn" data-view="jockey">By Jockey</button>
         <button type="button" class="bias-window-btn" data-view="horse">By Horse</button>
         <button type="button" class="bias-window-btn" data-view="date">By Date</button>
         <button type="button" class="bias-window-btn" data-view="added">Newest Added</button>
-        <button type="button" class="bias-window-btn" data-view="jockey">By Jockey</button>
         <button type="button" id="stableQuickAddBtn" class="stable-save-btn">+ Add</button>
       </div>
 
@@ -8806,7 +8809,7 @@
       <div class="stable-note${noteType ? ` type-${noteType}` : ""}">
         <div class="stable-note-meta">
           ${leadBits.join(" · ")}
-          ${noteType ? `<span class="stable-notetype-badge">${STABLE_NOTE_TYPE_LABEL[noteType]}</span>` : ""}
+          ${noteType ? `<span class="stable-notetype-badge stable-notetype-${noteType}">${STABLE_NOTE_TYPE_LABEL[noteType]}</span>` : ""}
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
           ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
           ${n.importedVia && n.importedVia !== siteLabel ? `<span class="stable-site-badge">${escapeHtml(n.importedVia)}</span>` : ""}
