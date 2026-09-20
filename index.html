@@ -10949,18 +10949,23 @@
     return (doc.body.textContent || "").replace(/\s+/g, " ").trim();
   }
 
-  // Best-effort horse name for the note's label, in place of the article
-  // headline — only when a genuinely close match exists. Some sources
-  // (Horse Racing Nation, TDN) tag horse names as real links in their RSS
-  // body (verified directly: HRN uses <a href=".../horse/Name">, TDN uses
+  // Best-effort horse name for the note's label. Some sources (Horse Racing
+  // Nation, TDN) tag horse names as real links in their RSS body (verified
+  // directly: HRN uses <a href=".../horse/Name">, TDN uses
   // <a class="horse-link">, both sometimes wrapping a nested <strong> too).
   // Deliberately conservative: verified against a real HRN stakes preview
   // that the ONE inline horse link sits ~1000+ characters from the actual
   // trainer quote (the article names the horse once up top, then uses "she"/
   // "her" for the rest), so a wide search radius would just as often grab
-  // the WRONG horse — a false horse name asserted here is worse than
-  // honestly falling back to the headline, so this only trusts a link
-  // within HORSE_LINK_MAX_DIST characters of the quote.
+  // the WRONG horse — this only trusts a link within HORSE_LINK_MAX_DIST
+  // characters of the quote. Used to fall back to the article's own
+  // headline when no close link existed ("nothing false gets asserted,
+  // the linked source lets you confirm what it's about") — real user
+  // report 2026-09-20 that this reads as broken, not helpful (a headline
+  // sitting in the "Horse" field looks like a bug, not an honest
+  // placeholder). Now matches every other import job in this file
+  // (job #17's own HRN prose-fallback, TDN, NYRA): no confidently
+  // identified horse means skip the note entirely, not assert a fallback.
   const HORSE_LINK_MAX_DIST = 400;
   function nearestLinkedHorseName(proseHtml, quoteAnchorText){
     const anchorIdx = proseHtml.indexOf(quoteAnchorText);
@@ -11042,7 +11047,8 @@
         // even the part that mentioned this trainer at all.
         const start = Math.max(0, match.index - 250);
         const end = Math.min(bodyText.length, match.index + match[0].length + 250);
-        const horseLabel = nearestLinkedHorseName(proseHtml, match[1].slice(0, 40)) || item.title;
+        const horseLabel = nearestLinkedHorseName(proseHtml, match[1].slice(0, 40));
+        if (!horseLabel) continue; // no confidently identified horse — skip, don't file the headline as one
         // Only mark seen once the save actually succeeds — marking it first
         // (the old behavior) meant a failed write (bad passphrase, network
         // blip, a KV quota outage) silently and permanently dropped that
