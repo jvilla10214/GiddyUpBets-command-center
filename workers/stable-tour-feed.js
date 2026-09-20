@@ -812,6 +812,45 @@ async function handleRequest(request, env) {
       return json({ trainers, notes, trainerMeta: state.trainerMeta }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Jockeys — a fully separate roster from trainers, added 2026-09-20 so
+    // real jockey commentary (post-race broadcast interviews, "Jock's Room"
+    // style quotes) has somewhere to live as a tracked person instead of
+    // getting miscategorized as a trainer (the real bug this replaced — see
+    // the Colin Keane cleanup the same day: a real jockey's quotes had been
+    // filed under his own name as if he were training the horse). Exact
+    // mirror of /trainers POST/DELETE above, same trust level, same shape.
+    if (url.pathname === "/jockeys" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const name = (body.name || "").trim();
+      if (!name) return json({ error: "Missing name" }, 400);
+      const source = (body.source || "manual").trim();
+      const state = await readJockeysAndMeta(env);
+      const exists = state.jockeys.some(j => j.toLowerCase() === name.toLowerCase());
+      if (!exists) {
+        state.jockeys.push(name);
+        state.jockeyMeta[name] = { source, addedAt: new Date().toISOString() };
+      }
+      state.jockeys.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+      if (!exists) await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+      await bumpDataVersion(env);
+      return json({ jockeys: state.jockeys, jockeyMeta: state.jockeyMeta }, 200, { "Cache-Control": "no-store" });
+    }
+
+    if (url.pathname === "/jockeys" && request.method === "DELETE") {
+      const body = await request.json().catch(() => ({}));
+      const name = body.name;
+      const state = await readState(env);
+      const jockeys = state.jockeys.filter(j => j !== name);
+      const notes = state.notes.filter(n => n.jockey !== name); // cascade — no orphaned notes for a removed jockey
+      delete state.jockeyMeta[name];
+      await env.STABLE_KV.put("jockeys", JSON.stringify(jockeys));
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+      await bumpDataVersion(env);
+      return json({ jockeys, notes, jockeyMeta: state.jockeyMeta }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Same cascade as /trainers DELETE above, one KV write for the whole
     // batch instead of one per name — added specifically to undo the
     // SmartPony auto-add flood (see autoImportSmartPonyQuotes()'s own
@@ -888,15 +927,24 @@ async function handleRequest(request, env) {
       if (!body.horse || !body.note) return json({ error: "Missing required fields" }, 400);
       const notes = await readNotes(env);
       // Multiple devices independently auto-importing the same article would
-      // otherwise each file a duplicate note — dedupe on (trainer, horse,
-      // link) when a link is present, which auto-imported notes always have.
+      // otherwise each file a duplicate note — dedupe on (trainer, jockey,
+      // horse, link) when a link is present, which auto-imported notes
+      // always have. A note has EITHER trainer OR jockey set, never both
+      // (see readState()'s own comment), so both fields go in the dedup key
+      // even though only one is ever populated on a given note.
       if (body.link) {
-        const dup = notes.find(n => n.trainer === body.trainer && n.horse === body.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(body.link));
+        const dup = notes.find(n => n.trainer === body.trainer && n.jockey === body.jockey && n.horse === body.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(body.link));
         if (dup) return json({ note: dup, duplicate: true }, 200, { "Cache-Control": "no-store" });
       }
       const note = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         trainer: body.trainer || "",
+        // A jockey-attributed note (real post-race interview quote, e.g.)
+        // takes the exact same "no trainer" path notesForHorse() already
+        // uses for a manually-added trainer-less note — matches by horse
+        // name alone, always shown regardless of who's riding/training
+        // today. No separate jockey-matching logic needed for that reason.
+        jockey: body.jockey || "",
         horse: body.horse,
         note: body.note,
         date: body.date || "",
@@ -935,14 +983,19 @@ async function handleRequest(request, env) {
       // note in the batch was genuinely new.
       let addedAny = false;
       for (const item of items) {
-        if (!item.trainer || !item.horse || !item.note) continue;
+        // A batch item needs EITHER a trainer OR a jockey — same "no
+        // guessing" gate as before, just widened 2026-09-20 so a jockey-
+        // attributed auto-import (real post-race interview quotes) isn't
+        // silently dropped by a check written before jockeys existed here.
+        if ((!item.trainer && !item.jockey) || !item.horse || !item.note) continue;
         if (item.link) {
-          const dup = notes.find(n => n.trainer === item.trainer && n.horse === item.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+          const dup = notes.find(n => n.trainer === item.trainer && n.jockey === item.jockey && n.horse === item.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
           if (dup) { results.push({ note: dup, duplicate: true }); continue; }
         }
         const note = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          trainer: item.trainer,
+          trainer: item.trainer || "",
+          jockey: item.jockey || "",
           horse: item.horse,
           note: item.note,
           date: item.date || "",
@@ -1028,6 +1081,7 @@ async function handleRequest(request, env) {
       const note = notes.find(n => n.id === body.id);
       if (!note) return json({ error: "Note not found" }, 404);
       if (typeof body.trainer === "string") note.trainer = body.trainer.trim();
+      if (typeof body.jockey === "string") note.jockey = body.jockey.trim();
       if (typeof body.horse === "string") note.horse = body.horse.trim();
       if (typeof body.note === "string") note.note = body.note.trim();
       if (typeof body.link === "string") note.link = body.link.trim();
@@ -2857,10 +2911,12 @@ async function readBiasLog(env, track) {
 }
 
 async function readState(env) {
-  const [trainersRaw, notesRaw, trainerMetaRaw, versionRaw] = await Promise.all([
+  const [trainersRaw, notesRaw, trainerMetaRaw, jockeysRaw, jockeyMetaRaw, versionRaw] = await Promise.all([
     env.STABLE_KV.get("trainers"),
     env.STABLE_KV.get("notes"),
     env.STABLE_KV.get("trainerMeta"),
+    env.STABLE_KV.get("jockeys"),
+    env.STABLE_KV.get("jockeyMeta"),
     env.STABLE_KV.get("dataVersion"),
   ]);
   return {
@@ -2871,6 +2927,16 @@ async function readState(env) {
     // add time, never overwritten by a later re-add of the same name, so
     // it reflects genuine provenance rather than most-recent-touch.
     trainerMeta: trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {},
+    // Jockeys tracked as a fully separate roster from trainers (added
+    // 2026-09-20) — a note's `jockey` field is used INSTEAD OF `trainer`,
+    // never both, since a note is fundamentally "this person's quote about
+    // this horse" and the role is implied by which field is set. See
+    // notesForHorse()'s own comment for why a jockey-attributed note
+    // already flows through to Entries/emails with zero extra matching
+    // logic — it takes the same "no trainer" path a manually-added
+    // trainer-less note already used.
+    jockeys: jockeysRaw ? JSON.parse(jockeysRaw) : [],
+    jockeyMeta: jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {},
     version: versionRaw || "0",
   };
 }
@@ -2911,6 +2977,18 @@ async function readTrainersAndMeta(env) {
   return {
     trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
     trainerMeta: trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {},
+  };
+}
+
+// Jockeys' own parallel roster — same shape as readTrainersAndMeta() above.
+async function readJockeysAndMeta(env) {
+  const [jockeysRaw, jockeyMetaRaw] = await Promise.all([
+    env.STABLE_KV.get("jockeys"),
+    env.STABLE_KV.get("jockeyMeta"),
+  ]);
+  return {
+    jockeys: jockeysRaw ? JSON.parse(jockeysRaw) : [],
+    jockeyMeta: jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {},
   };
 }
 
