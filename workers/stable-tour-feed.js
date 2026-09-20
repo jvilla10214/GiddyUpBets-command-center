@@ -2385,13 +2385,21 @@ async function upsertRaceRecap(env, track, date, raceNumber, recap) {
 const RACE_RECAP_DOC_EXPORT_URL = "https://docs.google.com/document/d/1mp4oK11UmuYYt0cnc1f9E7q8MTfsHe3FSwkKQHF_KMU/export?format=txt";
 
 // Date-section boundary: a line starting with bare "M/D" (1-2 digit month,
-// 1-2 digit day — the doc never writes a year), optionally prefixed with
-// "Recap " (as in "Recap 9/3", "9/4 Recap:"). Deliberately NOT a loose match —
-// a mid-paragraph restatement like "SAR 8/30 — fast dirt..." doesn't begin
-// the line with a bare date, so it never gets mistaken for a new section.
+// 1-2 digit day — a trailing "/YY" is tolerated too, e.g. "9/12/26", since
+// (?!\d) only rejects a THIRD immediately-following digit group, not a
+// "/" before one), optionally prefixed with "Recap " (as in "Recap 9/3",
+// "9/4 Recap:") or a "TrackName - " lead-in (as in "Woodbine - 9/12/26",
+// "Belmont - 9/19/26" — confirmed real, 2026-09-20: once more than one
+// track's recaps share this doc, a bare date alone no longer says which
+// track it's for). Deliberately NOT a fully loose match — a mid-paragraph
+// restatement like "SAR 8/30 — fast dirt..." doesn't have a "-"/"–"/"—"
+// directly BEFORE the date (the dash there comes AFTER "8/30", not before
+// it), so it still never gets mistaken for a new section; verified this
+// change against the doc's own full real text with zero new false
+// positives before shipping (13 sections in, 13 out, all sane).
 // (?!\d) instead of a trailing \b because real entries in this doc run the
 // date straight into the next word with no separator at all ("8/21Card:").
-const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
+const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:[A-Za-z][A-Za-z .]*[A-Za-z]\s*[-–—]\s*)?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
 
 // Race marker: "R#" at the START of its own line, optionally followed —
 // still on that SAME line only — by "(...conditions...)" and/or a —/:
@@ -2466,8 +2474,14 @@ function parseRaceRecapsFromSection(sectionBody) {
 // in the doc's 8/30 section: a stray "CARD:" with nothing after it sits
 // right under the date header, and the actual writeup's own "CARD:" comes
 // later, further down, still before the first race marker.
+// "Card Notes:" folded into the same fallback regex, and a colon-less
+// standalone "THE CARD" header checked as a third tier — both confirmed
+// real, same meaning as "Full Card Recap:" (2026-09-20, user confirmed
+// directly; found live in the doc's own Woodbine 9/12 and Belmont 9/19
+// sections, both silently unparsed until this fix).
 const FULL_CARD_RECAP_LABEL = /Full\s*Card\s*Recap\s*:\s*/i;
-const FULL_CARD_RECAP_FALLBACK_LABEL = /Card\s*:\s*/gi;
+const FULL_CARD_RECAP_FALLBACK_LABEL = /Card(?:\s+Notes)?\s*:\s*/gi;
+const FULL_CARD_RECAP_HEADER_LABEL = /^[ \t]*THE CARD[ \t]*$/im;
 
 function parseFullCardRecapFromSection(sectionBody) {
   // NOTE: sectionBody.match(RACE_RECAP_RACE_MARKER) here would be a real bug
@@ -2487,8 +2501,14 @@ function parseFullCardRecapFromSection(sectionBody) {
   }
   const fallbackMatches = [...preRaceSpan.matchAll(FULL_CARD_RECAP_FALLBACK_LABEL)];
   const lastFallback = fallbackMatches[fallbackMatches.length - 1];
-  if (!lastFallback) return "";
-  return cleanRaceRecapDocText(preRaceSpan.slice(lastFallback.index + lastFallback[0].length));
+  if (lastFallback) {
+    return cleanRaceRecapDocText(preRaceSpan.slice(lastFallback.index + lastFallback[0].length));
+  }
+  const headerMatch = preRaceSpan.match(FULL_CARD_RECAP_HEADER_LABEL);
+  if (headerMatch) {
+    return cleanRaceRecapDocText(preRaceSpan.slice(headerMatch.index + headerMatch[0].length));
+  }
+  return "";
 }
 
 async function resyncRaceRecapsFromDoc(env, track, date) {
