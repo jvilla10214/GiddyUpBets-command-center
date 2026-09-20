@@ -2095,6 +2095,22 @@
   .stable-search-row input:focus{ border-color: var(--tote-amber); }
   .stable-view-tabs{ display:flex; align-items:center; gap: 6px; margin: 10px 0; }
   .stable-note-trainer{ color: var(--sky); }
+  .stable-note-jockey{ color: var(--rail-green); }
+  /* Note-type border colors — a purely categorical distinction (who
+     created this note), not a directional signal like Class Movement/
+     Trainer Angle, so the BADGE stays neutral-toned (see
+     .stable-notetype-badge below) and only the border carries color. Clay
+     for paddock reads specifically, not amber — amber was already the
+     single most reused accent in this app (active tabs, LIVE badges, the
+     Race Insight Strip's "Worth a look," Trainer Angle's "Elevated") before
+     this was added; piling a 5th meaning onto it was the wrong call. */
+  .stable-note.type-trainer{ border-left: 3px solid var(--sky); }
+  .stable-note.type-jockey{ border-left: 3px solid var(--rail-green); }
+  .stable-note.type-paddock{ border-left: 3px solid var(--clay); }
+  .stable-notetype-badge{
+    font-size: 9px; color: var(--parchment-dim); background: rgba(169,164,150,0.12);
+    padding: 1px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
   .stable-setup-section{ display:flex; flex-direction:column; gap:16px; margin-top: 18px; }
   .stable-auto-badge{
     font-size: 9px;
@@ -3327,6 +3343,7 @@
         <button type="button" class="bias-window-btn" data-view="horse">By Horse</button>
         <button type="button" class="bias-window-btn" data-view="date">By Date</button>
         <button type="button" class="bias-window-btn" data-view="added">Newest Added</button>
+        <button type="button" class="bias-window-btn" data-view="jockey">By Jockey</button>
         <button type="button" id="stableQuickAddBtn" class="stable-save-btn">+ Add</button>
       </div>
 
@@ -3373,6 +3390,8 @@
         <div class="log-controls">
           <input type="text" id="stableTrainerInput" class="stable-autocomplete-trainer" placeholder="Trainer name (e.g. Todd Pletcher)" autocomplete="off">
           <button type="button" id="addTrainerBtn">+ Add Trainer</button>
+          <input type="text" id="stableJockeyInput" placeholder="Jockey name (e.g. Antonio Fresu)" autocomplete="off">
+          <button type="button" id="addJockeyBtn">+ Add Jockey</button>
           <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableAutoimportPanel" title="Shared data source setup">⚙</button>
         </div>
         <div class="log-note stable-api-status" id="stableApiStatus"></div>
@@ -8373,6 +8392,12 @@
   let stableDataVersion = null; // last-seen GET /data version tag — lets refreshStableDataIfIdle() skip the full refetch when nothing changed
   let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
   let stableEditingNoteId = null; // note.id currently showing its inline edit form, or null — UI state only, not persisted
+  // Jockeys — a fully separate roster from trainers (added 2026-09-20), same
+  // shape as the trainer state above. A note has `jockey` set instead of
+  // `trainer`, never both — see the worker's readState() comment.
+  let stableJockeys = [];
+  let stableJockeyMeta = {};
+  let stableOpenJockeys = new Set();
 
   function escapeHtml(str){
     const div = document.createElement("div");
@@ -8559,11 +8584,13 @@
         trainers: Array.isArray(data.trainers) ? data.trainers : [],
         notes: Array.isArray(data.notes) ? data.notes : [],
         trainerMeta: (data.trainerMeta && typeof data.trainerMeta === "object") ? data.trainerMeta : {},
+        jockeys: Array.isArray(data.jockeys) ? data.jockeys : [],
+        jockeyMeta: (data.jockeyMeta && typeof data.jockeyMeta === "object") ? data.jockeyMeta : {},
         version: data.version || null,
       };
     } catch(err){
       stableApiError("load shared data", err);
-      return { trainers: [], notes: [], trainerMeta: {}, version: null };
+      return { trainers: [], notes: [], trainerMeta: {}, jockeys: [], jockeyMeta: {}, version: null };
     }
   }
 
@@ -8586,6 +8613,27 @@
       stableOpenTrainers.delete(name);
       renderStableTour();
     } catch(err){ stableApiError("remove trainer", err); }
+  }
+  // Jockeys — exact mirror of addStableTrainer/removeStableTrainer above.
+  async function addStableJockey(name){
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try{
+      const data = await stableApiWrite("POST", "/jockeys", { name: trimmed, source: "manual" });
+      stableJockeys = data.jockeys;
+      if (data.jockeyMeta) stableJockeyMeta = data.jockeyMeta;
+      renderStableTour();
+    } catch(err){ stableApiError("add jockey", err); }
+  }
+  async function removeStableJockey(name){
+    try{
+      const data = await stableApiWrite("DELETE", "/jockeys", { name });
+      stableJockeys = data.jockeys;
+      stableNotes = data.notes;
+      if (data.jockeyMeta) stableJockeyMeta = data.jockeyMeta;
+      stableOpenJockeys.delete(name);
+      renderStableTour();
+    } catch(err){ stableApiError("remove jockey", err); }
   }
   async function addStableNote(trainer, note){
     try{
@@ -8708,6 +8756,23 @@
     catch { return null; }
   }
 
+  // Which of the three real note "creators" this is — a trainer's own
+  // quote, a jockey's own quote, or a broadcast analyst's third-person
+  // paddock read filed under the horse's trainer (see raceInsightVerdict-
+  // adjacent design note: a paddock read is NOT the trainer's own words,
+  // just stored under them — see project_nyra_broadcast_quotes memory).
+  // Purely categorical, not a directional signal like Class Movement/
+  // Trainer Angle, so it deliberately does NOT reuse this app's "hot"
+  // amber/green/sky signal palette for all three — see the color choices
+  // on .stable-note.type-* below for why only the border uses color at all.
+  function stableNoteType(n){
+    if (n.jockey) return "jockey";
+    if (/^(maggie|acacia)'?s paddock notes\s*-/i.test((n.note || "").trim())) return "paddock";
+    if (n.trainer) return "trainer";
+    return null; // untracked (manually added, no person yet) — no badge, no special border
+  }
+  const STABLE_NOTE_TYPE_LABEL = { trainer: "Trainer Quote", jockey: "Jockey Quote", paddock: "Paddock Read" };
+
   function renderStableNoteHtml(n, opts = {}){
     const { showHorse = true, showTrainer = false } = opts;
     if (n.id === stableEditingNoteId){
@@ -8734,11 +8799,14 @@
     const siteLabel = stableNoteSiteLabel(n.link);
     const leadBits = [];
     if (showHorse) leadBits.push(`<strong>${escapeHtml(n.horse) || "—"}</strong>`);
-    if (showTrainer) leadBits.push(`<span class="stable-note-trainer">${escapeHtml(n.trainer) || "—"}</span>`);
+    if (showTrainer && n.jockey) leadBits.push(`<span class="stable-note-jockey">${escapeHtml(n.jockey)}</span>`);
+    else if (showTrainer) leadBits.push(`<span class="stable-note-trainer">${escapeHtml(n.trainer) || "—"}</span>`);
+    const noteType = stableNoteType(n);
     return `
-      <div class="stable-note">
+      <div class="stable-note${noteType ? ` type-${noteType}` : ""}">
         <div class="stable-note-meta">
           ${leadBits.join(" · ")}
+          ${noteType ? `<span class="stable-notetype-badge">${STABLE_NOTE_TYPE_LABEL[noteType]}</span>` : ""}
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
           ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
           ${n.importedVia && n.importedVia !== siteLabel ? `<span class="stable-site-badge">${escapeHtml(n.importedVia)}</span>` : ""}
@@ -8887,7 +8955,9 @@
     // A trainer-less note (see /notes POST) can exist with zero trainers
     // tracked at all — e.g. the very first thing added is a Quick Add left
     // blank on purpose — so "no trainers" alone isn't "nothing to show".
-    if (!stableTrainers.length && !stableNotes.some(n => !n.trainer)){
+    if (stableViewMode === "jockey"){
+      renderStableTourByJockey(list);
+    } else if (!stableTrainers.length && !stableNotes.some(n => !n.trainer)){
       list.innerHTML = `<div class="log-empty">No trainers added yet — add one below to get started.</div>`;
     } else if (stableViewMode === "horse"){
       renderStableTourByHorse(list);
@@ -9162,6 +9232,72 @@
     });
   }
 
+  // Jockeys — same card/expand/add-note/remove shape as
+  // renderStableTourByTrainer above, deliberately WITHOUT the paste-and-
+  // extract-multiple-horses workflow (that's specific to the trainer-
+  // profile article format thisishorseracing.com publishes; jockey quotes
+  // arrive one at a time from broadcast interviews, so there's nothing to
+  // bulk-extract yet). Reuses stable-trainer/-header/-toggle/-body CSS
+  // wholesale — same visual card, different data-jockey attribute instead
+  // of data-trainer so the click handlers below can tell them apart.
+  function renderStableTourByJockey(list){
+    const query = stableSearchQuery.trim().toLowerCase();
+    const visibleJockeys = stableJockeys.filter(jockey => {
+      if (!query) return true;
+      if (jockey.toLowerCase().includes(query)) return true;
+      return stableNotes.some(n => n.jockey === jockey && (n.horse || "").toLowerCase().includes(query));
+    });
+    if (!visibleJockeys.length){
+      list.innerHTML = stableJockeys.length
+        ? `<div class="log-empty">No jockeys or horses match "${escapeHtml(stableSearchQuery.trim())}".</div>`
+        : `<div class="log-empty">No jockeys added yet — add one below to get started.</div>`;
+      return;
+    }
+    list.innerHTML = visibleJockeys.map(jockey => {
+      const jockeyNameMatches = query && jockey.toLowerCase().includes(query);
+      const allNotes = sortNotesNewestFirst(stableNotes.filter(n => n.jockey === jockey));
+      const notes = (query && !jockeyNameMatches)
+        ? allNotes.filter(n => (n.horse || "").toLowerCase().includes(query))
+        : allNotes;
+      const isOpen = query ? true : stableOpenJockeys.has(jockey);
+      const safeJockey = escapeHtml(jockey);
+
+      const notesHtml = notes.length
+        ? notes.map(n => renderStableNoteHtml(n, { showHorse: true, showTrainer: false })).join("")
+        : `<div class="log-empty">No notes yet for ${safeJockey}.</div>`;
+
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}" data-jockey="${safeJockey}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-jockey-toggle" data-jockey="${safeJockey}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${safeJockey}</span>
+              <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+            <button type="button" class="stable-jockey-remove" data-jockey="${safeJockey}" title="Remove jockey">×</button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="bias-form open">
+              <div class="bias-form-row">
+                <label>Horse <input type="text" class="stableHorseInput stable-autocomplete-horse" placeholder="Horse name" autocomplete="off"></label>
+                <label>Date <input type="date" class="stableJockeyDateInput"></label>
+                <label>Source (optional) <input type="text" class="stableSourceInput" placeholder="e.g. NYRA broadcast, 9/18"></label>
+              </div>
+              <label>What did ${safeJockey} say? <textarea class="stableJockeyNoteInput" placeholder="Quote about this horse or its trip…"></textarea></label>
+              <div class="bias-form-actions">
+                <button type="button" class="stable-jockey-save-btn" data-jockey="${safeJockey}">Save Note</button>
+              </div>
+            </div>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+
+    list.querySelectorAll(".stableJockeyDateInput").forEach(input => {
+      if (!input.value) input.value = nowInTrackTZ().date;
+    });
+  }
+
   $("addTrainerBtn").addEventListener("click", () => {
     const input = $("stableTrainerInput");
     if (!input.value.trim()){ input.focus(); return; }
@@ -9170,6 +9306,15 @@
   });
   $("stableTrainerInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("addTrainerBtn").click();
+  });
+  $("addJockeyBtn").addEventListener("click", () => {
+    const input = $("stableJockeyInput");
+    if (!input.value.trim()){ input.focus(); return; }
+    addStableJockey(input.value);
+    input.value = "";
+  });
+  $("stableJockeyInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("addJockeyBtn").click();
   });
   $("stableSearchInput").addEventListener("input", (e) => {
     stableSearchQuery = e.target.value;
@@ -9407,6 +9552,42 @@
       const source = trainerEl.querySelector(".stableSourceInput").value.trim();
       stableOpenTrainers.add(trainer); // keep it open after saving
       addStableNote(trainer, { horse, date, source, note });
+    }
+  });
+
+  // Jockeys — separate delegated listener, same event-delegation reasoning
+  // as the trainer one above (the list is fully regenerated on every
+  // render). Kept as its own listener/class set (.stable-jockey-*) rather
+  // than folding into the trainer one's if/else chain, since a jockey note
+  // has no trainer to pass and no paste-extract step to wire up.
+  $("stableTrainerList").addEventListener("click", (e) => {
+    const toggleBtn = e.target.closest(".stable-jockey-toggle");
+    if (toggleBtn){
+      const jockey = toggleBtn.dataset.jockey;
+      if (stableOpenJockeys.has(jockey)) stableOpenJockeys.delete(jockey);
+      else stableOpenJockeys.add(jockey);
+      renderStableTour();
+      return;
+    }
+    const removeBtn = e.target.closest(".stable-jockey-remove");
+    if (removeBtn){
+      removeStableJockey(removeBtn.dataset.jockey);
+      return;
+    }
+    const saveBtn = e.target.closest(".stable-jockey-save-btn");
+    if (saveBtn){
+      const jockey = saveBtn.dataset.jockey;
+      const jockeyEl = saveBtn.closest(".stable-trainer");
+      const horseInput = jockeyEl.querySelector(".stableHorseInput");
+      const noteInput = jockeyEl.querySelector(".stableJockeyNoteInput");
+      const horse = horseInput.value.trim();
+      const note = noteInput.value.trim();
+      if (!horse){ horseInput.focus(); return; }
+      if (!note){ noteInput.focus(); return; }
+      const date = jockeyEl.querySelector(".stableJockeyDateInput").value;
+      const source = jockeyEl.querySelector(".stableSourceInput").value.trim();
+      stableOpenJockeys.add(jockey); // keep it open after saving
+      addStableNote("", { jockey, horse, date, source, note });
     }
   });
 
@@ -13119,6 +13300,8 @@
     stableTrainers = data.trainers;
     stableNotes = data.notes;
     stableTrainerMeta = data.trainerMeta;
+    stableJockeys = data.jockeys;
+    stableJockeyMeta = data.jockeyMeta;
     stableDataVersion = data.version;
     renderStableTour();
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
@@ -13160,6 +13343,8 @@
     stableTrainers = data.trainers;
     stableNotes = data.notes;
     stableTrainerMeta = data.trainerMeta;
+    stableJockeys = data.jockeys;
+    stableJockeyMeta = data.jockeyMeta;
     stableDataVersion = data.version;
     renderStableTour();
   }
@@ -13168,10 +13353,10 @@
     if (document.visibilityState === "visible") refreshStableDataIfIdle();
   });
 
-  document.querySelectorAll(".bias-window-btn").forEach(btn => {
+  document.querySelectorAll("#biasTrendsWindow .bias-window-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       biasTrendsWindow = btn.dataset.window;
-      document.querySelectorAll(".bias-window-btn").forEach(b => b.classList.toggle("active", b === btn));
+      document.querySelectorAll("#biasTrendsWindow .bias-window-btn").forEach(b => b.classList.toggle("active", b === btn));
       renderBiasTrends();
     });
   });
