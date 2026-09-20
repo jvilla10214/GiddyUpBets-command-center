@@ -4828,28 +4828,39 @@ function stripHorseCountrySuffix(name) {
   return name.replace(/\s*\([a-z]{2,4}\)\s*$/i, "").trim();
 }
 
+// A horse that changes barns (a claim, a private transfer) keeps its FULL
+// note history regardless of who trains it today — real ask 2026-09-20,
+// prompted by Stickupwithoutagun's real mid-meet claim off Kenneth McPeek
+// by Ilkay Kantarmaci: the old McPeek-attributed notes are still genuinely
+// about this horse and should keep showing (Entries tab AND entry-alert
+// emails) even though today's trainer field says someone else. The ONLY
+// case still narrowed is the one the original trainer-match guard existed
+// for: two DIFFERENT real trainers who happen to share a SURNAME (e.g.
+// "William Mott" vs "Riley Mott") both having notes filed under this exact
+// horse name — there, and only there, narrow to whichever one today's
+// entry actually agrees with, so a rare same-surname coincidence can't
+// leak another trainer's horse in. A different-surname former trainer is
+// never treated as that kind of ambiguity — their notes always pass
+// through untouched. Kept as an exact mirror of index.html's
+// findHorseStableNotes() — same fix, same reasoning, both places.
 function notesForHorse(notes, trainer, horseName) {
   if (!horseName) return [];
   const wantHorse = stripHorseCountrySuffix(horseName.trim().toLowerCase());
   const horseMatches = notes.filter((n) => n.horse && stripHorseCountrySuffix(n.horse.trim().toLowerCase()) === wantHorse);
   const untracked = horseMatches.filter((n) => !n.trainer);
-  let matchedTracked = [];
+  const tracked = horseMatches.filter((n) => n.trainer);
+  let resolvedTracked = tracked;
   if (trainer) {
     const wantTrainer = lastNameKey(trainer);
-    const candidates = horseMatches.filter((n) => n.trainer && lastNameKey(n.trainer) === wantTrainer);
-    const distinctTrainers = [...new Set(candidates.map((n) => n.trainer))];
+    const sameSurname = tracked.filter((n) => lastNameKey(n.trainer) === wantTrainer);
+    const distinctTrainers = [...new Set(sameSurname.map((n) => n.trainer))];
     if (distinctTrainers.length > 1) {
-      // This exact horse name has notes filed under more than one
-      // same-surname trainer — narrow to whichever one the day's entry row
-      // actually agrees with (see resolveTrackedTrainer() above) instead of
-      // emailing another trainer's notes for this horse.
       const resolved = resolveTrackedTrainer(trainer, distinctTrainers);
-      matchedTracked = resolved ? candidates.filter((n) => n.trainer === resolved) : [];
-    } else {
-      matchedTracked = candidates;
+      const wrongSameSurname = new Set(sameSurname.filter((n) => n.trainer !== resolved));
+      resolvedTracked = tracked.filter((n) => !wrongSameSurname.has(n));
     }
   }
-  return [...untracked, ...matchedTracked]
+  return [...untracked, ...resolvedTracked]
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.capturedAt || "").localeCompare(a.capturedAt || ""));
 }
 
