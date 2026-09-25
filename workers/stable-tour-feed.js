@@ -6165,23 +6165,40 @@ function parseDrfTrackNewsListing(html) {
 // sitemap alone has (a single track hub page can have 70+ articles
 // spanning a whole meet, easily the largest single source).
 async function discoverDrfArticleLinks() {
-  const sitemapRes = await fetch(DRF_SITEMAP_NEWS_URL, {
-    headers: { "User-Agent": BROWSER_UA },
-    cf: { cacheTtl: 300, cacheEverything: true },
-  });
-  if (!sitemapRes.ok) throw new Error(`DRF news sitemap returned HTTP ${sitemapRes.status}`);
-  const sitemapXml = await sitemapRes.text();
-
+  // Best-effort like the other two sources below now (confirmed real
+  // 2026-09-24: this specific endpoint started 403ing — a Google-News-style
+  // sitemap.xml is exactly the kind of URL a site's bot-detection treats
+  // differently from its regular HTML pages, likely expecting a search-
+  // crawler UA/IP rather than a generic browser one — while the all-news
+  // listing and track hub pages, hit with the same BROWSER_UA, kept working
+  // fine). Used to be a hard `throw` that killed discovery entirely on any
+  // sitemap hiccup, meaning a block on JUST this one endpoint took down
+  // ALL THREE sources at once even though two of them were completely
+  // unaffected — this was already fragile before today, just hadn't been
+  // exercised by a real failure until now.
   const sitemapItems = [];
   const seenLinks = new Set();
-  for (const m of sitemapXml.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
-    const block = m[1];
-    const link = block.match(/<loc>(.*?)<\/loc>/)?.[1];
-    const title = block.match(/<news:title>(.*?)<\/news:title>/)?.[1];
-    const pubDate = block.match(/<news:publication_date>(.*?)<\/news:publication_date>/)?.[1];
-    if (!link) continue;
-    seenLinks.add(link);
-    sitemapItems.push({ link, title: title ? decodeEntities(title).trim() : null, pubDate: pubDate || null });
+  try {
+    const sitemapRes = await fetch(DRF_SITEMAP_NEWS_URL, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    if (sitemapRes.ok) {
+      const sitemapXml = await sitemapRes.text();
+      for (const m of sitemapXml.matchAll(/<url>([\s\S]*?)<\/url>/g)) {
+        const block = m[1];
+        const link = block.match(/<loc>(.*?)<\/loc>/)?.[1];
+        const title = block.match(/<news:title>(.*?)<\/news:title>/)?.[1];
+        const pubDate = block.match(/<news:publication_date>(.*?)<\/news:publication_date>/)?.[1];
+        if (!link) continue;
+        seenLinks.add(link);
+        sitemapItems.push({ link, title: title ? decodeEntities(title).trim() : null, pubDate: pubDate || null });
+      }
+    } else {
+      console.error(`DRF news sitemap returned HTTP ${sitemapRes.status}`);
+    }
+  } catch (err) {
+    console.error("DRF news sitemap fetch failed", err.message);
   }
 
   // Remaining sources (page 1 of /news/all-news, and every track hub page
