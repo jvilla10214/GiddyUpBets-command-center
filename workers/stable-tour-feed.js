@@ -7699,7 +7699,8 @@ async function fetchNyraNews(track, options = {}) {
 
 // ---------- NYRA News server-side import (job #20, scheduled) ----------
 // Confirmed ask 2026-09-25: "auto scrape this and any future articles on the
-// NYRA Belmont news site" — the browser-only autoImportNyraNews() in
+// NYRA Belmont news site" (scope: NYRA_IMPORT_TRACKS, NYRA_IMPORT_START_DATE)
+// — the browser-only autoImportNyraNews() in
 // index.html only ever ran while someone had the dashboard open. This runs
 // on its OWN Cron Trigger (NYRA_NEWS_CRON), twice a day at 7am and 3pm
 // Eastern, fully inside the Worker, same shape as runDrfImport(): fetch,
@@ -7734,6 +7735,12 @@ const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (
 const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
 const NYRA_IMPORT_MAX_NEW_PER_RUN = 5; // ~7 ms CPU each; a backlog drains over a few runs
 const NYRA_IMPORT_MAX_AGE_DAYS = 28;
+// Scope (confirmed ask 2026-09-25): "I want the Sep 24 article and any future
+// NYRA Belmont notes" — Belmont's news page only, nothing published before
+// the Sep 24 Belmont Notes column (no backfill). Saratoga's news is still
+// served to the browser by GET /nyra-news; add "saratoga" here to import it.
+const NYRA_IMPORT_TRACKS = ["belmont"];
+const NYRA_IMPORT_START_DATE = "2026-09-24";
 const NYRA_UNTRACKED_KV_KEY = "nyra:untracked";
 const NYRA_UNTRACKED_MAX = 300;
 // Normalized horse name -> trainer surname key, for every horse the stored
@@ -7773,9 +7780,9 @@ async function runNyraNewsImport(env, { force = false } = {}) {
     // Pass 1 — cheap: listing pages + one small KV read per recent article.
     // The multi-MB notes key isn't touched unless something is new, so the
     // usual "nothing new" run costs ~1-2 ms of CPU.
-    const cutoff = Date.now() - NYRA_IMPORT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+    const cutoff = Math.max(Date.now() - NYRA_IMPORT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000, Date.parse(`${NYRA_IMPORT_START_DATE}T00:00:00Z`));
     const todo = [];
-    for (const track of NYRA_NEWS_TRACKS) {
+    for (const track of NYRA_IMPORT_TRACKS) {
       const t = { listed: 0, tooOld: 0, alreadySeen: 0, queued: 0, fetched: 0, articlesWithQuotes: 0 };
       summary.tracks[track] = t;
       let items;
