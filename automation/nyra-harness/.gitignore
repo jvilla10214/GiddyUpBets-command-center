@@ -1,0 +1,4 @@
+# Cached NYRA pages and /data snapshots: third-party content, re-fetch with fetch-fixtures.sh
+fixtures/
+# Generated copy of the Worker with an export line appended
+.cache/

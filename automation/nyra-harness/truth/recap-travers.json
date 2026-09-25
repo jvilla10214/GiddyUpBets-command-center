@@ -1,0 +1,239 @@
+{
+ "spans": [
+  {
+   "p": 3,
+   "q": "We’ve always thought he",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 3,
+   "q": "He showed it before today",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 5,
+   "q": "Honestly, no",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 5,
+   "q": "The timing made a lot",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 7,
+   "q": "All I can say is",
+   "label": "horse",
+   "speaker": "Manny Franco",
+   "role": "jockey",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 7,
+   "q": "I just want to say thanks",
+   "label": "horse",
+   "speaker": "Manny Franco",
+   "role": "jockey",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 14,
+   "q": "We wanted to be forward",
+   "label": "horse",
+   "speaker": "Manny Franco",
+   "role": "jockey",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 14,
+   "q": "Going to the five-sixteenths",
+   "label": "horse",
+   "speaker": "Manny Franco",
+   "role": "jockey",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 15,
+   "q": "This is incredible",
+   "label": "horse",
+   "speaker": "Manny Franco",
+   "role": "jockey",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 15,
+   "q": "It's just his third race",
+   "label": "horse",
+   "speaker": "Manny Franco",
+   "role": "jockey",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 17,
+   "q": "He had to win on talent",
+   "label": "exclude",
+   "why": "racing manager (not a trainer/jockey)",
+   "speaker": "Case Clay"
+  },
+  {
+   "p": 17,
+   "q": "Yes, physically he is",
+   "label": "exclude",
+   "why": "racing manager (not a trainer/jockey)",
+   "speaker": "Case Clay"
+  },
+  {
+   "p": 19,
+   "q": "We’ll check him tonight",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Leading Change"
+   ],
+   "note": "attributed by 'he said' after 'Cox added'"
+  },
+  {
+   "p": 19,
+   "q": "We’ll ship him back",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Leading Change"
+   ]
+  },
+  {
+   "p": 22,
+   "q": "He showed me about a mile",
+   "label": "horse",
+   "speaker": "Chad Summers",
+   "role": "trainer",
+   "horse": [
+    "Napoleon Solo"
+   ]
+  },
+  {
+   "p": 22,
+   "q": "Look, he tries",
+   "label": "horse",
+   "speaker": "Chad Summers",
+   "role": "trainer",
+   "horse": [
+    "Napoleon Solo"
+   ]
+  },
+  {
+   "p": 24,
+   "q": "He ran great",
+   "label": "horse",
+   "speaker": "John Velazquez",
+   "role": "jockey",
+   "horse": [
+    "Napoleon Solo"
+   ]
+  },
+  {
+   "p": 24,
+   "q": "He ran a really good race",
+   "label": "horse",
+   "speaker": "John Velazquez",
+   "role": "jockey",
+   "horse": [
+    "Napoleon Solo"
+   ]
+  },
+  {
+   "p": 26,
+   "q": "He was far back",
+   "label": "horse",
+   "speaker": "Cherie DeVaux",
+   "role": "trainer",
+   "horse": [
+    "Golden Tempo"
+   ]
+  },
+  {
+   "p": 26,
+   "q": "He had too much to do",
+   "label": "horse",
+   "speaker": "Cherie DeVaux",
+   "role": "trainer",
+   "horse": [
+    "Golden Tempo"
+   ]
+  },
+  {
+   "p": 28,
+   "q": "He broke good",
+   "label": "horse",
+   "speaker": "Jose Ortiz",
+   "role": "jockey",
+   "horse": [
+    "Golden Tempo"
+   ]
+  },
+  {
+   "p": 28,
+   "q": "I saw a good opening",
+   "label": "horse",
+   "speaker": "Jose Ortiz",
+   "role": "jockey",
+   "horse": [
+    "Golden Tempo"
+   ]
+  },
+  {
+   "p": 30,
+   "q": "Got a good bump",
+   "label": "horse",
+   "speaker": "Tyler Gaffalione",
+   "role": "jockey",
+   "horse": [
+    "Renegade"
+   ]
+  },
+  {
+   "p": 30,
+   "q": "Had a good position",
+   "label": "horse",
+   "speaker": "Tyler Gaffalione",
+   "role": "jockey",
+   "horse": [
+    "Renegade"
+   ]
+  }
+ ]
+}

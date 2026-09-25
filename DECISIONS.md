@@ -6,6 +6,36 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 
 ---
 
+## NYRA News quotes: rewritten extractor, imported server-side on its own cron
+**Date:** 2026-09-25
+**Decision:** NYRA News (job #20) quote extraction was rewritten, and importing moved into the
+Worker as `runNyraNewsImport()` on its own Cron Trigger (`0 11,12,19,20 * * *`; it only does work
+at 7am and 3pm Eastern, so no DST edits). Each run skips articles older than 4 weeks or already
+imported (a `nyra:seen:` flag per article) *before* fetching them, fetches at most 10 new articles,
+files notes only for tracked trainers/jockeys (untracked ones go to a review list at
+`/debug-nyra-untracked`, never auto-added), and writes the `notes` key once, only if something was
+added. The browser's `autoImportNyraNews()` stays as a fallback until the server job is confirmed live.
+**Why:** The Sep 24 Belmont Notes column (about 15 trainer+horse items) produced one note, and that
+one was misattributed. A local harness (`automation/nyra-harness/`) with hand-labeled test articles
+measured the old extractor at 7.8% of horse-specific quotes and 19 filed under the wrong horse:
+horses only came from `[post N]` brackets or the headline, a horse stuck across sections, only
+"said" counted, there were no jockeys, and the body was cut off at 20,000 characters. The rewrite
+builds per-article registries of people and horses (including the stored notes' own horse names
+and horse→trainer history) and drops any quote it can't pin to one horse rather than guessing, since
+the horse is what a note hangs off. It scores 98% with 0 wrong horses on the labeled set, and was
+reviewed by eye on ~40 more articles. Running server-side means notes arrive whether or not anyone
+has the dashboard open. A separate cron keeps it off the 8am/4pm entry-alert invocation, which is
+already close to the free plan's 50-subrequest cap.
+**Alternatives considered:** Piggybacking the existing entry-alert cron like BloodHorse/TDN/DRF
+(rejected: that invocation is already near/over the subrequest budget); the Claude API for
+extraction (rejected: free-only); keeping the old extractor server-side (rejected: 7.8% coverage
+with wrong horses). **Known limits:** extraction costs ~7 ms CPU per article (over the free plan's
+nominal 10 ms per run on backlog runs, like the existing jobs that parse the multi-MB notes key);
+two Delacour quotes that follow a two-horse paragraph are dropped by design; a quote that praises
+a stablemate by name can still be filed under that stablemate.
+
+---
+
 ## Air Quality tile: Open-Meteo's Air Quality API, same provider as everything else
 **Date:** 2026-07-16
 **Decision:** Added an "Air Quality" tile to the Dashboard's right column (after Conditions, before

@@ -1,0 +1,379 @@
+{
+ "spans": [
+  {
+   "p": 1,
+   "q": "It makes me not want",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Life’s Dynamic"
+   ],
+   "note": "1-for-1 record = Life's Dynamic's win"
+  },
+  {
+   "p": 1,
+   "q": "Unfortunately, I couldn",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Life’s Dynamic"
+   ]
+  },
+  {
+   "p": 2,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 3,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 6,
+   "q": "She’s coming off that",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Evershed"
+   ]
+  },
+  {
+   "p": 9,
+   "q": "On paper, it doesn",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Evershed"
+   ]
+  },
+  {
+   "p": 9,
+   "q": "The difference might",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Evershed"
+   ]
+  },
+  {
+   "p": 12,
+   "q": "I’m very happy with her",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Evershed"
+   ]
+  },
+  {
+   "p": 12,
+   "q": "We’ve had a few setbacks",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Evershed"
+   ]
+  },
+  {
+   "p": 15,
+   "q": "She came back in good",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Life’s Dynamic"
+   ]
+  },
+  {
+   "p": 15,
+   "q": "She keeps improving",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Life’s Dynamic"
+   ]
+  },
+  {
+   "p": 18,
+   "q": "It’s a little more distance",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Life’s Dynamic"
+   ]
+  },
+  {
+   "p": 18,
+   "q": "I think that will be fine",
+   "label": "horse",
+   "speaker": "Arnaud Delacour",
+   "role": "trainer",
+   "horse": [
+    "Life’s Dynamic"
+   ]
+  },
+  {
+   "p": 23,
+   "q": "Glad it happened",
+   "label": "optional",
+   "speaker": "Rick Dutrow Jr.",
+   "role": "trainer",
+   "horse": [
+    "Long Pour"
+   ],
+   "why": "about his 2,000th win milestone, not a horse per se"
+  },
+  {
+   "p": 23,
+   "q": "Got plenty of big win",
+   "label": "optional",
+   "speaker": "Rick Dutrow Jr.",
+   "role": "trainer",
+   "horse": [
+    "Long Pour"
+   ],
+   "why": "about his 2,000th win milestone, not a horse per se"
+  },
+  {
+   "p": 25,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 27,
+   "q": "Really good effort",
+   "label": "horse",
+   "speaker": "Rick Dutrow Jr.",
+   "role": "trainer",
+   "horse": [
+    "Ignite the Light"
+   ]
+  },
+  {
+   "p": 27,
+   "q": "If I saw nothing but",
+   "label": "horse",
+   "speaker": "Rick Dutrow Jr.",
+   "role": "trainer",
+   "horse": [
+    "Ignite the Light"
+   ]
+  },
+  {
+   "p": 28,
+   "q": "Probably not",
+   "label": "horse",
+   "speaker": "Rick Dutrow Jr.",
+   "role": "trainer",
+   "horse": [
+    "Ignite the Light"
+   ]
+  },
+  {
+   "p": 30,
+   "q": "That’s his distance",
+   "label": "horse",
+   "speaker": "Rick Dutrow Jr.",
+   "role": "trainer",
+   "horse": [
+    "Ignite the Light"
+   ]
+  },
+  {
+   "p": 34,
+   "q": "A tough beat for A Little",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "A Little At First"
+   ]
+  },
+  {
+   "p": 34,
+   "q": "No disgrace in the effort",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "A Little At First"
+   ]
+  },
+  {
+   "p": 37,
+   "q": "I've got Sounds Like a Plan",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Sounds Like a Plan"
+   ]
+  },
+  {
+   "p": 37,
+   "q": "Maybe next year for A Little",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "A Little At First"
+   ]
+  },
+  {
+   "p": 40,
+   "q": "He shows that he handles",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Raise the Roof"
+   ]
+  },
+  {
+   "p": 40,
+   "q": "Samuel did a great job",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Raise the Roof"
+   ]
+  },
+  {
+   "p": 41,
+   "q": "He behaved in the paddock",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Raise the Roof"
+   ]
+  },
+  {
+   "p": 41,
+   "q": "When he ran at Saratoga",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Raise the Roof"
+   ]
+  },
+  {
+   "p": 45,
+   "q": "I figured this would be",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Howard’s Hope"
+   ]
+  },
+  {
+   "p": 45,
+   "q": "Manny was very high",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Howard’s Hope"
+   ]
+  },
+  {
+   "p": 51,
+   "q": "I think she was sitting",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Awesome Czech"
+   ]
+  },
+  {
+   "p": 51,
+   "q": "It showed she still",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Awesome Czech"
+   ]
+  },
+  {
+   "p": 59,
+   "q": "I worked ‘Carly’",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "B Yutiful Carly",
+    "Professor Plum"
+   ],
+   "note": "about both juveniles"
+  },
+  {
+   "p": 59,
+   "q": "She was three in front",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "B Yutiful Carly",
+    "Professor Plum"
+   ]
+  },
+  {
+   "p": 60,
+   "q": "Come race day she misses",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "B Yutiful Carly",
+    "Professor Plum"
+   ]
+  },
+  {
+   "p": 60,
+   "q": "She's so good in the mornings",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "B Yutiful Carly"
+   ]
+  },
+  {
+   "p": 63,
+   "q": "Professor Plum is one",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Professor Plum"
+   ]
+  },
+  {
+   "p": 63,
+   "q": "I was concerned with",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Professor Plum"
+   ]
+  }
+ ]
+}

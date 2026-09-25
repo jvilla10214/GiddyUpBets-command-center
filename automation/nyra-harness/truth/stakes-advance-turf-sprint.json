@@ -1,0 +1,104 @@
+{
+ "spans": [
+  {
+   "p": 4,
+   "q": "If you go and look back",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 4,
+   "q": "It's a credit to the New York",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 5,
+   "q": "When you go open company",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 5,
+   "q": "’Twenty Six’ is a good",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 9,
+   "q": "The turf course was",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 9,
+   "q": "They were nice horses",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 11,
+   "q": "It just seems to be",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 11,
+   "q": "I don't normally like",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 12,
+   "q": "He's doing very good",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  },
+  {
+   "p": 12,
+   "q": "We always thought the six",
+   "label": "horse",
+   "speaker": "Horacio De Paz",
+   "role": "trainer",
+   "horse": [
+    "Twenty Six Black"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,504 @@
+{
+ "spans": [
+  {
+   "p": 1,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 2,
+   "q": "She came out of it good",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Summer Starlet"
+   ]
+  },
+  {
+   "p": 2,
+   "q": "She’s an impressive",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Summer Starlet"
+   ]
+  },
+  {
+   "p": 4,
+   "q": "Had a lot of respect",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Summer Starlet"
+   ]
+  },
+  {
+   "p": 4,
+   "q": "Both efforts here",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Summer Starlet"
+   ]
+  },
+  {
+   "p": 6,
+   "q": "She’s one of those fillies",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Summer Starlet"
+   ]
+  },
+  {
+   "p": 6,
+   "q": "I think she is growing",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Summer Starlet"
+   ]
+  },
+  {
+   "p": 9,
+   "q": "He went by himself",
+   "label": "horse",
+   "speaker": "Scott Blasi",
+   "role": "assistant",
+   "fileUnder": "Steven Asmussen",
+   "horse": [
+    "Magnitude"
+   ]
+  },
+  {
+   "p": 11,
+   "q": "She will need 60-90",
+   "label": "exclude",
+   "why": "stallion sales manager (not a trainer/jockey)",
+   "speaker": "Mark Toothaker"
+  },
+  {
+   "p": 12,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 14,
+   "q": "I'm planning on running",
+   "label": "horse",
+   "speaker": "David Jacobson",
+   "role": "trainer",
+   "horse": [
+    "Banishing"
+   ]
+  },
+  {
+   "p": 14,
+   "q": "It will be his first time",
+   "label": "horse",
+   "speaker": "David Jacobson",
+   "role": "trainer",
+   "horse": [
+    "Banishing"
+   ]
+  },
+  {
+   "p": 18,
+   "q": "He ran great and did",
+   "label": "horse",
+   "speaker": "David Jacobson",
+   "role": "trainer",
+   "horse": [
+    "Banishing"
+   ]
+  },
+  {
+   "p": 22,
+   "q": "Every horse is different",
+   "label": "horse",
+   "speaker": "David Jacobson",
+   "role": "trainer",
+   "horse": [
+    "Banishing"
+   ]
+  },
+  {
+   "p": 24,
+   "q": "We wouldn't be considering",
+   "label": "horse",
+   "speaker": "David Jacobson",
+   "role": "trainer",
+   "horse": [
+    "Banishing"
+   ]
+  },
+  {
+   "p": 24,
+   "q": "We're excited to get",
+   "label": "horse",
+   "speaker": "David Jacobson",
+   "role": "trainer",
+   "horse": [
+    "Banishing"
+   ]
+  },
+  {
+   "p": 31,
+   "q": "I thought his first race",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "U. S. S. Valor"
+   ]
+  },
+  {
+   "p": 31,
+   "q": "I wanted to give him a run",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "U. S. S. Valor"
+   ]
+  },
+  {
+   "p": 33,
+   "q": "I was very pleased",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "U. S. S. Valor"
+   ]
+  },
+  {
+   "p": 33,
+   "q": "You never take a 2-year-old",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "U. S. S. Valor"
+   ]
+  },
+  {
+   "p": 35,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 36,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 37,
+   "q": "We had always thought he",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Pass On By"
+   ]
+  },
+  {
+   "p": 37,
+   "q": "He came out of the [debut",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Pass On By"
+   ]
+  },
+  {
+   "p": 39,
+   "q": "I thought [Flightress]",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Flightress"
+   ]
+  },
+  {
+   "p": 39,
+   "q": "I thought it was an improvement",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Flightress"
+   ]
+  },
+  {
+   "p": 42,
+   "q": "I have always liked",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Protect and Defend"
+   ]
+  },
+  {
+   "p": 42,
+   "q": "He got beat just on",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Protect and Defend"
+   ]
+  },
+  {
+   "p": 44,
+   "q": "We like her",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Flying Hawley"
+   ]
+  },
+  {
+   "p": 44,
+   "q": "We think she is a nice",
+   "label": "horse",
+   "speaker": "Claude McGaughey III",
+   "role": "trainer",
+   "horse": [
+    "Flying Hawley"
+   ]
+  },
+  {
+   "p": 46,
+   "q": "She came out of it very",
+   "label": "horse",
+   "speaker": "Linda Rice",
+   "role": "trainer",
+   "horse": [
+    "Velora"
+   ]
+  },
+  {
+   "p": 46,
+   "q": "I’m very happy with the way",
+   "label": "horse",
+   "speaker": "Linda Rice",
+   "role": "trainer",
+   "horse": [
+    "Velora"
+   ]
+  },
+  {
+   "p": 48,
+   "q": "That was a nice progression",
+   "label": "horse",
+   "speaker": "Linda Rice",
+   "role": "trainer",
+   "horse": [
+    "Velora"
+   ]
+  },
+  {
+   "p": 50,
+   "q": "We’re going to pencil",
+   "label": "horse",
+   "speaker": "Linda Rice",
+   "role": "trainer",
+   "horse": [
+    "Velora"
+   ]
+  },
+  {
+   "p": 50,
+   "q": "We’ll see how it goes",
+   "label": "horse",
+   "speaker": "Linda Rice",
+   "role": "trainer",
+   "horse": [
+    "Velora"
+   ]
+  },
+  {
+   "p": 52,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 54,
+   "q": "He breezed really well",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Money Game"
+   ]
+  },
+  {
+   "p": 54,
+   "q": "He has been doing well",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Money Game"
+   ]
+  },
+  {
+   "p": 56,
+   "q": "[Money Game] handled",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Money Game"
+   ]
+  },
+  {
+   "p": 56,
+   "q": "We plan on entering",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Money Game"
+   ]
+  },
+  {
+   "p": 58,
+   "q": "[Angel of Kirk]",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Angel of Kirk"
+   ]
+  },
+  {
+   "p": 58,
+   "q": "I thought she ran a nice",
+   "label": "horse",
+   "speaker": "Brad Cox",
+   "role": "trainer",
+   "horse": [
+    "Angel of Kirk"
+   ]
+  },
+  {
+   "p": 61,
+   "q": "He came back very good",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Liam’s Law"
+   ]
+  },
+  {
+   "p": 61,
+   "q": "I think he did everything",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Liam’s Law"
+   ]
+  },
+  {
+   "p": 62,
+   "q": "Win and You",
+   "label": "exclude",
+   "why": "“Win and You’re In” phrase, not a quote"
+  },
+  {
+   "p": 63,
+   "q": "That’s what we’re thinking",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Liam’s Law"
+   ]
+  },
+  {
+   "p": 65,
+   "q": "He came back fine and cost",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Bold Leadership"
+   ]
+  },
+  {
+   "p": 65,
+   "q": "He lunged at the start",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Bold Leadership"
+   ]
+  },
+  {
+   "p": 68,
+   "q": "She’s fine",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Life Changing"
+   ]
+  },
+  {
+   "p": 68,
+   "q": "So far, she seems",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Life Changing"
+   ]
+  },
+  {
+   "p": 71,
+   "q": "He’s been training forwardly",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Damavand"
+   ]
+  },
+  {
+   "p": 71,
+   "q": "He kind of gives you",
+   "label": "horse",
+   "speaker": "Todd Pletcher",
+   "role": "trainer",
+   "horse": [
+    "Damavand"
+   ]
+  }
+ ]
+}

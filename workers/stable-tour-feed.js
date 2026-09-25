@@ -430,10 +430,21 @@
 //    single "Stakes Advance" preview routinely profiles 3+ horses, each
 //    introduced as "OWNER's HORSE NAME [post N, Jockey]" in prose with no
 //    inline horse link and no <meta keywords> tag to lean on (unlike
-//    HRN/DRF) — extractNyraBracketHorse() reads that bracket convention
-//    structurally, falling back to extractNyraTitleHorse() (the headline's
-//    own leading words) only for the article's lead horse before its own
-//    bracket appears later in the piece. stripNyraPossessivePrefix()
+//    HRN/DRF). Rewritten 2026-09-25 (extraction overhaul, see the "NYRA
+//    News quote extraction" section's own comment): an audit harness
+//    (automation/nyra-harness/, local only) measured the old bracket +
+//    headline approach at 7.8% of horse-specific quotes with 19 filed under
+//    the wrong horse; the new extractor builds a per-article registry of
+//    people (trainers, assistants, jockeys — incl. NYRA_KNOWN_JOCKEYS) and
+//    horses (brackets, "-trained", pedigree lines, subheadings, the stored
+//    notes' own horse names) plus who-trains/rides-what links, reads the
+//    whole article, and files a quote only when it can pin it to one horse
+//    (98% on the labeled test set, 0 wrong horses). Also runs SERVER-SIDE
+//    now: runNyraNewsImport() on its own Cron Trigger (7am + 3pm Eastern,
+//    last 4 weeks of articles, see its own comment), plus GET
+//    /debug-run-nyra-import and GET /debug-nyra-untracked; the browser's
+//    autoImportNyraNews() still calls this route as a fallback until the
+//    server job is confirmed live. stripNyraPossessivePrefix()
 //    handles both "'s "/"’s " and the bare plural "' "/"’ " an owner name
 //    can end in; stripNyraBreedingDescriptor() then strips a breeding
 //    descriptor ("Kentucky homebred", "New York-bred") that can sit between
@@ -524,7 +535,12 @@
 // wrangler.toml here — both have to be added/changed by hand in the
 // dashboard, twice a year. Job #18 additionally requires SMARTPONY_EMAIL and
 // SMARTPONY_PASSWORD secrets (same Variables and Secrets screen) — the
-// partner login credentials for smartpony.ai.
+// partner login credentials for smartpony.ai. Job #20's server-side import
+// needs a THIRD Cron Trigger, "0 11,12,19,20 * * *" (NYRA_NEWS_CRON — the
+// expression must match exactly, scheduled() dispatches on it). It fires at
+// both the EDT and EST UTC hours for 7am/3pm Eastern and only does work when
+// it actually is 7am or 3pm Eastern, so unlike the two above it never needs
+// a DST edit.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -653,6 +669,20 @@ export default {
   // the on-demand equivalent used to test this without waiting on the
   // schedule.
   async scheduled(event, env, ctx) {
+    // NYRA News (job #20) has its own Cron Trigger so it never shares this
+    // invocation's subrequest budget with the entry alerts below — return
+    // before any of that code runs. It fires at both the EDT and EST UTC
+    // hours, and only does work when it's actually 7am or 3pm Eastern, so
+    // it needs no twice-a-year DST edit. Every other cron expression falls
+    // through to the original handler, unchanged.
+    if (event.cron === NYRA_NEWS_CRON) {
+      if (NYRA_NEWS_RUN_HOURS_ET.includes(nyNowParts().hour)) {
+        ctx.waitUntil(
+          runNyraNewsImport(env).catch((err) => console.error("NYRA News import failed", err.message))
+        );
+      }
+      return;
+    }
     // Confirmed real bug (2026-08-26): this was `event.waitUntil`, which
     // doesn't exist in the module-worker syntax this file uses — waitUntil
     // lives on `ctx` (the ExecutionContext), not the ScheduledController.
@@ -1799,6 +1829,22 @@ async function handleRequest(request, env) {
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
+    // Manual trigger for job #20's runNyraNewsImport() — same reasoning as
+    // /debug-run-bloodhorse above. ?force=1 re-reads articles already marked
+    // imported (dedupe still stops any duplicate note).
+    if (url.pathname === "/debug-run-nyra-import" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runNyraNewsImport(env, { force: url.searchParams.get("force") === "1" });
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Trainers/jockeys quoted in NYRA News who aren't on the tracked lists —
+    // never auto-added (see runNyraNewsImport()), listed here for review.
+    if (url.pathname === "/debug-nyra-untracked" && request.method === "GET") {
+      const raw = await env.STABLE_KV.get(NYRA_UNTRACKED_KV_KEY);
+      return json({ untracked: raw ? JSON.parse(raw) : [] }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Manual trigger for job #26's runDrfImport() — same reasoning as
     // /debug-run-bloodhorse above.
     if (url.pathname === "/debug-run-drf" && request.method === "GET") {
@@ -2287,6 +2333,7 @@ const TRAINER_FIRST_NAME_ALIASES = {
   charlie: "charles", // Charlie Appleby — confirmed real: SmartPony spelled his formal first name out ("Charles Appleby") and spawned a duplicate alongside the already-tracked "Charlie Appleby"
   gus: "gustavo", // Gus Rodriguez — confirmed real (user's own ID): same person as the already-tracked "Gustavo Rodriguez," separate from "Rudy Rodriguez"
   phillip: "philip", // General double-L/single-L spelling variant — confirmed real for Capuano ("Phillip" vs the already-tracked "Phil"), same category of gap "phil" above already covers for the single-L spelling
+  manny: "manuel", // Manny Franco — confirmed real (user's own ID, 2026-09-25): NYRA's standings list him as "Manuel Franco" while the tracked jockey entry is "Manny Franco"
   charlton: "charles", // Charlton Baker — confirmed real: DRF's own prose uses his formal first name while the already-tracked entry is "Charlie Baker"; mapped to the SAME target "charles" the existing charlie->charles entry already resolves to, so both spellings converge instead of needing a second, disagreeing alias
 };
 // Normalizes ONE name token — see index.html's normalizeNameToken() for why
@@ -6508,7 +6555,7 @@ async function runDrfImport(env) {
 // horse links) or DRF (a <meta keywords> tag naming every horse), NYRA's
 // prose has neither. What it DOES have, verified against a real article:
 // every horse besides the article's lead horse gets introduced as
-// "OWNER's HORSE NAME [post N, Jockey]" — extractNyraBracketHorse() below
+// "OWNER's HORSE NAME [post N, Jockey]" — nyraNameRunBackward() below
 // leans on that bracket as a structural marker, and falls back to
 // extractNyraTitleHorse() (the article's own headline reliably leads with
 // the horse's name, e.g. "Awesome Czech looks to defend her title...") for
@@ -6616,7 +6663,7 @@ function extractNyraTitleHorse(title) {
   // ("Blue Heaven Farm's Kentucky homebred Go for Launch saved...") passes
   // the same capitalized/bridging test as the owner name itself — strip the
   // owner off, then any breeding descriptor between it and the actual horse
-  // name, the same two-step extractNyraBracketHorse() uses.
+  // name, the same two-step the bracket reader (nyraNameRunBackward()) relies on.
   const guess = stripNyraBreedingDescriptor(stripNyraPossessivePrefix(nameWords.join(" ").trim()));
   if (!guess) return null;
   // Confirmed real bug (2026-09-18, caught in production on the very first
@@ -6645,162 +6692,951 @@ function extractNyraTitleHorse(title) {
   return guess;
 }
 
-// Reads the "OWNER's HORSE NAME [post N, Jockey]" bracket convention — the
-// horse name is whatever sits between the bracket and either (a) the last
-// possessive marker before it (stripping the owner's name off the front) or
-// (b) the start of the paragraph if there's no possessive in range. Capped
-// to the last 5 words as a backstop against an unrelated sentence bleeding
-// in on a paragraph with no possessive at all.
-function extractNyraBracketHorse(paragraphPlainText) {
-  const m = paragraphPlainText.match(/^[^.!?]*?\[post\s+\d+/);
-  if (!m) return null;
-  const rawPrefix = m[0].replace(/\[post\s+\d+.*/, "").trim();
-  const prefix = stripNyraBreedingDescriptor(stripNyraPossessivePrefix(rawPrefix));
-  const words = prefix.split(/\s+/).filter(Boolean);
-  const capped = words.length > 5 ? words.slice(-5).join(" ") : prefix;
-  return capped || null;
+// ---------- NYRA News quote extraction (job #20) ----------
+// Rewritten 2026-09-25 after a harness audit (automation/nyra-harness/)
+// measured the previous version at 7.8% coverage across four real articles
+// — 0 of 33 horse-specific quotes in the Sep 24 Belmont Notes column, with
+// 19 quotes filed under the wrong horse overall. Root causes, all fixed
+// below: the horse "in frame" only ever came from a "[post N, Jockey]"
+// bracket or the listing headline (so Notes columns, whose headline leads
+// with a trainer, had no horse at all, and a horse set early stuck through
+// every later section); only the literal verb "said" counted as
+// attribution; no jockeys; no "he said"/continuation paragraphs; a quote had
+// to close in the same paragraph; and only the first 20,000 characters of
+// the body were ever read.
+//
+// Guards kept from before: NYRA_RETIRED_HORSE_SIGNAL_RE (title and
+// paragraph level), the "don't guess" speaker rule (a quote is only filed
+// when its speaker resolves to a trainer, assistant or jockey the article
+// itself identifies — or, failing that, to exactly one tracked trainer by
+// surname), and the possessive/breeding-descriptor stripping.
+
+const NYRA_ATTRIBUTION_VERBS = "said|says|added|noted|explained|continued|remarked|offered|recalled|stated|commented|admitted|joked|quipped|told";
+const NYRA_QUOTE_SPAN_MAX = 1500;
+// How many paragraphs a horse stays "in frame" for unlabeled quotes after it
+// was last named — past that, a quote that doesn't name a horse is dropped
+// rather than filed under a horse from an earlier topic.
+const NYRA_FRAME_MAX_AGE = 4;
+// A bare surname NYRA uses for one trainer when several tracked trainers
+// share it (tracked list has Brad, Clive and Gail Cox; in NYRA's own copy an
+// unintroduced "Cox" is always Brad Cox — confirmed by the user 2026-09-25).
+const NYRA_SURNAME_DEFAULTS = { cox: "Brad Cox" };
+// Jockeys, so a rider is never mistaken for a trainer (confirmed ask
+// 2026-09-25: "Franco is Manuel (Manny) Franco and he's a jockey"). First
+// block: every rider in NYRA's own 2026 Saratoga and Belmont meet standings
+// (nyra.com/{track}/racing/leaders/, fetched 2026-09-25), in NYRA's
+// spelling. Second: other leading North American riders who regularly ship
+// in for NYRA stakes. Refresh from those leaders pages now and then.
+const NYRA_KNOWN_JOCKEYS = [
+  "Manuel Franco", "Flavien Prat", "Jose L. Ortiz", "Ricardo Santana, Jr.", "Irad Ortiz, Jr.", "Junior Alvarado", "John R. Velazquez",
+  "Tyler Gaffalione", "Kendrick Carmouche", "Dylan Davis", "Luis Saez", "Jose Lezcano", "Javier Castellano", "Jaime Rodriguez",
+  "Christopher Elliott", "Edgard J. Zayas", "Katie Davis", "Joel Rosario", "Paco Lopez", "Graham Watters", "Jamie Bargary",
+  "Silvestre Gonzalez", "Jose E. Morelos", "Reylu Gutierrez", "Sheldon Russell", "Pietro Moran", "Jomar Torres", "Heman K. Harkie",
+  "Nazario Alvarado", "Camila Hargrove", "Samuel Marin", "Ryusei Sakai", "Antonio Fresu",
+  "Umberto Rispoli", "Juan Hernandez", "Florent Geroux", "Brian Hernandez, Jr.", "Mike Smith", "Frankie Dettori", "Tiago Pereira",
+  "Hector Berrios", "Ramon Vazquez", "Gerardo Corrales", "Cristian Torres", "Julien Leparoux", "Edwin Maldonado", "Antonio Gallardo",
+  "Adam Beschizza", "Declan Cannon", "Axel Concepcion", "Jareth Loveberry", "Sonny Leon", "Martin Garcia", "Kazushi Kimura",
+  "Hector Diaz, Jr.", "Emisael Jaramillo", "Edgar Morales", "Samy Camacho", "Trevor McCarthy", "Jevian Toledo", "Xavier Perez",
+  "Drayden Van Dyke", "Abel Cedillo", "Armando Ayuso", "Corey Lanerie", "Sophie Doyle", "Rafael Bejarano", "Joe Bravo",
+];
+// nyraKey() is hot here (every name match in every paragraph) and pure,
+// so memoize it; cleared if it ever grows large in a long-lived isolate.
+const nyraKeyCache = new Map();
+function nyraKey(name) {
+  let k = nyraKeyCache.get(name);
+  if (k === undefined) { if (nyraKeyCache.size > 5000) nyraKeyCache.clear(); k = lastNameKey(name); nyraKeyCache.set(name, k); }
+  return k;
+}
+let nyraJockeyIndex = null; // surname key -> known jockeys, built once
+function nyraJockeysBySurname(key) {
+  if (!nyraJockeyIndex) {
+    nyraJockeyIndex = new Map();
+    for (const j of NYRA_KNOWN_JOCKEYS) { const k = nyraKey(j); nyraJockeyIndex.set(k, [...(nyraJockeyIndex.get(k) || []), j]); }
+  }
+  return nyraJockeyIndex.get(key) || [];
 }
 
-// One combined section per (trainer, horse) pair found in the article —
-// every paragraph naming that pair's quotes gets merged into one section's
-// text (a stakes-preview routinely gives one trainer 2-3 separate quote
-// paragraphs about the same horse; keeping those as one section instead of
-// three means the resulting note is the full, untruncated run of what that
-// trainer said, not just the first paragraph of it).
-function extractNyraSections(paragraphs, titleHorseGuess) {
-  // Step 1: which trainers does this article actually name, and under what
-  // full name — scanned up front across every paragraph, same as HRN's own
-  // quotedLastNames-first approach, so a quote attributed only by surname
-  // ("De Paz said") can still resolve to the full name ("Horacio De Paz")
-  // announced elsewhere in the piece.
-  const trainerFullNameByKey = {};
-  // Confirmed real gap (2026-08-30): the original two patterns only caught
-  // the narrowest literal phrasings ("Trained by NAME", "for trainer
-  // NAME") — but NYRA's own house style routinely wedges an accolade
-  // clause between the trigger word and the actual name ("Trained by dual
-  // Eclipse Award-winner Brad Cox", "for ... dual Eclipse Award-winning
-  // trainer Brad Cox"), and uses several other constructions entirely
-  // ("Cherie DeVaux, trainer of the popular Golden Tempo", "Trainer Ron
-  // Moquett, who...", "Hall of Famer Bill Mott-trained T Kraft", "trainer
-  // Chad Brown his third win"). Since Step 2 below bails out to an empty
-  // result for the WHOLE article when this comes back empty, missing all
-  // of these meant several real post-race recaps (including the Travers
-  // winner's own writeup) silently produced zero notes despite having
-  // genuine trainer quotes in them.
-  const trainerNamePatterns = [
-    // No literal "." in the name classes below — confirmed real bug: "for
-    // trainer Jim Ryerson." (sentence-ending period right against the
-    // name) would otherwise swallow the period into the captured word,
-    // making lastNameKey() produce "ryerson." instead of "ryerson" and
-    // silently failing to match this trainer's own quote attributions
-    // later.
-    // "Trained by [accolade clause] NAME," — skip up to 6 filler tokens
-    // non-greedily, then a hyphen-free capitalized run anchored by a
-    // trailing comma/period (hyphen excluded here specifically so a
-    // hyphenated accolade word like "Award-winner" can't itself get
-    // captured as if it were the first name word).
-    /Trained by\s+(?:\S+\s+){0,6}?([A-Z][A-Za-z’']+(?:\s+[A-Z][A-Za-z’']+){0,2})[,.]/g,
-    // "Trained by NAME for OWNER" — confirmed real gap (2026-09-18): the
-    // pattern above requires a comma/period right after the name, but this
-    // construction puts the owner's name there instead ("Trained by Yoshito
-    // Yahagi for Susumu Fujita, the 5-year-old..."), so it never matched at
-    // all — the exact article that prompted this fix. Anchored on "for"
-    // instead of a trailing punctuation mark.
-    /Trained by\s+(?:\S+\s+){0,6}?([A-Z][A-Za-z’']+(?:\s+[A-Z][A-Za-z’']+){0,2})\s+for\b/g,
-    // "trainer NAME" / "Trainer NAME," — with or without a leading "for",
-    // with or without an accolade clause before "trainer" (that clause is
-    // simply ignored since the name is captured AFTER the trigger word).
-    /\b[Tt]rainer\s+([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2})/g,
-    // "NAME, trainer of HORSE" — name comes before the trigger phrase here.
-    /([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2}),\s+trainer of\b/g,
-    // "NAME-trained HORSE".
-    /([A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2})-trained\b/g,
+// Cheap pre-check: does this text name any known jockey's surname at all?
+let nyraJockeySurnameReCache = null;
+function nyraJockeySurnameRe() {
+  if (!nyraJockeySurnameReCache) {
+    const surnames = [...new Set(NYRA_KNOWN_JOCKEYS.map((j) => j.replace(/,?\s+(?:Jr|Sr)\.?$/, "").split(/\s+/).pop()))];
+    nyraJockeySurnameReCache = new RegExp(`\\b(?:${surnames.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`);
+  }
+  return nyraJockeySurnameReCache;
+}
+
+// Nickname <-> formal first name, for matching a jockey as NYRA's copy
+// writes him ("Manny Franco") against the list ("Manuel Franco").
+const NYRA_JOCKEY_NICKNAMES = { manny: "manuel", johnny: "john", joe: "jose", joey: "jose", eddie: "edgard", chris: "christopher", mike: "michael" };
+const nyraFirstKey = (name) => { const f = stripDiacritics(name.trim().split(/\s+/)[0]).toLowerCase().replace(/\.$/, ""); return NYRA_JOCKEY_NICKNAMES[f] || f; };
+// The known jockey `name` refers to: same surname, and the same first name
+// (nickname-aware) — or no first name given and exactly one known jockey
+// with that surname. Null otherwise.
+function nyraKnownJockey(name, extra = []) {
+  const key = nyraKey(name);
+  const cands = [...new Set([...nyraJockeysBySurname(key), ...extra.filter((j) => nyraKey(j) === key)])];
+  if (!cands.length) return null;
+  if (name.trim().split(/\s+/).length < 2 || /^(?:Jr|Sr)\.?$/.test(name.trim().split(/\s+/)[1] || "")) return cands.length === 1 ? cands[0] : null;
+  const hit = cands.filter((j) => nyraFirstKey(j) === nyraFirstKey(name));
+  return hit.length === 1 ? hit[0] : null;
+}
+
+const NYRA_NAME = "[A-Z][A-Za-z’'-]+(?:\\s+[A-Z][A-Za-z’'-]+){0,2}";
+const NYRA_SUFFIX = "(?:,?\\s+(?:Jr|Sr)\\.?|\\s+(?:II|III|IV)\\b)?";
+const nyraFullNameRe = new RegExp(`\\b(${NYRA_NAME}${NYRA_SUFFIX})`, "g");
+// Column/date headlines that lead with capitalized words but never a horse.
+const NYRA_COLUMN_MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec";
+const NYRA_COLUMN_TITLE_RE = new RegExp(`\\b(?:Notes|Notebook|Stakes Advance|Stakes Recap|Barn Notes|Backstretch|${NYRA_COLUMN_MONTHS})\\b`, "i");
+// Capitalized words that can lead a sentence or clause but are never part
+// of a horse name found by the scanners below.
+const NYRA_NOT_HORSE_WORDS = new Set([
+  "the", "a", "an", "he", "she", "his", "her", "they", "it", "this", "that", "trainer", "jockey", "owner", "now", "last", "on", "in", "at", "for",
+  "grade", "group", "listed", "stakes", "handicap", "derby", "oaks", "cup", "mile", "classic", "sprint", "turf", "futurity", "belmont", "saratoga",
+  "aqueduct", "keeneland", "spa", "park", "race", "course", "breeders", "saturday", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday",
+  "hall", "eclipse", "award", "nyra", "new", "york", "kentucky", "general", "additional", "bred", "sire", "dam",
+  "when", "while", "after", "before", "as", "if", "with", "also", "both", "so", "but", "and", "or", "of", "from", "his", "then",
+  "yet", "still", "however", "meanwhile", "later", "early", "one", "two", "three", "each", "every", "all", "many", "some", "other", "others",
+  "another", "there", "here", "today", "yesterday", "tomorrow", "it’s", "it's", "inc", "inc.", "jr.", "sr.", "jr", "sr", "mr.", "mrs.", "dr.",
+]);
+const NYRA_PLACE_OR_RACE_RE = /\b(?:Park|Course|Downs|Racetrack|Racing Association|Stakes|Handicap|Derby|Oaks|Cup|Mile|Classic|Futurity|Sale|Grade|Group|Beyer|Juvenile|Championship|Showcase|Invitational|Turf Sprint|Turf Classic|Bowl|Big A|Spa|Award|Eclipse|Day|Works|Stable|Stables|Farm|Racing|Thoroughbreds)\b/;
+
+// A capitalized name run, allowing the small set of lowercase connector
+// words real horse names use ("Ignite the Light", "Sounds Like a Plan") —
+// same NYRA_TITLE_BRIDGE_WORDS rule extractNyraTitleHorse() uses.
+function nyraNameRunForward(words, i) {
+  const out = [];
+  for (; i < words.length; i++) {
+    const initial = /^[A-Z]\.$/.test(words[i]); // "U. S. S. Valor"
+    const w = initial ? words[i] : words[i].replace(/[,.;:!?)\]]+$/, "");
+    const endsClause = w !== words[i];
+    if (/^[A-Z0-9]/.test(w) && !/^\d/.test(w)) { out.push(w); if (endsClause) break; continue; }
+    if (NYRA_TITLE_BRIDGE_WORDS.has(w.toLowerCase()) && w.toLowerCase() !== "homebred" && out.length && i + 1 < words.length && /^[A-Z]/.test(words[i + 1])) { out.push(w); continue; }
+    break;
+  }
+  return out.join(" ");
+}
+// Same, reading backwards from the word before index `end` (used for the
+// "HORSE [post N" bracket). Stops at an owner possessive ("Stables’"),
+// a breeding descriptor ("New York-breds", "homebred") or any other
+// lowercase word, so a whole clause can't bleed into the name.
+function nyraNameRunBackward(words, end) {
+  const out = [];
+  for (let i = end - 1; i >= 0; i--) {
+    const w = words[i].replace(/[,;:]+$/, "");
+    if (w !== words[i] && out.length) break;
+    if (/\]$/.test(w)) break; // end of the previous "[post N, Jockey]" in a list
+    if (/(?:’s|'s|’|')$/.test(w) || /bred?s?$/i.test(w)) break;
+    if (/^[A-Z]/.test(w)) { out.unshift(w); continue; }
+    if (NYRA_TITLE_BRIDGE_WORDS.has(w.toLowerCase()) && out.length && i > 0 && /^[A-Z]/.test(words[i - 1]) && !/(?:’s|'s)$/.test(words[i - 1])) { out.unshift(w); continue; }
+    break;
+  }
+  while (out.length && NYRA_TITLE_BRIDGE_WORDS.has(out[0].toLowerCase())) out.shift();
+  return out.join(" ");
+}
+function nyraCleanHorse(name) {
+  if (!name) return null;
+  let n = stripNyraBreedingDescriptor(name).trim();
+  // Sentence-ending punctuation, but not an initial ("U. S. S. Valor" ends in a word anyway).
+  n = n.replace(/([A-Za-z]{2,})[.,;:!?]+$/, "$1");
+  if (!n || n.split(/\s+/).length > 5) return null;
+  const w = n.split(/\s+/);
+  const leadingArticle = /^(?:A|An|The)$/.test(w[0]) && w.length >= 2 && /^[A-Z]/.test(w[1]);
+  if (!leadingArticle && NYRA_NOT_HORSE_WORDS.has(w[0].toLowerCase())) return null;
+  if (w.slice(1).some((x) => new RegExp(`^(?:${NYRA_COLUMN_MONTHS})$`).test(x))) return null;
+  if (NYRA_PLACE_OR_RACE_RE.test(n)) return null;
+  return n;
+}
+// Headline/subheading horse guess, rejecting column and date titles
+// ("Belmont Park Notes", "Saratoga Race Course Notes September 6, 2026").
+function nyraTitleHorseGuess(title) {
+  if (!title || NYRA_COLUMN_TITLE_RE.test(title.split(/\s+/).slice(0, 6).join(" "))) return null;
+  return extractNyraTitleHorse(title);
+}
+
+// Normalized copy for matching: curly apostrophes -> straight, so "Howard’s
+// Hope" in prose matches "Howard's Hope" inside a quote.
+const nyraNorm = (s) => s.replace(/[’‘]/g, "'");
+
+// Step 1 — who is in this article, and in what role. Scans every block
+// (headings included: Notes columns often introduce a trainer only in a
+// section's subheading, e.g. "Dual Eclipse Award-winning trainer Brad Cox
+// on Sunday confirmed..."). Returns lastNameKey -> { name, role, head }.
+function nyraPeopleInArticle(texts, trackedJockeys) {
+  const found = {}; // key -> { names:Set, roles:Set, head, explicitTrainer }
+  const add = (rawName, role, head, explicit) => {
+    // Drop leading filler and any owner possessive in front of the name
+    // ("the Lows’ Pletcher-trained" -> "Pletcher"; "Neil Howard’s" -> "Neil Howard").
+    let name = rawName.replace(/^(?:The|Now|Dual|Eclipse|Award-winning|Award-winner|Trainer|Jockey)\s+/, "").trim();
+    name = name.replace(/^(?:\S+(?:’s|'s|’|')\s+)+/, "").replace(/(?:’s|'s|’|')$/, "").trim();
+    if (!name || /^(?:He|She|They|It)$/.test(name)) return;
+    if (/\b(?:Racing|Stables?|Farms?|Thoroughbreds|Museum|Association|LLC|Inc|Partners|Bloodstock|Stud|Ranch|Club|Park|Course)\b/.test(name)) return;
+    const key = nyraKey(name);
+    if (!key || NYRA_NOT_HORSE_WORDS.has(key) && !["rice", "cox"].includes(key)) return;
+    const e = found[key] || (found[key] = { names: new Set(), roles: new Set(), head: null, explicitTrainer: false, rolesByName: {} });
+    e.names.add(name);
+    e.roles.add(role);
+    (e.rolesByName[name] || (e.rolesByName[name] = new Set())).add(role);
+    if (head) e.head = head;
+    if (explicit) e.explicitTrainer = true;
+  };
+  const N = NYRA_NAME, S = NYRA_SUFFIX;
+  const patterns = [
+    // Filler between "Trained by" and the name is lowercase/accolade words
+    // only — never another name ("Trained by Linda Rice and piloted by
+    // Ricardo Santana, Jr." must not make Santana the trainer).
+    ["trainer", new RegExp(`Trained by\\s+(?:(?:[a-z][\\w-]*|Eclipse|Award-winner|Award-winning)\\s+){0,6}?(${N}${S})(?=[,.]|\\s+(?:for|and)\\b)`, "g")],
+    ["jockey", new RegExp(`\\b(?:piloted|ridden) by\\s+(${N}${S})`, "g")],
+    ["trainer", new RegExp(`\\b[Tt]rainer\\s+(${N}${S})`, "g"), true],
+    ["trainer", new RegExp(`(${N}${S}),\\s+(?:the\\s+)?trainer of\\b`, "g")],
+    ["trainer", new RegExp(`(${N})-trained\\b`, "g")],
+    ["trainer", new RegExp(`(${N})\\s+trainee\\b`, "g")],
+    ["trainer", new RegExp(`\\b(${N}${S})\\s+(?:also\\s+)?(?:sent out|sends out|saddled|saddles|will saddle|will send out)\\b`, "g")],
+    ["trainer", new RegExp(`\\btrained and owned by\\s+(${N})`, "g")],
+    ["jockey", new RegExp(`\\[post\\s+\\d+(?:-of-\\d+)?,\\s*(${N}${S})\\s*[,\\]]`, "g")],
+    ["jockey", new RegExp(`\\b(?:[Jj]ockey|[Rr]ider|pilot),?\\s+(${N}${S})`, "g")],
+    ["jockey", new RegExp(`\\b(?:ridden by|in rein to|under)\\s+(${N}${S})`, "g")],
+    ["jockey", new RegExp(`\\bwith\\s+(${N}${S})\\s+(?:up|named to ride)\\b`, "g")],
+    ["jockey", new RegExp(`(${N}${S}),?\\s+(?:who rode|aboard|was patient aboard)\\b`, "g")],
+    ["jockey", new RegExp(`(${N}${S})\\s+(?:has the call|retains the mount|has the mount|named to ride|picks up the mount)\\b`, "g")],
+    ["other", new RegExp(`(${N}${S}),\\s+(?:the\\s+)?(?:racing manager|owner|co-owner|breeder|president|CEO|managing partner|bloodstock agent|agent)\\b`, "g")],
+    ["other", new RegExp(`\\b(?:racing manager|co-owner|owner|breeder|agent|sales manager|stallion manager|manager)\\s+(${N}${S})`, "g")],
+    ["other", new RegExp(`\\b(?:owned|co-owned|bred|campaigned) by\\s+(${N}${S})`, "g")],
   ];
-  for (const para of paragraphs) {
-    for (const re of trainerNamePatterns) {
-      for (const m of para.matchAll(re)) {
-        const fullName = m[1].trim();
-        const key = lastNameKey(fullName);
-        if (!trainerFullNameByKey[key]) trainerFullNameByKey[key] = fullName;
+  for (const raw of texts) {
+    // Accolades wedge between a trigger word and the name ("Trained by Hall
+    // of Famer Steve Asmussen", "under Hall of Famer John Velazquez").
+    const t = nyraMaskQuotes(raw).replace(/\bHall of Fam(?:er|e)\s+/g, "");
+    for (const [role, re, explicit] of patterns) for (const m of t.matchAll(re)) add(m[1], role, null, explicit);
+    // "Scott Blasi, assistant trainer to Asmussen" — quotes get filed under
+    // the head trainer (confirmed ask 2026-09-25), so remember who that is.
+    for (const m of t.matchAll(new RegExp(`(${N}),\\s+(?:[a-z]+\\s+and\\s+)?(?:an?\\s+)?assistant(?:\\s+trainer)?\\s+(?:to|for)\\s+(${N}${S})`, "g"))) add(m[1], "assistant", m[2]);
+    for (const m of t.matchAll(new RegExp(`\\bassistant(?:\\s+trainer)?\\s+(${N})(?:\\s+(?:to|for)\\s+(${N}${S}))?`, "g"))) add(m[1], "assistant", m[2]);
+    for (const j of trackedJockeys || []) if (t.includes(j)) add(j, "jockey");
+    // Any known jockey named in full ("Manny Franco", "Jose Ortiz").
+    if (nyraJockeySurnameRe().test(t)) for (const m of t.matchAll(nyraFullNameRe)) { const kj = nyraKnownJockey(m[1], trackedJockeys); if (kj && m[1].split(/\s+/).length >= 2) add(m[1], "jockey"); }
+  }
+  const people = {};
+  for (const [key, e] of Object.entries(found)) {
+    // Longest spelling wins ("Rick Dutrow, Jr." over "Dutrow"). Two
+    // different first names on one surname in the same article (Jose vs.
+    // Irad Ortiz) makes a bare-surname attribution ambiguous — no guess.
+    const names = [...e.names].sort((a, b) => b.length - a.length);
+    const full = names.filter((n) => !names.some((o) => o !== n && o.endsWith(` ${n}`)));
+    const firsts = new Set(full.filter((n) => n.split(/\s+/).length > 1).map((n) => firstNameKey(n)));
+    // A known jockey is a jockey unless the article explicitly calls him a
+    // trainer ("trainer X"); otherwise trainer evidence wins over jockey.
+    const knownJockey = names.some((n) => nyraKnownJockey(n, trackedJockeys));
+    const role = knownJockey && !e.explicitTrainer ? "jockey"
+      : e.roles.has("trainer") ? "trainer" : e.roles.has("jockey") ? "jockey" : e.roles.has("assistant") ? "assistant" : "other";
+    // With two people on one surname (Rick, Blake and Tony Dutrow), each
+    // full name keeps its own role.
+    const pick = (roles) => (roles.has("trainer") ? "trainer" : roles.has("jockey") ? "jockey" : roles.has("assistant") ? "assistant" : "other");
+    const roleOf = {};
+    for (const n of full) roleOf[n] = nyraKnownJockey(n, trackedJockeys) && !e.explicitTrainer ? "jockey" : pick(e.rolesByName[n] || new Set());
+    people[key] = { name: names[0], role, head: e.head, ambiguous: firsts.size > 1, fullNames: full, roleOf };
+  }
+  return people;
+}
+
+// Name-run building blocks and the registry's regexes, compiled once per
+// isolate rather than once per paragraph (the per-paragraph compile was
+// most of this job's CPU time on the free plan's ~10 ms budget).
+const NYRA_TOK = "(?:[A-Z]\\.|[A-Z][\\w’'-]*|[a-z][’'][A-Z][\\w’'-]*)";
+const NYRA_RUN = `((?:${NYRA_TOK}\\s+(?:(?:the|a|an|of|in|and|for|de|la|on|at|like)\\s+)?){0,4}${NYRA_TOK})`;
+const NYRA_SIRE_NEXT = /^\s+(?:colt|filly|gelding|mare|ridgling|horse|son|daughter|bay|chestnut|gray|grey|roan|dark|black|homebred|juvenile|sophomore)\b/;
+const NYRA_H = (() => {
+  const RUN = NYRA_RUN;
+  return {
+    aboard: new RegExp(`\\baboard\\s+(?:the\\s+(?:[a-z0-9-]+\\s+){0,4})?${RUN}`, "g"),
+    sexAge: new RegExp(`\\b(?:colt|filly|gelding|ridgling|\\d-year-old|juvenile|sophomore|stablemate|stable-mate)\\s+${RUN}`, "g"),
+    pedigree: new RegExp(`(?:^|[.!?;]\\s+|,\\s+)${RUN},\\s+(?:also\\s+)?an?\\s+(?:[^,.]{0,40}?\\b)?(?:\\d-year-old|son|daughter|colt|filly|gelding|mare|half-brother|half-sister|full brother|full sister|homebred|[A-Za-z-]+-bred|purchase|graduate|earner)\\b`, "g"),
+    byOutOf: new RegExp(`(?:^|[.!?;]\\s+|,\\s+)${RUN}\\s+(?:is|was)\\s+(?:by|out of)\\b`, "g"),
+    yearBracket: new RegExp(`${RUN}\\s+\\[(?:[^\\]]*\\b)?(?:19|20)\\d\\d\\b[^\\]]*\\]`, "g"),
+    wonBy: new RegExp(`\\bwon by\\s+(?:[a-z-]+\\s+){0,3}${RUN}\\s+(?:under|for|in|by|over)\\b`, "g"),
+    sentOut: new RegExp(`\\b(?:sending out|sent out|sends out|saddled|saddles|will saddle)\\s+(?:[a-z0-9$,-]+\\s+){0,3}${RUN}`, "g"),
+    point: new RegExp(`\\b(?:point|points|pointed|pointing)\\s+${RUN}\\s+(?:to|toward|for)\\b`, "g"),
+    possessive: /((?:[A-Z][\w.-]*,?\s+(?:and\s+)?){1,6}[A-Z][\w.-]*)(?:’s|'s|’|')\s+/g,
+    appositive: new RegExp(`(?:^|[.!?]\\s+|,\\s+)${RUN},\\s+(?:also\\s+)?(?:who|which|the|by|with)\\b`, "g"),
+    saidAbout: new RegExp(`\\bsaid\\s+(?:the\\s+(?:[\\w’'-]+\\s+){0,4}?)?${RUN},\\s+(?:who|which|a|an)\\b`, "g"),
+    subject: new RegExp(`(?:^|[.!?]\\s+|,\\s+)${RUN}\\s+(?:is one of|will exit|will make|will look|returned|finished|exited|enters|has won|has made|captured|improved|landed|was carried|received)\\b`, "g"),
+    withIn: new RegExp(`\\b(?:with|has)\\s+${RUN}\\s+(?:in|to|for|entered|pointed|set)\\b`, "g"),
+    listItem: new RegExp(`(?:,|\\band)\\s+${RUN}\\s+in\\s+the\\b`, "g"),
+    contender: new RegExp(`\\b(?:contender|entrant|runner|starter|representative)s?\\b[^.]{0,40}?\\bin\\s+${RUN}[.,;]`, "g"),
+  };
+})();
+const nyraEsc = (x) => nyraNorm(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Known-horse lexicon regex, compiled once per name list (see
+// nyraHorsesInArticle()). Matches the prose spelling with either apostrophe.
+const nyraLexiconCache = new WeakMap();
+function nyraLexiconRe(names) {
+  let c = nyraLexiconCache.get(names);
+  if (!c) {
+    const count = new Map();
+    for (const n of names) count.set(n, (count.get(n) || 0) + 1);
+    const ok = [...count.keys()].filter((h) => {
+      const w = h.trim().split(/\s+/);
+      if (!/^[A-Z0-9]/.test(h)) return false;
+      // One-word names: 5+ letters, not a common capitalized word, and on 2+
+      // stored notes (a single stray note — e.g. an owner once filed as a
+      // horse — isn't enough to trust it).
+      if (w.length === 1) return h.length >= 5 && count.get(h) >= 2 && !NYRA_NOT_HORSE_WORDS.has(h.toLowerCase()) && !NYRA_PLACE_OR_RACE_RE.test(h);
+      return !NYRA_PLACE_OR_RACE_RE.test(h);
+    }).sort((a, b) => b.length - a.length);
+    const byNorm = new Map(ok.map((h) => [nyraNorm(h), h]));
+    const pat = ok.map((h) => nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "['’]"));
+    c = { re: pat.length ? new RegExp(`(?<![A-Za-z’'])(?:${pat.join("|")})(?![A-Za-z])`, "g") : /$^/g, byNorm };
+    nyraLexiconCache.set(names, c);
+  }
+  return c;
+}
+
+// Step 2 — which horses are in this article. Returns names in their prose
+// spelling. Two tiers: STRONG patterns (brackets, "-trained", "aboard",
+// "colt NAME", pedigree lines like "NAME, a 4-year-old..." / "NAME is out
+// of...", subheading leads) are trusted outright; WEAK ones (plain
+// appositives, "NAME finished...", bare possessives) only count when the
+// name comes up in 2+ paragraphs and doesn't look like a person or a race.
+// A person's name can never be registered as a horse.
+function nyraHorsesInArticle(blocks, people, extraKnown, why, tracked = {}) {
+  const trackedKeys = new Set([...(tracked.trainers || []), ...(tracked.jockeys || []), ...NYRA_KNOWN_JOCKEYS].map((n) => nyraKey(n)));
+  const personKeys = new Set([...Object.keys(people), ...trackedKeys]);
+  // Every paragraph's narrative (quotes blanked), normalized, joined once so
+  // each per-candidate check is one regex pass instead of one per paragraph.
+  const SEP = "\n\u0000\n";
+  const narr = blocks.map((b) => nyraNorm(nyraMaskQuotes(b.text)));
+  const narrAll = narr.join(SEP);
+  const full = blocks.map((b) => nyraNorm(b.text));
+  const personCache = new Map();
+  // `trusted`: the name came from a pattern that can only be a horse (a
+  // "[post N, Jockey]" bracket) or the stored notes already file it as a
+  // horse — then a tracked trainer who happens to share the last word
+  // ("Doc Sullivan") doesn't make it a person; only this article's own
+  // people and the "N wins" test still do.
+  const personLike = (h, trusted) => {
+    const ck = `${trusted ? 1 : 0}|${h}`;
+    if (personCache.has(ck)) return personCache.get(ck);
+    const w = h.split(/\s+/);
+    const halves = h.split(" and ");
+    const r = /\b(?:Jr|Sr|Inc|Ltd)\.?$/.test(h)
+      || (w.length <= 3 && (trusted ? !!people[nyraKey(h)] && Object.values(people).some((p) => p.name === h || p.name.endsWith(` ${h}`)) : personKeys.has(nyraKey(h))))
+      || new RegExp(`(?<![A-Za-z])${nyraEsc(h)}(?![A-Za-z])[^.\\n]{0,40}?\\b\\d+ wins\\b`).test(narrAll)
+      || (halves.length === 2 && halves.every((x) => x.split(/\s+/).length >= 2)); // "Jay Graham and David Baggett"
+    personCache.set(ck, r);
+    return r;
+  };
+  // A name right after "Listed", "G1", "Grade 3", "$200,000" or "$1 million"
+  // is a race ("$200,000 Seeking the Ante", "Listed P.G. Johnson").
+  const raceLike = (h) => new RegExp(`(?:\\bListed|\\bG\\d|\\bGr(?:ade|oup) \\d|\\$[\\d,.]+(?: million)?|-furlong|\\bfurlong|-mile|\\bmile) ${nyraEsc(h)}(?![A-Za-z])`).test(narrAll);
+  const blockCount = (h) => { const re = new RegExp(`(?<![A-Za-z])${nyraEsc(h)}(?![A-Za-z])`); return full.filter((t) => re.test(t)).length; };
+  const strong = new Map(), weak = new Map();
+  let rule = "";
+  const add = (raw, isStrong, trusted = false) => {
+    let h = nyraCleanHorse(raw);
+    if (!h) return;
+    // "for trainer Riley Mott and Fire Marshal [post 8" — cut at a person.
+    if (/ and /.test(h)) { const parts = h.split(" and "); if (parts.slice(0, -1).some((x) => personKeys.has(nyraKey(x)))) h = nyraCleanHorse(parts[parts.length - 1]); }
+    if (!h || /(?:’s|'s|’|')$/.test(h)) return;
+    // One spelling per horse ("Howard’s Hope" vs "Howard's Hope"): reuse
+    // whichever was registered first.
+    const same = [...strong.keys(), ...weak.keys()].find((x) => x !== h && nyraNorm(x) === nyraNorm(h));
+    if (same) h = same;
+    const m = isStrong ? strong : weak;
+    if (m.has(h) || personLike(h, trusted)) return;
+    m.set(h, `${rule}: ${String(raw).slice(0, 60)}`);
+  };
+  const R = NYRA_H;
+  for (const b of blocks) {
+    // Only narrative text registers horses; a word inside a quote ("PPs",
+    // "Obviously", "There") never does.
+    const t = nyraMaskQuotes(b.text);
+    const words = t.split(/\s+/);
+    rule = "bracket"; // "HORSE [post N, Jockey]"
+    if (t.includes("[post")) words.forEach((w, i) => { if (/^\[post$/i.test(w)) add(nyraNameRunBackward(words, i), true, true); });
+    rule = "trained"; // "NAME-trained [descriptor] HORSE"
+    if (t.includes("-trained")) words.forEach((w, i) => {
+      if (!/-trained$/.test(w)) return;
+      let j = i + 1;
+      while (j < words.length && (/^[a-z$\d]/.test(words[j]) || /^(?:Grade|Group|Listed|G\d)$/.test(words[j]) || /\d/.test(words[j]))) j++;
+      add(nyraNameRunForward(words, j), true);
+    });
+    rule = "aboard"; // "aboard Leading Change", "aboard the mutuel second choice Renegade"
+    if (t.includes("aboard")) for (const m of t.matchAll(R.aboard)) add(m[1], true);
+    rule = "sex/age"; // "the Solomini colt Professor Plum", "the 2-year-old Raise the Roof"
+    // Not "mare X" (almost always a dam: "out of the First Defence mare
+    // Amber Isle"), and not "the 6-year-old War Dancer gelding" (a sire:
+    // the run is followed by a sex/colour word).
+    for (const m of t.matchAll(R.sexAge)) {
+      if (NYRA_SIRE_NEXT.test(t.slice(m.index + m[0].length))) continue;
+      add(m[1], true);
+    }
+    rule = "pedigree"; // "Evershed, a $369,665 purchase", "Awesome Czech, also a New York-homebred", "Howard’s Hope is out of"
+    for (const m of t.matchAll(R.pedigree)) add(m[1], true);
+    if (/\b(?:is|was) (?:by|out of)\b/.test(t)) for (const m of t.matchAll(R.byOutOf)) add(m[1], true);
+    rule = "year bracket"; // "Flat Out [2012]", "Olympiad [2022, at Saratoga]"
+    if (/\[[^\]]*\b(?:19|20)\d\d/.test(t)) for (const m of t.matchAll(R.yearBracket)) add(m[1], true);
+    rule = "won by"; // "won by international star Forever Young under regular pilot..."
+    if (t.includes("won by")) for (const m of t.matchAll(R.wonBy)) add(m[1], true);
+    rule = "trainer action"; // "sending out Life’s Dynamic", "saddled X", "point Raise the Roof to"
+    if (/\b(?:sen(?:d|ds|ding|t) out|saddle)/.test(t)) for (const m of t.matchAll(R.sentOut)) for (const part of m[1].split(/ and (?=[A-Z])/)) add(part, true);
+    if (/\bpoint/.test(t)) for (const m of t.matchAll(R.point)) add(m[1], true);
+    rule = "possessive"; // "Jay Em Ess Stable’s Ignite the Light", "Haymarket Farm’s Kentucky homebred Low Country Magic"
+    for (const m of t.matchAll(R.possessive)) {
+      if (/\b(?:Park|Course|Downs|Racetrack|Association|Stakes|Cup|Belmont|Saratoga|Aqueduct|Keeneland|Spa|NYRA)$/.test(m[1])) continue;
+      if (/(?:^|\s)(?:of|by|to)\s*$/.test(t.slice(Math.max(0, m.index - 4), m.index))) continue; // "son of Liam’s Map"
+      const rest = t.slice(m.index + m[0].length, m.index + m[0].length + 200).split(/\s+/);
+      let j = 0;
+      while (j < rest.length && j < 6 && (/^[a-z$\d]/.test(rest[j]) || /^(?:New|York|Kentucky|Florida|Maryland|Virginia|Ohio|California|Irish|French|English|British)$/.test(rest[j]) || /bred$/i.test(rest[j]))) j++;
+      const skipped = rest.slice(0, j).join(" ");
+      if (j && !/bred$|homebred|popular|lightly-raced|earner|named|\d/i.test(skipped)) continue; // only skip real descriptors
+      if (/\$/.test(skipped) && !/earner|purchase|yearling/.test(skipped)) continue; // "Friday’s $200,000 Seeking the Ante" is a race
+      const org = /\b(?:Stables?|Farms?|Racing|Thoroughbreds|LLC|Partners|Stud|Ranch|Bloodstock|Holdings)$/.test(m[1]);
+      add(nyraNameRunForward(rest, j), org || /bred|homebred/i.test(skipped));
+    }
+    rule = "appositive"; // "A Little At First, who is dual stakes-placed"
+    for (const m of t.matchAll(R.appositive)) add(m[1], false);
+    // Reported speech about a horse: "Franco said Bold Leadership, who
+    // missed by a nose...", "Lezcano said the Robbie Medina-trained maiden
+    // Mel Went Home, a nose runner-up..."
+    if (t.includes("said")) for (const m of t.matchAll(R.saidAbout)) add(m[1], false);
+    rule = "subject";
+    for (const m of t.matchAll(R.subject)) add(m[1], false);
+    rule = "with/in"; // "with Evershed in the Grade 2...", "a contender ... in Sounds Like a Plan."
+    for (const m of t.matchAll(R.withIn)) {
+      add(m[1], false);
+      // ...and the rest of that list: "with Fully Subscribed in the Personal
+      // Ensign, Ways and Means in the Resorts World Casino Ballerina, ..."
+      const sentence = t.slice(m.index).split(/(?<=[.!?])\s/)[0];
+      for (const li of sentence.matchAll(R.listItem)) add(li[1], false);
+    }
+    if (/\b(?:contender|entrant|runner|starter|representative)/.test(t)) for (const m of t.matchAll(R.contender)) add(m[1], false);
+    rule = "heading"; // each ";"-clause of a subheading can lead with a horse
+    if (b.heading) for (const clause of t.split(/;\s*/)) { const g = nyraTitleHorseGuess(clause); if (g) add(g, true); }
+  }
+  rule = "extra/title";
+  for (const h of extraKnown || []) add(h, true);
+  // Horses the stored notes already know, when named (capitalized, exact) in
+  // this article's narrative: "...winner Golden Tempo raced as far as 16
+  // lengths behind..." matches no structural pattern above, but it's
+  // certainly a horse. One-word names need 5+ letters and not be a common
+  // capitalized word, so "Hymn"/"Map"-style names can't match stray prose.
+  rule = "known horse";
+  if (tracked.knownHorseNames && tracked.knownHorseNames.length) {
+    const lex = nyraLexiconRe(tracked.knownHorseNames);
+    const joined = blocks.map((b) => nyraMaskQuotes(b.text)).join("\n");
+    for (const m of joined.matchAll(lex.re)) {
+      const after = joined.slice(m.index + m[0].length, m.index + m[0].length + 16);
+      if (/^\s+(?:Thoroughbreds|Stables?|Farms?|Racing|colt|filly|gelding|mare|son|daughter|bay|chestnut|gray|grey|roan)\b/.test(after)) continue;
+      // A one-word name glued to another capitalized word is part of a
+      // longer proper noun ("Finger Lakes"), not the horse.
+      if (!/\s/.test(m[0]) && (/^\s+[A-Z]/.test(after) || /[A-Z][\w’'-]*\s+$/.test(joined.slice(Math.max(0, m.index - 20), m.index)))) continue;
+      if (lex.byNorm.has(nyraNorm(m[0]))) add(m[0], true, true); // the article's own spelling
+    }
+  }
+  const accepted = new Map(strong);
+  for (const [h, w] of weak) if (!accepted.has(h) && blockCount(h) >= 2) accepted.set(h, `${w} (weak, confirmed by 2+ paragraphs)`);
+  for (const h of [...accepted.keys()]) if (raceLike(h)) accepted.delete(h);
+  // "Corner" out of "the hard-trying runner-up Harper’s Corner": a lone
+  // possessive word (not an owner like "Repole Stable’s") glued to the
+  // front means the real name is longer — drop the fragment when every
+  // mention of it looks like that.
+  for (const h of [...accepted.keys()]) {
+    const e = nyraEsc(h);
+    const all = [...narrAll.matchAll(new RegExp(`(?<![A-Za-z'])${e}(?![A-Za-z])`, "g"))].length;
+    const frag = [...narrAll.matchAll(new RegExp(`(?:^|[^A-Za-z'\\s]\\s*|\\b[a-z][\\w-]*\\s+)(?!(?:Stables?|Farms?|Racing|Thoroughbreds|Stud|Ranch|Partners)'s?)[A-Z][a-z]+'s? ${e}(?![A-Za-z])`, "g"))].length;
+    if (frag && frag >= all) accepted.delete(h);
+  }
+  // Only ever named as a sire or dam ("by Tourist", "out of the ... mare
+  // Blue Atlas", "son of Gun Runner") -> pedigree, not a runner.
+  const pedigreeOnly = (h) => {
+    const occ = [...narrAll.matchAll(new RegExp(`(?<![A-Za-z])${nyraEsc(h)}(?![A-Za-z])`, "g"))].map((m) => narrAll.slice(Math.max(0, m.index - 40), m.index).split(SEP).pop());
+    return occ.length > 0 && occ.every((pre) => /(?:\bof|\bby|\bout of(?: the)?(?: [\w'-]+){0,3}|\bmare|\bsire|\bdam|\bstallion)\s+(?:the\s+)?$/i.test(pre));
+  };
+  for (const h of [...accepted.keys()]) if (pedigreeOnly(h)) accepted.delete(h);
+  for (const h of [...accepted.keys()]) {
+    const cuts = [...h.matchAll(/ and /g)].map((m) => m.index);
+    if (cuts.some((i) => accepted.has(h.slice(0, i)) && accepted.has(h.slice(i + 5)))) accepted.delete(h);
+  }
+  // "Doc" cut off "Doc Sullivan": a name that never appears except as the
+  // start of a longer registered name is a fragment.
+  for (const h of [...accepted.keys()]) {
+    const longer = [...accepted.keys()].filter((o) => o !== h && nyraNorm(o).startsWith(`${nyraNorm(h)} `));
+    if (!longer.length) continue;
+    const alone = narrAll.replace(new RegExp(longer.map((o) => nyraEsc(o)).join("|"), "g"), " ");
+    if (!new RegExp(`(?<![A-Za-z'])${nyraEsc(h)}(?![A-Za-z])`).test(alone)) accepted.delete(h);
+  }
+  const all = [...accepted.keys()];
+  const OWNERISH = (prefix) => { const w = prefix.trim().split(/\s+/); return w.length >= 2 && !/^(?:My|The|A|An|Our|His|Her)$/.test(w[0]); };
+  const keep = all.filter((h) => !all.some((o) => {
+    if (o === h) return false;
+    const on = nyraNorm(o), hn = nyraNorm(h);
+    // "Hope" is a fragment of "Howard’s Hope" -> drop the fragment...
+    return on.endsWith(` ${hn}`) && !OWNERISH(on.slice(0, on.length - hn.length).replace(/'s?\s*$/, ""));
+  })).filter((h) => !all.some((o) => {
+    if (o === h) return false;
+    const on = nyraNorm(o), hn = nyraNorm(h);
+    // ...but "Susumu Fujita’s Forever Young" is an owner + horse -> drop the long one.
+    return hn.endsWith(` ${on}`) && /'s? /.test(hn) && OWNERISH(hn.slice(0, hn.length - on.length).replace(/'s?\s*$/, ""));
+  }));
+  if (why) for (const h of keep) why[h] = accepted.get(h);
+  return keep;
+}
+
+// Past winners NYRA introduces with a year bracket ("Cigar [1995]", "Flat
+// Out [2012]", "Olympiad [2022, at Saratoga]") — historical, often retired
+// or dead (Cigar also has a race named after him, confirmed 2026-09-25) —
+// or whose every mention is in a sentence dated to a past year. A quote
+// about one is recognized but never filed as a note.
+function nyraHistoricalHorses(blocks, horses) {
+  const year = new Date().getFullYear();
+  const narr = blocks.map((b) => nyraNorm(nyraMaskQuotes(b.text)));
+  const allSentences = narr.flatMap((t) => t.split(/(?<=[.!?])\s+/));
+  return new Set(horses.filter((h) => {
+    const esc = nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (narr.some((t) => [...t.matchAll(new RegExp(`(?<![A-Za-z])${esc}\\s+\\[(?:[^\\]]*\\b)?((?:19|20)\\d\\d)\\b[^\\]]*\\]`, "g"))].some((m) => Number(m[1]) < year))) return true;
+    // Or: every narrative mention sits in a sentence dated to a past year
+    // ("In 2013, he sent out 21-1 shot Ron the Greek..."). A current runner
+    // always has at least one undated mention.
+    const re = new RegExp(`(?<![A-Za-z])${esc}(?![A-Za-z])`);
+    const sentences = allSentences.filter((x) => re.test(x));
+    return sentences.length > 0 && sentences.every((x) => [...x.matchAll(/\b((?:19|20)\d\d)\b/g)].some((m) => Number(m[1]) < year));
+  }));
+}
+
+// Blanks out horse names right after a "finished behind / beat" phrase or a
+// relative ("half-brother to Owen Almighty"), so those mentions don't count
+// when deciding a paragraph's horse.
+const NYRA_RIVAL_BEFORE_RE = /(?:\bback of|\bbehind|\bbeaten by|\bbeat|\bdefeated by|\b(?:second|third|fourth|runner-up|nose|neck|head|length|lengths) to|\bover|\b(?:half-|full )?(?:brother|sister|sibling)s? to|\b(?:dam|sire|granddam) of|\b(?:pace|foot|lead|speed) of|\b(?:tracked|stalked|pressed|chased|pursued|collared|caught|outfinished|edged|nosed|denied|passed))\s+(?:the\s+)?(?:[\w$,.'’-]+\s+){0,3}$/i;
+function nyraMaskRivalMentions(text, horses) {
+  const { re } = nyraMentionRe(horses);
+  if (!re) return text;
+  const t = nyraNorm(text);
+  let out = text;
+  for (const m of t.matchAll(re)) {
+    if (NYRA_RIVAL_BEFORE_RE.test(t.slice(Math.max(0, m.index - 45), m.index))) out = out.slice(0, m.index) + " ".repeat(m[0].length) + out.slice(m.index + m[0].length);
+  }
+  return out;
+}
+
+// Horses the narrative only ever names as the one another horse finished
+// behind or beat ("1 1/4-lengths back of 6-year-old Conman", "a distant
+// third to Velora") — a rival, so a quote naming it isn't about it.
+function nyraRivalOnlyHorses(blocks, horses) {
+  const narr = blocks.map((b) => nyraNorm(nyraMaskQuotes(b.text)));
+  const RIVAL = /(?:\bback of|\bbehind|\bbeaten by|\bbeat|\bdefeated by|\b(?:second|third|fourth|runner-up|nose|neck|head|length|lengths) to|\bover)\s+(?:the\s+)?(?:[\w$,.'-]+\s+){0,3}$/i;
+  return new Set(horses.filter((h) => {
+    const esc = nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pres = narr.flatMap((t) => [...t.matchAll(new RegExp(`(?<![A-Za-z])${esc}(?![A-Za-z])`, "g"))].map((m) => t.slice(Math.max(0, m.index - 45), m.index)));
+    return pres.length > 0 && pres.every((pre) => RIVAL.test(pre));
+  }));
+}
+
+// Step 2b — which trainer and jockey the article ties each horse to, from
+// its own structural phrasing only. Returns horse -> { trainer, jockey }
+// (lastNameKey values). Used to keep a trainer's quote off a horse the
+// article says someone else trains (and the same for jockeys).
+function nyraConnections(blocks, people, horses) {
+  const links = {};
+  const link = (horseText, personName, role) => {
+    const h = nyraHorsesMentioned(horseText, horses)[0];
+    const key = personName && nyraKey(personName);
+    if (!h || !key || !people[key]) return;
+    const r = people[key].role === "assistant" ? "trainer" : people[key].role;
+    if (r !== role) return;
+    const e = links[h] || (links[h] = {});
+    if (!e[role]) e[role] = key;
+  };
+  const N = NYRA_NAME, S = NYRA_SUFFIX, H = "((?:[A-Z][\\w’'.-]*\\s+(?:(?:the|a|an|of|in|and|for|on|at|like)\\s+)?){0,4}[A-Z][\\w’'.-]*)";
+  const D = "(?:the\\s+)?(?:[a-z0-9$,.-]+\\s+){0,4}"; // lowercase descriptors: "the blossoming", "the mutuel second choice"
+  const rules = [
+    ["trainer", new RegExp(`Trained by\\s+(?:\\S+\\s+){0,6}?(${N}${S}),\\s+${D}${H}`, "g"), 1, 2],
+    ["trainer", new RegExp(`(${N})-trained\\s+(?:(?:Grade|Group|G)\\s*\\d\\S*\\s+)?${D}${H}`, "g"), 1, 2],
+    ["trainer", new RegExp(`(${N}${S}),\\s+(?:the\\s+)?trainer of\\s+${D}${H}`, "g"), 1, 2],
+    ["trainer", new RegExp(`${H},\\s+trained (?:and owned )?by\\s+(${N}${S})`, "g"), 2, 1],
+    ["trainer", new RegExp(`${H}\\s+\\[post[^\\]]*\\]\\s+for trainer\\s+(${N}${S})`, "g"), 2, 1],
+    ["jockey", new RegExp(`${H}\\s+\\[post\\s+\\d+(?:-of-\\d+)?,\\s*(${N}${S})\\s*[,\\]]`, "g"), 2, 1],
+    ["jockey", new RegExp(`(${N}${S}),?\\s+(?:was\\s+(?:[a-z]+\\s+)?)?aboard\\s+${D}${H}`, "g"), 1, 2],
+    ["jockey", new RegExp(`(${N}${S})\\s+has the call[^.]*?\\baboard\\s+${H}`, "g"), 1, 2],
+    ["jockey", new RegExp(`${H},\\s+with\\s+(${N}${S})\\s+up\\b`, "g"), 2, 1],
+    ["jockey", new RegExp(`(${N})-(?:ridden|piloted)\\s+${D}${H}`, "g"), 1, 2],
+    ["trainer", new RegExp(`(${N}${S}),\\s+who\\s+(?:also\\s+)?(?:trains|conditions|gallops|saddles|saddled|oversees)\\s+${D}${H}`, "g"), 1, 2],
+    ["jockey", new RegExp(`(${N}${S}),\\s+who\\s+(?:also\\s+)?(?:rides|rode|piloted|pilots|has ridden)\\s+${D}${H}`, "g"), 1, 2],
+  ];
+  for (const b of blocks) {
+    const t = nyraMaskQuotes(b.text).replace(/\bHall of Fam(?:er|e)\s+/g, "");
+    for (const [role, re, pi, hi] of rules) for (const m of t.matchAll(re)) link(m[hi], m[pi], role);
+    // "The Good Life made his stakes debut ... under the Spa's leading rider
+    // Manny Franco" — the sentence's subject horse, ridden by the first
+    // known jockey within six words after "under".
+    if (t.includes("under ")) for (const sentence of t.split(/(?<=[.!?])\s+/)) {
+      if (!sentence.includes("under ")) continue;
+      const subj = nyraHorsesMentioned(sentence.slice(0, 60), horses).find((h) => nyraNorm(sentence).startsWith(nyraNorm(h)));
+      const um = subj && sentence.match(/\bunder\s+((?:\S+\s+){0,6}\S+)/);
+      if (!um) continue;
+      // Same clause only: no other horse named between the subject and
+      // "under" ("Leading Change ... but Napoleon Solo ... under John
+      // Velazquez" is Napoleon Solo's jockey).
+      const between = sentence.slice(0, um.index);
+      if (nyraHorsesMentioned(between, horses).some((h) => h !== subj)) continue;
+      const words = um[1].split(/\s+/);
+      for (let i = 0; i < words.length; i++) {
+        const hit = [3, 2, 1].map((n) => words.slice(i, i + n).join(" ").replace(/[,.;:]+$/, "")).find((c) => people[nyraKey(c)] && people[nyraKey(c)].role === "jockey" && people[nyraKey(c)].name.endsWith(c.split(/\s+/).pop()));
+        if (hit) { link(subj, hit, "jockey"); break; }
       }
     }
   }
-  if (!Object.keys(trainerFullNameByKey).length) return [];
+  return links;
+}
 
-  // Step 2: walk paragraphs in order, tracking which horse is currently
-  // "in frame" (updated by the bracket convention, seeded from the
-  // headline for the lead horse before its own bracket ever appears), and
-  // building one merged section per (trainer, horse) pair.
-  // Confirmed real bug (2026-08-30): a "roundup"-style headline like "DeVaux
-  // barn represented by top sophomores Englishman, Golden Tempo..." leads
-  // with the TRAINER's surname, not a horse — extractNyraTitleHorse() can't
-  // tell the difference on its own (it just grabs the leading capitalized
-  // run). Without a "[post N, Jockey]" bracket anywhere in the piece to
-  // correct it, that wrong guess stuck as the horse for the WHOLE article,
-  // silently mislabeling every section in it (not just the ones near the
-  // headline). Cross-checking against trainerFullNameByKey — already built
-  // in Step 1 from the article's own body text — catches this generally,
-  // without needing to hand-maintain a blocklist of headline phrasings
-  // ("barn", "well-represented by", etc.): if the guess's last name matches
-  // a trainer this article already names, it's not a horse, so drop it and
-  // let the bracket convention (or nothing, if none appears) take over
-  // instead of guessing wrong.
-  // Confirmed real gap (2026-09-18): the exact-match check alone missed a
-  // headline that leads with a "Trainer NAME declares... contender HORSE"
-  // construction — the whole clause up to "HORSE" is one unbroken run of
-  // capitalized words, so extractNyraTitleHorse() grabbed the ENTIRE
-  // headline as the "horse name" rather than just the trainer's own name.
-  // Generalized from an exact match to "does a known trainer's full name
-  // appear ANYWHERE inside the guess" — catches a contaminated guess even
-  // when it's much longer than just the trainer's name, still without a
-  // hand-maintained phrasing blocklist.
-  const titleGuessIsActuallyTrainer = titleHorseGuess && (
-    trainerFullNameByKey[lastNameKey(titleHorseGuess)] ||
-    Object.values(trainerFullNameByKey).some((name) => titleHorseGuess.includes(name))
-  );
-  let currentHorse = titleGuessIsActuallyTrainer ? null : titleHorseGuess;
-  const sections = {}; // `${trainerKey}|${horse}` -> { trainerName, horse, parts: [] }
-
-  for (const para of paragraphs) {
-    // See NYRA_RETIRED_HORSE_SIGNAL_RE's own comment — this article-level
-    // gate already skipped whole retirement/legacy pieces in
-    // fetchNyraNews(), but this catches a retired-horse aside inside an
-    // otherwise-current article too (e.g. a stakes preview that mentions a
-    // stablemate's past retirement in passing).
-    if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(para)) continue;
-    const bracketHorse = extractNyraBracketHorse(para);
-    if (bracketHorse) currentHorse = bracketHorse;
-    if (!currentHorse) continue;
-
-    let attributed = null;
-    const afterMatch = para.match(/\b([A-Z][A-Za-z’'-]+(?:\s[A-Z][A-Za-z’'-]+)?)\s+said\b/);
-    if (afterMatch) attributed = afterMatch[1];
-    else {
-      const beforeMatch = para.match(/\bsaid\s+([A-Z][A-Za-z’'-]+(?:\s[A-Z][A-Za-z’'-]+)?)\b/);
-      if (beforeMatch) attributed = beforeMatch[1];
-    }
-    if (!attributed) continue;
-
-    const key = lastNameKey(attributed);
-    const fullName = trainerFullNameByKey[key];
-    if (!fullName) continue; // quoted someone with no "Trained by"/"for trainer" intro anywhere — don't guess
-
-    const quoteSpans = [...para.matchAll(/[“"]([^”"]{4,600})[”"]/g)].map((m) => m[1].trim()).filter(Boolean);
-    if (!quoteSpans.length) continue;
-
-    const sectionKey = `${key}|${currentHorse}`;
-    if (!sections[sectionKey]) sections[sectionKey] = { trainerName: fullName, horse: currentHorse, parts: [] };
-    sections[sectionKey].parts.push(quoteSpans.join(" "));
+// Known horses named in `text`, in the order they first appear (longest
+// name wins an overlap, so "Howard’s Hope" isn't also read as "Hope").
+// One alternation regex per horse list (longest name first, so at any
+// position the longest name wins), compiled once and reused — this runs for
+// every paragraph and every quote.
+const nyraMentionReCache = new WeakMap();
+function nyraMentionRe(horses) {
+  let c = nyraMentionReCache.get(horses);
+  if (!c) {
+    const sorted = [...horses].sort((a, b) => b.length - a.length);
+    const byNorm = new Map(sorted.map((h) => [nyraNorm(h), h]));
+    const re = sorted.length ? new RegExp(`(?<![A-Za-z])(?:${sorted.map((h) => nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![A-Za-z])`, "g") : null;
+    c = { re, byNorm };
+    nyraMentionReCache.set(horses, c);
   }
+  return c;
+}
+function nyraHorsesMentioned(text, horses) {
+  const { re, byNorm } = nyraMentionRe(horses);
+  if (!re) return [];
+  const found = [];
+  for (const m of nyraNorm(text).matchAll(re)) { const h = byNorm.get(m[0]); if (h && !found.includes(h)) found.push(h); }
+  return found;
+}
+
+// The known horse a headline/subheading STARTS with, if any — handles names
+// the capitalized-run guess mangles ("Liam’s Law points to..." would strip
+// "Liam’s" as if it were an owner's possessive).
+function nyraLeadingHorse(text, horses) {
+  const t = nyraNorm(text || "");
+  return [...horses].sort((a, b) => b.length - a.length).find((h) => t.startsWith(nyraNorm(h)) && !/^[A-Za-z]/.test(t.slice(nyraNorm(h).length))) || null;
+}
+
+// "the Solomini colt Professor Plum", "the Greatest Honour filly B Yutiful
+// Carly", "Awesome Czech ... is a 5-year-old daughter of..." -> horse -> "m"/"f".
+function nyraHorseSexes(blocks, horses) {
+  const sex = {};
+  const word = (w) => (/^(?:colt|gelding|horse|son|ridgling|stallion)$/i.test(w) ? "m" : "f");
+  for (const b of blocks) {
+    const t = nyraNorm(nyraMaskQuotes(b.text));
+    for (const h of horses) {
+      const hn = nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const m = t.match(new RegExp(`\\b(colt|gelding|son|ridgling|filly|mare|daughter)\\s+${hn}(?![A-Za-z])`, "i"))
+        || t.match(new RegExp(`${hn},\\s+(?:also\\s+)?an?\\s+[^,.]{0,60}?\\b(colt|gelding|son|ridgling|filly|mare|daughter)\\b`, "i"));
+      if (m && !sex[h]) sex[h] = word(m[1]);
+    }
+  }
+  return sex;
+}
+
+// Every quoted span in a paragraph. Either closing mark ends a span (NYRA
+// mixes straight and curly marks within one paragraph); a quote left open
+// at the end of a paragraph runs to the paragraph's end (NYRA's
+// multi-paragraph quote style: the next paragraph re-opens with “).
+function nyraQuoteSpans(text) {
+  const spans = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch !== "“" && ch !== '"') { i++; continue; }
+    const closers = ["”", '"'].map((c) => text.indexOf(c, i + 1)).filter((x) => x !== -1);
+    const end = closers.length ? Math.min(...closers) : text.length;
+    const inner = text.slice(i + 1, end).trim();
+    if (inner.length >= 4 && inner.length <= NYRA_QUOTE_SPAN_MAX) spans.push({ start: i, end, text: inner, unclosed: !closers.length });
+    i = end + 1;
+  }
+  return spans;
+}
+
+const nyraMaskCache = new Map();
+function nyraMaskQuotes(text) {
+  const hit = nyraMaskCache.get(text);
+  if (hit !== undefined) return hit;
+  if (nyraMaskCache.size > 2000) nyraMaskCache.clear();
+  let masked = text;
+  for (const s of nyraQuoteSpans(text)) masked = masked.slice(0, s.start) + " ".repeat(s.end + 1 - s.start) + masked.slice(s.end + 1);
+  nyraMaskCache.set(text, masked);
+  return masked;
+}
+
+// Attributions in the non-quote text of a paragraph, with positions:
+// "NAME said", "NAME, Jr. said", "said NAME", "he said", "she added".
+function nyraAttributions(masked) {
+  const V = NYRA_ATTRIBUTION_VERBS;
+  const out = [];
+  for (const m of masked.matchAll(new RegExp(`\\b(${NYRA_NAME})${NYRA_SUFFIX},?\\s+(?:${V})\\b`, "g"))) out.push({ at: m.index, end: m.index + m[0].length, name: m[1] });
+  for (const m of masked.matchAll(new RegExp(`\\b(?:${V})\\s+(${NYRA_NAME})`, "g"))) out.push({ at: m.index, end: m.index + m[0].length, name: m[1] });
+  for (const m of masked.matchAll(new RegExp(`\\b(?:[Hh]e|[Ss]he)\\s+(?:${V})\\b|\\b(?:${V})\\s+(?:he|she)\\b`, "g"))) out.push({ at: m.index, end: m.index + m[0].length, pronoun: true });
+  // "He said"/"She added" at a sentence start matches the NAME form too.
+  return out.map((a) => (a.name && /^(?:He|She|They|It)$/.test(a.name) ? { at: a.at, end: a.end, pronoun: true } : a)).sort((a, b) => a.at - b.at);
+}
+
+// Every quoted trainer/assistant/jockey remark in one NYRA article, merged
+// into one section per (speaker, horse). `blocks` are {text, heading} in
+// page order. options: trackedTrainers (for the surname-only fallback),
+// trackedJockeys, knownHorses (extra horse names, e.g. an entries card),
+// knownTrainerKeyByHorse (see nyraKnownTrainerKeyByHorse()), knownHorseNames
+// (every horse name the stored notes have — a lexicon, see
+// nyraHorsesInArticle()),
+// title (the raw listing headline), trace (array: one entry per quote span
+// with the decision made).
+function extractNyraSections(blocks, titleHorseGuess, options = {}) {
+  const { trackedTrainers = [], trackedJockeys = [], knownHorses = [], trace = null } = options;
+  blocks = blocks.map((b) => (typeof b === "string" ? { text: b, heading: false } : b));
+  const people = nyraPeopleInArticle(blocks.map((b) => b.text), trackedJockeys);
+  const trackedByKey = new Map();
+  for (const t of trackedTrainers) { const k = nyraKey(t); trackedByKey.set(k, [...(trackedByKey.get(k) || []), t]); }
+  const horses = nyraHorsesInArticle(blocks, people, [...knownHorses, ...(titleHorseGuess ? [titleHorseGuess] : [])], null, { trainers: trackedTrainers, jockeys: trackedJockeys, knownHorseNames: options.knownHorseNames });
+  let traceBlock = -1;
+  const note = (span, decision, extra) => { if (trace) trace.push({ block: traceBlock, text: span.text, decision, ...extra }); };
+
+  // Resolve an attributed name to a filing target, or null + reason.
+  const resolve = (name) => {
+    const key = nyraKey(name);
+    const p = people[key];
+    if (p) {
+      if (p.ambiguous && name.split(/\s+/).length < 2) {
+        // Two people share the surname: take the one named in the last two
+        // paragraphs, if only one of them was ("The colt's regular pilot,
+        // Jose Ortiz, offered similar sentiments." -> "Ortiz said").
+        const recent = p.fullNames.filter((n) => blocks.slice(Math.max(0, traceBlock - 2), traceBlock + 1).some((b) => b.text.includes(n)));
+        if (recent.length !== 1) return { reason: `ambiguous surname "${name}" (two people in this article)` };
+        name = recent[0];
+      }
+      // With two people on one surname, file under the full name that
+      // matches, not the article's longest spelling of the surname.
+      const own = p.ambiguous ? p.fullNames.find((n) => firstNameKey(n) === firstNameKey(name)) || name : p.name;
+      const role = p.ambiguous && p.roleOf[own] ? p.roleOf[own] : p.role;
+      if (role === "trainer") return { role: "trainer", trainerName: own, speaker: own };
+      if (role === "jockey") return { role: "jockey", jockeyName: own, speaker: own };
+      if (role === "assistant") {
+        const head = p.head && (people[nyraKey(p.head)]?.name || p.head);
+        return head ? { role: "assistant", trainerName: head, speaker: own } : { reason: `assistant "${own}" with no head trainer named` };
+      }
+      return { reason: `speaker "${p.name}" is not a trainer/jockey` };
+    }
+    const kj = nyraKnownJockey(name, trackedJockeys);
+    if (kj) return { role: "jockey", jockeyName: name.split(/\s+/).length >= 2 ? name : kj, speaker: name };
+    if (NYRA_SURNAME_DEFAULTS[key]) return { role: "trainer", trainerName: NYRA_SURNAME_DEFAULTS[key], speaker: name };
+    const tracked = trackedByKey.get(key) || [];
+    if (tracked.length === 1) return { role: "trainer", trainerName: tracked[0], speaker: name };
+    return { reason: tracked.length > 1 ? `surname "${name}" matches ${tracked.length} tracked trainers` : `unknown speaker "${name}"` };
+  };
+
+  const links = nyraConnections(blocks, people, horses);
+  const rivals = nyraRivalOnlyHorses(blocks, horses);
+  const historical = nyraHistoricalHorses(blocks, horses);
+  // Named only ever as "aboard X" -> a jockey's other mount that day ("the
+  // rider took the Grade 3 Prioress in Race 4 aboard Mashallah"): known,
+  // but never the horse a paragraph is about.
+  const asideOnly = new Set(horses.filter((h) => {
+    const esc = nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pres = blocks.flatMap((b) => { const t = nyraNorm(nyraMaskQuotes(b.text)); return [...t.matchAll(new RegExp(`(?<![A-Za-z])${esc}(?![A-Za-z])`, "g"))].map((m) => t.slice(Math.max(0, m.index - 12), m.index)); });
+    return pres.length > 0 && pres.every((pre) => /\baboard\s+$/.test(pre));
+  }));
+  // Where the article itself doesn't say who trains a horse, fall back to
+  // what the stored notes already say (options.knownTrainerKeyByHorse:
+  // normalized horse name -> trainer surname key, only for horses the notes
+  // file under exactly one trainer) — a roundup that never repeats "the
+  // Cox-trained Leading Change" still can't file Summers' or DeVaux's
+  // quotes under Leading Change.
+  const knownTrainer = options.knownTrainerKeyByHorse || {};
+  const linkedTo = (h, role) => (links[h] && links[h][role]) || (role === "trainer" ? knownTrainer[nyraNorm(h).toLowerCase()] || null : null);
+  const sexCache = {};
+  const sexOf = (h) => (h in sexCache ? sexCache[h] : (sexCache[h] = nyraHorseSexes(blocks, [h])[h] || null));
+  const titleIsPerson = titleHorseGuess && (people[nyraKey(titleHorseGuess)] || Object.values(people).some((p) => titleHorseGuess.includes(p.name)));
+  const titleClean = titleIsPerson ? null : nyraCleanHorse(titleHorseGuess);
+  const headlineHorse = nyraLeadingHorse(options.title, horses) || (titleClean && horses.includes(titleClean) ? titleClean : null);
+  let currentHorse = headlineHorse;
+  let frameAlternatives = []; // the 2+ horses the last narrative paragraph named, when the frame was kept among them
+  let lastSpeaker = null; // most recent resolved speaker (quoted or reported speech)
+  let prevQuote = null; // { target, horse } of the previous block's last quote
+  const lastMention = {}; // horse -> block index it was last named in (narrative)
+  const sections = {};
+
+  // Which horse a resolved speaker's quote is about. `named` = the one horse
+  // the quote itself names (if exactly one), `inherited` = the horse from an
+  // earlier quote by the same speaker in this paragraph (or the previous
+  // one, for a continuation paragraph).
+  const pickHorse = (target, named, inherited, pronounText) => {
+    const role = target.role === "jockey" ? "jockey" : "trainer";
+    const key = nyraKey(target.role === "jockey" ? target.jockeyName : target.trainerName);
+    const othersHorse = (h) => { const k = linkedTo(h, role); return !!k && k !== key; };
+    if (named && !othersHorse(named) && !rivals.has(named)) return { horse: named, via: "named in quote" };
+    if (inherited && !othersHorse(inherited) && !(frameAlternatives.length === 2 && pronounText)) return { horse: inherited, via: "same speaker, earlier quote" };
+    const stale = currentHorse && lastMention[currentHorse] !== undefined && traceBlock - lastMention[currentHorse] > NYRA_FRAME_MAX_AGE;
+    if (currentHorse && !othersHorse(currentHorse) && !stale) {
+      // Two horses of different sex in frame (e.g. a trainer comparing his
+      // colt and filly): a quote using only "she/her" is about the filly,
+      // only "he/him/his" about the colt; both -> it's about both, keep.
+      const alts = frameAlternatives.filter((h) => !othersHorse(h));
+      if (alts.length === 2 && pronounText && sexOf(alts[0]) && sexOf(alts[1]) && sexOf(alts[0]) !== sexOf(alts[1])) {
+        const f = /\b(?:she|her|hers|herself)\b/i.test(pronounText), m = /\b(?:he|him|his|himself)\b/i.test(pronounText);
+        if (f !== m) return { horse: alts.find((h) => sexOf(h) === (f ? "f" : "m")), via: "pronoun sex" };
+      }
+      return { horse: currentHorse, via: "in frame" };
+    }
+    // The horse in frame belongs to someone else (or there is none): fall
+    // back to this speaker's own horse — but only when exactly one horse the
+    // article ties to them was named in the last NYRA_FRAME_MAX_AGE paragraphs (the
+    // article's headline horse breaks a tie; anything else is a guess).
+    // ...and only right after the article has introduced this speaker (named
+    // in the previous paragraph or this one) — a quote that just appears
+    // mid-topic isn't pinned to one of their horses from elsewhere.
+    const surname = (target.speaker || "").split(/\s+/).pop();
+    const introduced = [traceBlock - 1, traceBlock].some((i) => i >= 0 && blocks[i] && nyraMaskQuotes(blocks[i].text).includes(surname));
+    const own = introduced ? horses.filter((h) => linkedTo(h, role) === key && lastMention[h] !== undefined && traceBlock - lastMention[h] <= NYRA_FRAME_MAX_AGE) : [];
+    if (own.length === 1) return { horse: own[0], via: "speaker's own horse" };
+    if (own.length > 1 && headlineHorse && own.includes(headlineHorse)) return { horse: headlineHorse, via: "speaker's own horse (headline)" };
+    return { reason: !currentHorse ? "no horse in frame" : stale ? `horse in frame (${currentHorse}) last named ${traceBlock - lastMention[currentHorse]} paragraphs back` : `horse in frame (${currentHorse}) is another ${role}'s` };
+  };
+
+  blocks.forEach((b, bi) => {
+    traceBlock = bi;
+    const text = b.text;
+    const narrative = nyraMaskQuotes(text);
+    // "…said Franco, who captured the Travers last weekend with the
+    // Cox-trained Leading Change" — a past horse in a clause about the
+    // speaker, not the horse this paragraph is about.
+    const frameText = narrative.replace(new RegExp(`(${NYRA_NAME})${NYRA_SUFFIX},\\s+who\\b[^“"”.]*`, "g"), (m, name) => (people[nyraKey(name)] ? " " : m));
+    // A rival named as the one this horse finished behind or beat ("a
+    // distant third to ... Velora") isn't what the paragraph is about.
+    const mentioned = nyraHorsesMentioned(nyraMaskRivalMentions(frameText, horses), horses).filter((h) => !asideOnly.has(h));
+    for (const h of nyraHorsesMentioned(narrative, horses)) lastMention[h] = bi;
+    if (b.heading) {
+      // A subheading starts a new section of a Notes column: nothing
+      // carries over. Only a horse LEADING the subheading sets the frame
+      // ("Velora eyes G1 Frizette..."); one named later in it doesn't
+      // ("Dutrow, Jr. reaches 2,000 wins, has Ignite the Light in...").
+      const g = nyraCleanHorse(nyraTitleHorseGuess(text.split(/;\s*/)[0]));
+      currentHorse = nyraLeadingHorse(text, horses) || (g && horses.includes(g) ? g : null);
+      frameAlternatives = [];
+      lastSpeaker = null;
+      prevQuote = null;
+      return;
+    }
+    if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(text)) {
+      for (const s of nyraQuoteSpans(text)) note(s, "retired-horse filter");
+      prevQuote = null;
+      return;
+    }
+    // Horse in frame, from the narrative (never from inside a quote):
+    // exactly one known horse named -> it; two or more -> keep the current
+    // one only if it's among them, else none (no guess).
+    // A list ("Grade 2 Shuvee [Fully Subscribed], Grade 3 Kelso [Zulu
+    // Kingdom], ...", or 3+ known horses) is about no single horse: it
+    // keeps the current one only if that's its subject (named first).
+    const isList = mentioned.length >= 3 || (frameText.match(/\[[A-Z][^\]]{1,40}\]/g) || []).length >= 3;
+    if (isList) { if (mentioned[0] !== currentHorse) currentHorse = null; frameAlternatives = []; }
+    else if (mentioned.length === 1) { currentHorse = mentioned[0]; frameAlternatives = []; }
+    else if (mentioned.length > 1) { if (!mentioned.includes(currentHorse)) currentHorse = null; frameAlternatives = currentHorse ? mentioned : []; }
+
+    const spans = nyraQuoteSpans(text);
+    const attributions = nyraAttributions(narrative);
+    if (!spans.length) {
+      // Reported speech ("Cox added there are no immediate plans...")
+      // still establishes who "he said" refers to next.
+      const named = attributions.filter((a) => a.name).pop();
+      if (named) { const r = resolve(named.name); lastSpeaker = r.role ? r : null; }
+      prevQuote = null;
+      return;
+    }
+
+    const opensWithQuote = /^[“"]/.test(text);
+    let paraQuote = null; // last filed quote in this paragraph
+    let paraSpeaker = null; // last resolved speaker in this paragraph, filed or not
+    spans.forEach((s, idx) => {
+      const nextStart = idx + 1 < spans.length ? spans[idx + 1].start : text.length;
+      const prevEnd = idx > 0 ? spans[idx - 1].end : -1;
+      // An attribution belongs to a quote only when it sits right against
+      // it: `”, NAME said` / `” said NAME` / `” an emotional NAME said`
+      // after, or `NAME said, “` before.
+      const after = attributions.find((a) => a.at > s.end && a.at < nextStart && /^[”",\s]*(?:(?:an?|the)\s+)?(?:[a-z-]+\s+){0,2}$/.test(text.slice(s.end + 1, a.at)));
+      const before = [...attributions].reverse().find((a) => a.end <= s.start && a.at > prevEnd && /^[\s,:]*$/.test(text.slice(a.end, s.start)));
+      const a = after || before;
+      let target = null, how = "";
+      if (a && a.name) {
+        const r = resolve(a.name);
+        if (!r.role) { note(s, r.reason); lastSpeaker = null; paraQuote = null; paraSpeaker = null; return; }
+        target = r; how = "attributed";
+      } else if (a && a.pronoun) {
+        if (!lastSpeaker) { note(s, "pronoun with no speaker named before it"); return; }
+        target = lastSpeaker; how = "pronoun";
+      } else if (paraSpeaker) {
+        target = paraSpeaker; how = "same paragraph"; // `“A,” De Paz said. “B.”`
+      } else if (idx === 0 && opensWithQuote && prevQuote && !attributions.length) {
+        target = prevQuote.target; how = "continuation";
+      } else { note(s, "no attribution"); return; }
+
+      // "[Sea Strike] got to him": a bracketed name is the editor clarifying
+      // a pronoun — often a rival — so it only picks the horse when nothing
+      // else does (no horse in frame).
+      const unbracketed = nyraHorsesMentioned(s.text.replace(/\[[^\]]*\]/g, " "), horses);
+      const inSpan = unbracketed.length || currentHorse ? unbracketed : nyraHorsesMentioned(s.text, horses);
+      const inherited = paraQuote && paraQuote.target === target ? paraQuote.horse : how === "continuation" && !mentioned.length ? prevQuote.horse : null;
+      const pick = pickHorse(target, inSpan.length === 1 ? inSpan[0] : null, inherited, s.text);
+      lastSpeaker = target;
+      paraSpeaker = target;
+      if (!pick.horse) { note(s, pick.reason); return; }
+      if (historical.has(pick.horse)) { note(s, `historical horse (${pick.horse}), not filed`); return; }
+      const horse = pick.horse;
+      paraQuote = { target, horse };
+      const sk = `${target.role}|${target.trainerName || target.jockeyName}|${horse}`;
+      if (!sections[sk]) sections[sk] = { target, horse, parts: [] };
+      sections[sk].parts.push(s.text);
+      note(s, "captured", { role: target.role, trainerName: target.trainerName || "", jockeyName: target.jockeyName || "", speaker: target.speaker, horse, how, via: pick.via });
+    });
+    prevQuote = paraQuote;
+  });
 
   return Object.values(sections).map((s) => ({
-    trainerName: s.trainerName,
+    trainerName: s.target.trainerName || "",
+    jockeyName: s.target.jockeyName || "",
+    role: s.target.role,
+    speakerName: s.target.speaker,
     horseNames: [s.horse],
     text: s.parts.join(" "),
   }));
 }
 
-async function fetchNyraNews(track) {
+// Parses one NYRA article page into ordered text blocks. The body runs from
+// the "format-text" container to the "All News" back-link that always
+// follows it (confirmed on Notes columns, stakes advances and recaps at both
+// tracks) — the old fixed 20,000-char cut-off dropped the last sections of
+// every long Notes column. 60,000 chars is only a fallback bound.
+// A look-back feature ("Mineshaft: A Jockey Club Gold Cup win that cemented
+// a championship season", about 2003): one year 10+ years old is named 4+
+// times and more often than the last two years combined. Its horses are
+// historical (often retired or dead), so it yields no notes at all.
+function nyraIsRetrospective(blocks) {
+  const year = new Date().getFullYear();
+  const counts = {};
+  for (const b of blocks) for (const m of b.text.matchAll(/\b((?:19|20)\d\d)\b/g)) counts[m[1]] = (counts[m[1]] || 0) + 1;
+  const recent = Object.entries(counts).filter(([y]) => Number(y) >= year - 1).reduce((a, [, n]) => a + n, 0);
+  return Object.entries(counts).some(([y, n]) => Number(y) <= year - 10 && n >= 4 && n > recent);
+}
+
+function parseNyraArticle(html, track) {
+  const bodyIdx = html.indexOf('class="format-text"');
+  if (bodyIdx === -1) return [];
+  let endIdx = html.indexOf(`<a href="/${track}/news/" class="uppercase`, bodyIdx);
+  if (endIdx === -1) endIdx = Math.min(bodyIdx + 60000, html.length);
+  const bodyHtml = html.slice(bodyIdx, endIdx);
+  return [...bodyHtml.matchAll(/<(p|h[2-4])[^>]*>([\s\S]*?)<\/\1>/g)]
+    .map((m) => ({ heading: m[1] !== "p", text: decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim() }))
+    .filter((b) => b.text);
+}
+
+async function fetchNyraNews(track, options = {}) {
   if (!NYRA_NEWS_TRACKS.includes(track)) throw new Error(`Unknown NYRA news track: ${track}`);
   const listUrl = nyraNewsListUrl(track);
   const listRes = await fetch(listUrl, {
@@ -6826,8 +7662,20 @@ async function fetchNyraNews(track) {
     items.push({ link, title, pubDate: isNaN(pubDate) ? null : pubDate.toISOString() });
   }
 
+  // The server-side import (runNyraNewsImport()) passes shouldFetch — an
+  // async "is this one worth fetching" check (not yet imported, not too
+  // old) — and its own cap, so already-imported articles cost no
+  // subrequest at all. onFetched(item) fires once an article's response
+  // came back (ok or not), so it can be marked done; a network error
+  // doesn't fire it, leaving the article for the next run. The /nyra-news
+  // route passes neither and keeps its original newest-20 behavior.
+  const { shouldFetch = null, maxArticles = NYRA_NEWS_MAX_ARTICLES_PER_RUN, onFetched = null, ...extractOptions } = options;
   const articles = [];
-  for (const item of items.slice(0, NYRA_NEWS_MAX_ARTICLES_PER_RUN)) {
+  let fetched = 0;
+  for (const item of shouldFetch ? items : items.slice(0, maxArticles)) {
+    if (fetched >= maxArticles) break;
+    if (shouldFetch && !(await shouldFetch(item))) continue;
+    fetched++;
     let articleRes;
     try {
       articleRes = await fetch(item.link, {
@@ -6837,22 +7685,182 @@ async function fetchNyraNews(track) {
     } catch (err) {
       continue; // skip this one article, don't fail the whole batch
     }
+    if (onFetched) await onFetched(item);
     if (!articleRes.ok) continue;
-    const html = await articleRes.text();
-    const bodyIdx = html.indexOf('class="format-text"');
-    if (bodyIdx === -1) continue;
-    const bodyHtml = html.slice(bodyIdx, Math.min(bodyIdx + 20000, html.length));
-    const paragraphs = [...bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
-      .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-    if (!paragraphs.length) continue;
-    const titleHorseGuess = extractNyraTitleHorse(item.title);
-    const sections = extractNyraSections(paragraphs, titleHorseGuess);
+    const blocks = parseNyraArticle(await articleRes.text(), track);
+    if (!blocks.length || nyraIsRetrospective(blocks)) continue;
+    const sections = extractNyraSections(blocks, nyraTitleHorseGuess(item.title), { ...extractOptions, title: item.title });
     if (!sections.length) continue;
     articles.push({ guid: item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
   }
 
-  return { source: listUrl, track, fetchedAt: new Date().toISOString(), articles };
+  return { source: listUrl, track, fetchedAt: new Date().toISOString(), listed: items.length, fetched, articles };
+}
+
+// ---------- NYRA News server-side import (job #20, scheduled) ----------
+// Confirmed ask 2026-09-25: "auto scrape this and any future articles on the
+// NYRA Belmont news site" — the browser-only autoImportNyraNews() in
+// index.html only ever ran while someone had the dashboard open. This runs
+// on its OWN Cron Trigger (NYRA_NEWS_CRON), twice a day at 7am and 3pm
+// Eastern, fully inside the Worker, same shape as runDrfImport(): fetch,
+// extract, match against the tracked lists, write.
+//
+// Budget (Workers Free: 50 external subrequests and ~10 ms CPU per
+// invocation): 2 listing fetches + at most NYRA_IMPORT_MAX_NEW_PER_RUN new
+// article fetches. Articles already imported (nyra:seen:<link>) or older
+// than NYRA_IMPORT_MAX_AGE_DAYS are skipped BEFORE fetching (no backfill
+// past that, confirmed ask), so a typical run fetches 0-4 articles; a
+// backlog just drains over the next runs. Extraction costs ~5 ms CPU per
+// article, which is why the cap is per run rather than "everything new".
+//
+// Filing (the horse is what a note hangs off, so a section is only ever
+// filed under the horse extractNyraSections() resolved — it drops anything
+// it can't pin to one horse rather than guessing):
+//   - trainer / assistant quotes -> resolveTrackedTrainer() against the
+//     tracked trainers (assistants are already mapped to their head
+//     trainer by the extractor);
+//   - jockey quotes -> same matching against the tracked jockeys list;
+//   - no tracked match -> NOT added (never auto-adds a trainer/jockey,
+//     same rule as SmartPony, job #18); collected in KV "nyra:untracked"
+//     for review at GET /debug-nyra-untracked instead.
+// Each note's link gets a per-horse fragment (#slug) so one article
+// covering several horses keeps one note per horse; dedupe is on
+// (trainer, jockey, horse, link-without-fragment), same as /notes/bulk.
+// The notes key is written once per run, only if something was added.
+const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (11/19 UTC) and EST (12/20 UTC)
+const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
+const NYRA_IMPORT_MAX_NEW_PER_RUN = 10;
+const NYRA_IMPORT_MAX_AGE_DAYS = 28;
+const NYRA_UNTRACKED_KV_KEY = "nyra:untracked";
+const NYRA_UNTRACKED_MAX = 300;
+// Normalized horse name -> trainer surname key, for every horse the stored
+// notes file under exactly one trainer surname (horses under more than one,
+// e.g. after a barn change, are left out).
+function nyraKnownTrainerKeyByHorse(notes) {
+  const seen = {};
+  for (const n of notes) {
+    if (!n.trainer || !n.horse) continue;
+    const h = nyraNorm(n.horse).toLowerCase();
+    (seen[h] || (seen[h] = new Set())).add(nyraKey(n.trainer));
+  }
+  const out = {};
+  for (const [h, keys] of Object.entries(seen)) if (keys.size === 1) out[h] = [...keys][0];
+  return out;
+}
+// Exact spelling first (case-insensitive), then the usual surname +
+// first-name matching — so an article's "Bill Mott" lands on a tracked
+// "Bill Mott" even when a separate "William Mott" entry makes the fuzzy
+// match ambiguous.
+function nyraResolveTracked(name, list) {
+  if (!name) return null;
+  const exact = list.find((t) => t.toLowerCase() === name.trim().toLowerCase());
+  return exact || resolveTrackedTrainer(name, list);
+}
+
+function nyraSeenKvKey(link) {
+  return `nyra:seen:${link.replace(/^https?:\/\/[^/]+/, "").replace(/[^a-z0-9]/gi, "").slice(-80)}`;
+}
+function nyraHorseSlug(horse) {
+  return stripDiacritics(horse).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+async function runNyraNewsImport(env, { force = false } = {}) {
+  const summary = { tracks: {}, fetched: 0, sections: 0, written: 0, duplicates: 0, untracked: 0 };
+  try {
+    const state = await readNotesAndTrainers(env);
+    const { jockeys } = await readJockeysAndMeta(env);
+    const notes = state.notes;
+    const cutoff = Date.now() - NYRA_IMPORT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+    const untrackedFound = [];
+    const knownTrainerKeyByHorse = nyraKnownTrainerKeyByHorse(notes);
+    const knownHorseNames = notes.map((n) => n.horse).filter(Boolean); // repeats kept: the lexicon counts them
+    let addedAny = false;
+    let budget = NYRA_IMPORT_MAX_NEW_PER_RUN;
+
+    for (const track of NYRA_NEWS_TRACKS) {
+      if (budget <= 0) break;
+      const t = { listed: 0, fetched: 0, tooOld: 0, alreadySeen: 0, articlesWithQuotes: 0 };
+      summary.tracks[track] = t;
+      let result;
+      try {
+        result = await fetchNyraNews(track, {
+          trackedTrainers: state.trainers,
+          trackedJockeys: jockeys,
+          knownTrainerKeyByHorse,
+          knownHorseNames,
+          maxArticles: budget,
+          shouldFetch: async (item) => {
+            if (item.pubDate && Date.parse(item.pubDate) < cutoff) { t.tooOld++; return false; }
+            if (!force && (await env.STABLE_KV.get(nyraSeenKvKey(item.link)))) { t.alreadySeen++; return false; }
+            return true;
+          },
+          onFetched: async (item) => {
+            await env.STABLE_KV.put(nyraSeenKvKey(item.link), "1", { expirationTtl: 60 * 60 * 24 * 60 });
+          },
+        });
+      } catch (err) {
+        t.error = err.message;
+        continue;
+      }
+      t.listed = result.listed;
+      t.fetched = result.fetched;
+      t.articlesWithQuotes = result.articles.length;
+      budget -= result.fetched;
+      summary.fetched += result.fetched;
+
+      for (const article of result.articles) {
+        const date = article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : "";
+        for (const section of article.sections) {
+          summary.sections++;
+          const horse = section.horseNames[0];
+          const trainer = section.trainerName ? nyraResolveTracked(section.trainerName, state.trainers) : null;
+          const jockey = !section.trainerName && section.jockeyName ? nyraResolveTracked(section.jockeyName, jockeys) : null;
+          if (!trainer && !jockey) {
+            untrackedFound.push({ track, role: section.role, name: section.trainerName || section.jockeyName, speaker: section.speakerName, horse, link: article.link, title: article.title, seenAt: new Date().toISOString() });
+            summary.untracked++;
+            continue;
+          }
+          const link = `${article.link}#${nyraHorseSlug(horse)}`;
+          const dup = notes.find((n) => (n.trainer || "") === (trainer || "") && (n.jockey || "") === (jockey || "") && n.horse === horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(link));
+          if (dup) { summary.duplicates++; continue; }
+          notes.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            trainer: trainer || "",
+            jockey: jockey || "",
+            horse,
+            note: section.text,
+            date,
+            source: article.title,
+            link,
+            autoImported: true,
+            sentiment: null,
+            importedVia: "nyra-news",
+            capturedAt: new Date().toISOString(),
+          });
+          addedAny = true;
+          summary.written++;
+        }
+      }
+    }
+
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes)); // one write for the whole run
+      await bumpDataVersion(env);
+    }
+    if (untrackedFound.length) {
+      // Merge into the review list; written only if it actually changed.
+      const raw = await env.STABLE_KV.get(NYRA_UNTRACKED_KV_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const keyOf = (u) => `${u.name}|${u.horse}|${u.link}`;
+      const known = new Set(list.map(keyOf));
+      const fresh = untrackedFound.filter((u) => !known.has(keyOf(u)));
+      if (fresh.length) await env.STABLE_KV.put(NYRA_UNTRACKED_KV_KEY, JSON.stringify([...fresh, ...list].slice(0, NYRA_UNTRACKED_MAX)));
+    }
+    return summary;
+  } catch (err) {
+    console.error("NYRA News import failed", err.message);
+    return { ...summary, error: err.message };
+  }
 }
 
 // ---------- BloodHorse News (job #24) ----------

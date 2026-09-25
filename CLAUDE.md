@@ -36,6 +36,11 @@ comment documents one feature/route.
   `RESEND_API_KEY`, `PIRATE_WEATHER_API_KEY`, `SMARTPONY_EMAIL`, `SMARTPONY_PASSWORD`.
 - Cron Triggers fire `scheduled()` for the entry-alert emails and Stable Tour dedupe; there's
   a `/debug-run-scheduled` GET route to trigger that logic on demand without waiting for cron.
+  A third trigger, `0 11,12,19,20 * * *`, runs only the NYRA News import (7am/3pm Eastern;
+  on demand: `/debug-run-nyra-import`). `scheduled()` dispatches on that exact expression, so
+  it has to match in the dashboard.
+- `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
+  (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
 
 ## Conventions
 
