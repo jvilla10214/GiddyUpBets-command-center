@@ -2518,6 +2518,43 @@
   }
   .stable-extract-item input:focus, .stable-extract-item textarea:focus{ border-color: var(--tote-amber); }
   .stable-extract-item textarea{ resize: vertical; min-height: 80px; }
+
+  /* Manual article import (job #27) results — same visual shape as
+     .stable-extract-item above, just its own class since it's not scoped
+     to a single trainer's card the way that workflow is. */
+  #stableImportResults{ display:flex; flex-direction:column; gap:10px; margin-top: 14px; }
+  .stable-import-card{
+    background: var(--panel-2);
+    border: 1px solid var(--sky);
+    border-radius: 8px;
+    padding: 14px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .stable-import-card .bias-form-row{ display:flex; gap:12px; flex-wrap:wrap; }
+  .stable-import-card label{
+    display:flex; flex-direction:column; gap:4px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex: 1 1 160px;
+  }
+  .stable-import-card input, .stable-import-card textarea{
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--parchment);
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+  }
+  .stable-import-card input:focus, .stable-import-card textarea:focus{ border-color: var(--tote-amber); }
+  .stable-import-card textarea{ resize: vertical; min-height: 60px; }
+  #stableImportBodyText{ min-height: 220px; }
   .stable-extract-discard{
     background:none;
     border: 1px solid var(--panel-border);
@@ -3348,6 +3385,7 @@
         <button type="button" class="bias-window-btn" data-view="date">By Date</button>
         <button type="button" class="bias-window-btn" data-view="added">Newest Added</button>
         <button type="button" id="stableQuickAddBtn" class="stable-save-btn">+ Add</button>
+        <button type="button" id="stableImportArticleBtn" class="stable-save-btn">+ Import Article</button>
       </div>
 
       <div class="bias-form" id="stableQuickAddForm">
@@ -3372,6 +3410,35 @@
           <button type="button" id="stableQuickAddSaveBtn">Save</button>
           <button type="button" id="stableQuickAddCancelBtn">Cancel</button>
         </div>
+      </div>
+
+      <!-- Manual article import — paste a link + the article's own text
+           (you read it in your own browser, so no fetch/proxy/scraping on
+           this app's end at all) and every "Quote," Name said quote gets
+           found and the trainer auto-resolved against the tracked list;
+           you just confirm/fix the trainer and fill in the horse before
+           saving each one. Deliberately source-agnostic — works for DRF,
+           a press release, anything with normal quote attribution. -->
+      <div class="bias-form" id="stableImportArticleForm">
+        <div class="bias-form-row">
+          <label>Article Link
+            <input type="text" id="stableImportLink" placeholder="https://…">
+          </label>
+          <label>Source label (optional)
+            <input type="text" id="stableImportSource" placeholder="e.g. DRF, Sept 24 2026">
+          </label>
+          <label>Date
+            <input type="date" id="stableImportDate">
+          </label>
+        </div>
+        <label>Paste the article's text here
+          <textarea id="stableImportBodyText" placeholder="Paste the full article text — every &quot;Quote,&quot; Name said (or Name said, &quot;Quote&quot;) will be found automatically below."></textarea>
+        </label>
+        <div class="bias-form-actions">
+          <button type="button" id="stableImportExtractBtn">Extract Quotes</button>
+          <button type="button" id="stableImportCancelBtn">Cancel</button>
+        </div>
+        <div id="stableImportResults"></div>
       </div>
       <!-- Shared floating dropdown for the trainer/horse autocomplete below —
            one element, repositioned and repopulated per-field on input,
@@ -9392,6 +9459,101 @@
     if (saved) closeStableQuickAddForm();
   });
 
+  // Manual article import (job #27) — a legitimate path around a source
+  // being bot-blocked (built 2026-09-24 specifically because DRF started
+  // 403ing this app's Worker): a human reads the article in their own
+  // browser and pastes its text in here, no fetch/proxy on this app's end
+  // at all. The worker's /notes/extract-quotes route finds every
+  // "Quote," Name said (or Name said, "Quote") pair and resolves the name
+  // against tracked trainers where it can — same regex shape as the
+  // BloodHorse/TDN/DRF auto-import pipelines, just without a guessed lead
+  // horse (a manual paste can cover several horses, and there's no <meta
+  // keywords> crutch to lean on the way DRF's own HTML has). Each result
+  // renders as its own editable card — trainer pre-filled if resolved
+  // (still editable, for the rare wrong auto-resolve), horse always blank
+  // for a human to fill in — nothing saves until that card's own Save is
+  // clicked, same "no guess beats a wrong guess" backstop as everywhere
+  // else auto-extraction happens in this app.
+  function openStableImportArticleForm(){
+    $("stableImportLink").value = "";
+    $("stableImportSource").value = "";
+    $("stableImportDate").value = nowInTrackTZ().date;
+    $("stableImportBodyText").value = "";
+    $("stableImportResults").innerHTML = "";
+    $("stableImportArticleForm").classList.add("open");
+    $("stableImportLink").focus();
+  }
+  function closeStableImportArticleForm(){
+    $("stableImportArticleForm").classList.remove("open");
+  }
+  $("stableImportArticleBtn").addEventListener("click", () => {
+    if ($("stableImportArticleForm").classList.contains("open")) closeStableImportArticleForm();
+    else openStableImportArticleForm();
+  });
+  $("stableImportCancelBtn").addEventListener("click", closeStableImportArticleForm);
+
+  function renderStableImportCandidate(c, index){
+    const safeQuote = escapeHtml(c.quote);
+    const safeTrainer = escapeHtml(c.resolvedTrainer || c.rawName || "");
+    return `
+      <div class="stable-import-card" data-index="${index}">
+        <div class="bias-form-row">
+          <label>Trainer <input type="text" class="stableImportTrainer stable-autocomplete-trainer" value="${safeTrainer}" autocomplete="off"></label>
+          <label>Horse <input type="text" class="stableImportHorse stable-autocomplete-horse" placeholder="Horse name" autocomplete="off"></label>
+        </div>
+        <label>Quote <textarea class="stableImportQuote">${safeQuote}</textarea></label>
+        <div class="bias-form-actions">
+          <button type="button" class="stable-import-save-btn">Save</button>
+          <button type="button" class="stable-import-discard-btn">Discard</button>
+        </div>
+      </div>`;
+  }
+
+  $("stableImportExtractBtn").addEventListener("click", async () => {
+    const bodyText = $("stableImportBodyText").value.trim();
+    if (!bodyText){ $("stableImportBodyText").focus(); return; }
+    let data;
+    try{ data = await stableApiWrite("POST", "/notes/extract-quotes", { bodyText }); }
+    catch(err){ stableApiError("extract quotes", err); return; }
+    const candidates = data.candidates || [];
+    $("stableImportResults").innerHTML = candidates.length
+      ? candidates.map(renderStableImportCandidate).join("")
+      : `<div class="log-empty">No "Name said" style quotes found in that text.</div>`;
+  });
+
+  $("stableImportResults").addEventListener("click", async (e) => {
+    const card = e.target.closest(".stable-import-card");
+    if (!card) return;
+    if (e.target.closest(".stable-import-discard-btn")){
+      card.remove();
+      return;
+    }
+    if (e.target.closest(".stable-import-save-btn")){
+      const typedTrainer = card.querySelector(".stableImportTrainer").value.trim();
+      const horseInput = card.querySelector(".stableImportHorse");
+      const horse = horseInput.value.trim();
+      const note = card.querySelector(".stableImportQuote").value.trim();
+      if (!horse){ horseInput.focus(); return; }
+      if (!note) return;
+      let trainer = "";
+      if (typedTrainer){
+        trainer = resolveTrackedTrainer(typedTrainer, stableTrainers);
+        if (!trainer){
+          trainer = typedTrainer;
+          await addStableTrainer(trainer);
+        }
+        stableOpenTrainers.add(trainer);
+      } else {
+        stableUnassignedOpen = true;
+      }
+      const date = $("stableImportDate").value;
+      const source = $("stableImportSource").value.trim();
+      const link = $("stableImportLink").value.trim();
+      const saved = await addStableNote(trainer, { horse, date, source, link, note });
+      if (saved) card.remove();
+    }
+  });
+
   // Leaderboard/roster pages tend to use official-standings formatting
   // (middle initials, "Jr."/"II"/"III" suffixes) that rarely appears in
   // ordinary news prose — stripping it down to the everyday "First Last"
@@ -13270,7 +13432,7 @@
   // something typed and unsaved, so a background refresh can't silently
   // wipe someone's in-progress entry.
   function stableHasUnsavedInput(){
-    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse, #stableQuickAddTrainer";
+    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse, #stableQuickAddTrainer, #stableImportBodyText, #stableImportLink, .stableImportTrainer, .stableImportHorse, .stableImportQuote";
     return [...document.querySelectorAll(selector)].some(el => el.value.trim().length > 0);
   }
   async function refreshStableDataIfIdle(){

@@ -917,6 +917,18 @@ async function handleRequest(request, env) {
       return json({ reassigned, trainers }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Stateless extraction only — no KV write, so no auth gate (matches
+    // /drf-news and the other read-only news routes). See job #27's own
+    // comment (near extractManualQuoteCandidates()) for why this exists.
+    if (url.pathname === "/notes/extract-quotes" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const bodyText = (body.bodyText || "").trim();
+      if (!bodyText) return json({ error: "Missing bodyText" }, 400);
+      const trainers = await readTrainers(env);
+      const candidates = extractManualQuoteCandidates(bodyText, trainers);
+      return json({ candidates }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/notes" && request.method === "POST") {
       const body = await request.json().catch(() => ({}));
       // Trainer is optional for a manually-added note (not for /notes/bulk,
@@ -6964,6 +6976,46 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
     horseNames: [titleHorseGuess],
     text: s.parts.join(" "),
   }));
+}
+
+// ---------- Manual article import (job #27) ----------
+// Added 2026-09-24 specifically as a legitimate path around DRF's new
+// bot-detection block (see project_drf_server_side_import_blocked memory) —
+// a human reading the article in their own browser pastes its text in, no
+// fetch/proxy on this app's end at all, same "no scraping, just typing
+// faster" spirit as the existing per-trainer paste-and-extract workflow
+// (stablePasteInput/stable-extract-btn in index.html). Deliberately generic
+// (works for ANY source's prose, not just DRF) rather than another
+// source-specific parser.
+//
+// Unlike extractGenericQuoteSections() above, this does NOT require or use
+// a guessed lead horse — that function's one-horse-per-article assumption
+// doesn't fit a manual multi-horse article, and there's no <meta keywords>
+// crutch to lean on for a plain-text paste the way extractDrfSections() has.
+// Instead every found quote is returned on its own, with a nullable
+// resolved trainer, and the CLIENT asks a human to type in the horse name
+// (and fix the trainer, if it didn't resolve) before saving — same
+// "human confirms, no guess beats a wrong guess" backstop the paste-and-
+// extract workflow already uses for its own horse field.
+function extractManualQuoteCandidates(bodyText, trackedTrainers) {
+  const paragraphs = bodyText.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added|wrote)\b/g;
+  const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added|wrote)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
+  const candidates = [];
+  const seenSpans = new Set(); // dedupe a quote matched by BOTH regexes (rare but possible on ambiguous punctuation)
+  for (const para of paragraphs) {
+    const found = [];
+    for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
+    for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), rawName: m[1].trim() });
+    for (const { quote, rawName } of found) {
+      const dedupeKey = `${quote}|${rawName}`;
+      if (seenSpans.has(dedupeKey)) continue;
+      seenSpans.add(dedupeKey);
+      const resolved = resolveTrackedTrainer(rawName, trackedTrainers);
+      candidates.push({ rawName, resolvedTrainer: resolved, quote });
+    }
+  }
+  return candidates;
 }
 
 // Piggybacks job #16's Cron Trigger (both the morning and evening fires —
