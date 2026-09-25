@@ -7636,7 +7636,10 @@ function parseNyraArticle(html, track) {
     .filter((b) => b.text);
 }
 
-async function fetchNyraNews(track, options = {}) {
+// One NYRA news listing page -> its articles (link, title, pubDate), newest
+// first, retirement/legacy titles already dropped (see
+// NYRA_RETIRED_HORSE_SIGNAL_RE's own comment). One subrequest.
+async function listNyraNews(track) {
   if (!NYRA_NEWS_TRACKS.includes(track)) throw new Error(`Unknown NYRA news track: ${track}`);
   const listUrl = nyraNewsListUrl(track);
   const listRes = await fetch(listUrl, {
@@ -7654,47 +7657,44 @@ async function fetchNyraNews(track, options = {}) {
     if (seenLinks.has(link)) continue;
     seenLinks.add(link);
     const title = decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
-    // Skip retirement/legacy pieces before even fetching the article body —
-    // see NYRA_RETIRED_HORSE_SIGNAL_RE's own comment.
     if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(title)) continue;
     const dateLabel = m[3].trim(); // e.g. "Aug 26 2026"
     const pubDate = new Date(dateLabel);
     items.push({ link, title, pubDate: isNaN(pubDate) ? null : pubDate.toISOString() });
   }
+  return { listUrl, items };
+}
 
-  // The server-side import (runNyraNewsImport()) passes shouldFetch — an
-  // async "is this one worth fetching" check (not yet imported, not too
-  // old) — and its own cap, so already-imported articles cost no
-  // subrequest at all. onFetched(item) fires once an article's response
-  // came back (ok or not), so it can be marked done; a network error
-  // doesn't fire it, leaving the article for the next run. The /nyra-news
-  // route passes neither and keeps its original newest-20 behavior.
-  const { shouldFetch = null, maxArticles = NYRA_NEWS_MAX_ARTICLES_PER_RUN, onFetched = null, ...extractOptions } = options;
+// One article -> its quote sections. One subrequest. `status` is "network"
+// when the fetch itself threw (worth retrying later), "http" for a non-OK
+// response, "ok" otherwise (sections may still be empty).
+async function fetchNyraArticleSections(item, track, options = {}) {
+  let articleRes;
+  try {
+    articleRes = await fetch(item.link, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 3600, cacheEverything: true },
+    });
+  } catch (err) {
+    return { status: "network", sections: [] };
+  }
+  if (!articleRes.ok) return { status: "http", sections: [] };
+  const blocks = parseNyraArticle(await articleRes.text(), track);
+  if (!blocks.length || nyraIsRetrospective(blocks)) return { status: "ok", sections: [] };
+  return { status: "ok", sections: extractNyraSections(blocks, nyraTitleHorseGuess(item.title), { ...options, title: item.title }) };
+}
+
+// GET /nyra-news route (the browser's autoImportNyraNews()): newest
+// NYRA_NEWS_MAX_ARTICLES_PER_RUN articles, every call, no KV.
+async function fetchNyraNews(track, options = {}) {
+  const { listUrl, items } = await listNyraNews(track);
   const articles = [];
-  let fetched = 0;
-  for (const item of shouldFetch ? items : items.slice(0, maxArticles)) {
-    if (fetched >= maxArticles) break;
-    if (shouldFetch && !(await shouldFetch(item))) continue;
-    fetched++;
-    let articleRes;
-    try {
-      articleRes = await fetch(item.link, {
-        headers: { "User-Agent": BROWSER_UA },
-        cf: { cacheTtl: 3600, cacheEverything: true },
-      });
-    } catch (err) {
-      continue; // skip this one article, don't fail the whole batch
-    }
-    if (onFetched) await onFetched(item);
-    if (!articleRes.ok) continue;
-    const blocks = parseNyraArticle(await articleRes.text(), track);
-    if (!blocks.length || nyraIsRetrospective(blocks)) continue;
-    const sections = extractNyraSections(blocks, nyraTitleHorseGuess(item.title), { ...extractOptions, title: item.title });
+  for (const item of items.slice(0, NYRA_NEWS_MAX_ARTICLES_PER_RUN)) {
+    const { sections } = await fetchNyraArticleSections(item, track, options);
     if (!sections.length) continue;
     articles.push({ guid: item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
   }
-
-  return { source: listUrl, track, fetchedAt: new Date().toISOString(), listed: items.length, fetched, articles };
+  return { source: listUrl, track, fetchedAt: new Date().toISOString(), articles };
 }
 
 // ---------- NYRA News server-side import (job #20, scheduled) ----------
@@ -7709,9 +7709,12 @@ async function fetchNyraNews(track, options = {}) {
 // invocation): 2 listing fetches + at most NYRA_IMPORT_MAX_NEW_PER_RUN new
 // article fetches. Articles already imported (nyra:seen:<link>) or older
 // than NYRA_IMPORT_MAX_AGE_DAYS are skipped BEFORE fetching (no backfill
-// past that, confirmed ask), so a typical run fetches 0-4 articles; a
-// backlog just drains over the next runs. Extraction costs ~5 ms CPU per
-// article, which is why the cap is per run rather than "everything new".
+// past that, confirmed ask), and the multi-MB notes key is only read when
+// at least one article is new — so the usual "nothing new" run is ~1-2 ms
+// of CPU. Extraction costs ~7 ms CPU per article, which is why the cap is
+// per run; a backlog drains over the next runs, newest first. Articles are
+// marked imported only after the notes write, so a run that gets cut short
+// loses nothing (the next run redoes it; dedupe prevents duplicates).
 //
 // Filing (the horse is what a note hangs off, so a section is only ever
 // filed under the horse extractNyraSections() resolved — it drops anything
@@ -7729,7 +7732,7 @@ async function fetchNyraNews(track, options = {}) {
 // The notes key is written once per run, only if something was added.
 const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (11/19 UTC) and EST (12/20 UTC)
 const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
-const NYRA_IMPORT_MAX_NEW_PER_RUN = 10;
+const NYRA_IMPORT_MAX_NEW_PER_RUN = 5; // ~7 ms CPU each; a backlog drains over a few runs
 const NYRA_IMPORT_MAX_AGE_DAYS = 28;
 const NYRA_UNTRACKED_KV_KEY = "nyra:untracked";
 const NYRA_UNTRACKED_MAX = 300;
@@ -7767,86 +7770,89 @@ function nyraHorseSlug(horse) {
 async function runNyraNewsImport(env, { force = false } = {}) {
   const summary = { tracks: {}, fetched: 0, sections: 0, written: 0, duplicates: 0, untracked: 0 };
   try {
+    // Pass 1 — cheap: listing pages + one small KV read per recent article.
+    // The multi-MB notes key isn't touched unless something is new, so the
+    // usual "nothing new" run costs ~1-2 ms of CPU.
+    const cutoff = Date.now() - NYRA_IMPORT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+    const todo = [];
+    for (const track of NYRA_NEWS_TRACKS) {
+      const t = { listed: 0, tooOld: 0, alreadySeen: 0, queued: 0, fetched: 0, articlesWithQuotes: 0 };
+      summary.tracks[track] = t;
+      let items;
+      try { ({ items } = await listNyraNews(track)); } catch (err) { t.error = err.message; continue; }
+      t.listed = items.length;
+      for (const item of items) { // newest first
+        if (todo.length >= NYRA_IMPORT_MAX_NEW_PER_RUN) break;
+        if (item.pubDate && Date.parse(item.pubDate) < cutoff) { t.tooOld++; continue; }
+        if (!force && (await env.STABLE_KV.get(nyraSeenKvKey(item.link)))) { t.alreadySeen++; continue; }
+        todo.push({ track, item });
+        t.queued++;
+      }
+    }
+    if (!todo.length) return summary;
+
+    // Pass 2 — only now read the notes and build the lookups extraction needs.
     const state = await readNotesAndTrainers(env);
     const { jockeys } = await readJockeysAndMeta(env);
     const notes = state.notes;
-    const cutoff = Date.now() - NYRA_IMPORT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-    const untrackedFound = [];
     const knownTrainerKeyByHorse = nyraKnownTrainerKeyByHorse(notes);
     const knownHorseNames = notes.map((n) => n.horse).filter(Boolean); // repeats kept: the lexicon counts them
+    const untrackedFound = [];
+    const done = []; // articles to mark imported — only AFTER the notes are saved
     let addedAny = false;
-    let budget = NYRA_IMPORT_MAX_NEW_PER_RUN;
 
-    for (const track of NYRA_NEWS_TRACKS) {
-      if (budget <= 0) break;
-      const t = { listed: 0, fetched: 0, tooOld: 0, alreadySeen: 0, articlesWithQuotes: 0 };
-      summary.tracks[track] = t;
-      let result;
-      try {
-        result = await fetchNyraNews(track, {
-          trackedTrainers: state.trainers,
-          trackedJockeys: jockeys,
-          knownTrainerKeyByHorse,
-          knownHorseNames,
-          maxArticles: budget,
-          shouldFetch: async (item) => {
-            if (item.pubDate && Date.parse(item.pubDate) < cutoff) { t.tooOld++; return false; }
-            if (!force && (await env.STABLE_KV.get(nyraSeenKvKey(item.link)))) { t.alreadySeen++; return false; }
-            return true;
-          },
-          onFetched: async (item) => {
-            await env.STABLE_KV.put(nyraSeenKvKey(item.link), "1", { expirationTtl: 60 * 60 * 24 * 60 });
-          },
-        });
-      } catch (err) {
-        t.error = err.message;
-        continue;
-      }
-      t.listed = result.listed;
-      t.fetched = result.fetched;
-      t.articlesWithQuotes = result.articles.length;
-      budget -= result.fetched;
-      summary.fetched += result.fetched;
-
-      for (const article of result.articles) {
-        const date = article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : "";
-        for (const section of article.sections) {
-          summary.sections++;
-          const horse = section.horseNames[0];
-          const trainer = section.trainerName ? nyraResolveTracked(section.trainerName, state.trainers) : null;
-          const jockey = !section.trainerName && section.jockeyName ? nyraResolveTracked(section.jockeyName, jockeys) : null;
-          if (!trainer && !jockey) {
-            untrackedFound.push({ track, role: section.role, name: section.trainerName || section.jockeyName, speaker: section.speakerName, horse, link: article.link, title: article.title, seenAt: new Date().toISOString() });
-            summary.untracked++;
-            continue;
-          }
-          const link = `${article.link}#${nyraHorseSlug(horse)}`;
-          const dup = notes.find((n) => (n.trainer || "") === (trainer || "") && (n.jockey || "") === (jockey || "") && n.horse === horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(link));
-          if (dup) { summary.duplicates++; continue; }
-          notes.push({
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            trainer: trainer || "",
-            jockey: jockey || "",
-            horse,
-            note: section.text,
-            date,
-            source: article.title,
-            link,
-            autoImported: true,
-            sentiment: null,
-            importedVia: "nyra-news",
-            capturedAt: new Date().toISOString(),
-          });
-          addedAny = true;
-          summary.written++;
+    for (const { track, item } of todo) {
+      const t = summary.tracks[track];
+      const { status, sections } = await fetchNyraArticleSections(item, track, {
+        trackedTrainers: state.trainers, trackedJockeys: jockeys, knownTrainerKeyByHorse, knownHorseNames,
+      });
+      if (status === "network") continue; // not marked: retried next run
+      t.fetched++;
+      summary.fetched++;
+      done.push(item.link);
+      if (!sections.length) continue;
+      t.articlesWithQuotes++;
+      const date = item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : "";
+      for (const section of sections) {
+        summary.sections++;
+        const horse = section.horseNames[0];
+        const trainer = section.trainerName ? nyraResolveTracked(section.trainerName, state.trainers) : null;
+        const jockey = !section.trainerName && section.jockeyName ? nyraResolveTracked(section.jockeyName, jockeys) : null;
+        if (!trainer && !jockey) {
+          untrackedFound.push({ track, role: section.role, name: section.trainerName || section.jockeyName, speaker: section.speakerName, horse, link: item.link, title: item.title, seenAt: new Date().toISOString() });
+          summary.untracked++;
+          continue;
         }
+        const link = `${item.link}#${nyraHorseSlug(horse)}`;
+        const dup = notes.find((n) => (n.trainer || "") === (trainer || "") && (n.jockey || "") === (jockey || "") && n.horse === horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(link));
+        if (dup) { summary.duplicates++; continue; }
+        notes.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          trainer: trainer || "",
+          jockey: jockey || "",
+          horse,
+          note: section.text,
+          date,
+          source: item.title,
+          link,
+          autoImported: true,
+          sentiment: null,
+          importedVia: "nyra-news",
+          capturedAt: new Date().toISOString(),
+        });
+        addedAny = true;
+        summary.written++;
       }
     }
 
+    // Save first, THEN mark articles imported: if this run is ever cut short
+    // (e.g. a CPU limit), nothing is marked and the next run simply redoes
+    // them — dedupe above keeps that from creating duplicates.
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes)); // one write for the whole run
       await bumpDataVersion(env);
     }
+    for (const link of done) await env.STABLE_KV.put(nyraSeenKvKey(link), "1", { expirationTtl: 60 * 60 * 24 * 60 });
     if (untrackedFound.length) {
       // Merge into the review list; written only if it actually changed.
       const raw = await env.STABLE_KV.get(NYRA_UNTRACKED_KV_KEY);

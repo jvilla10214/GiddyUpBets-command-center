@@ -46,14 +46,14 @@ globalThis.fetch = async (url) => {
 
 const { env, ops, store } = fakeEnv();
 const before = JSON.parse(store.get("notes")).length;
-for (let run = 1; run <= 6; run++) {
+for (let run = 1; run <= 20; run++) {
   fetchLog.length = 0; ops.get = 0; ops.put = 0; ops.putKeys = {};
-  const t0 = performance.now();
+  const c0 = process.cpuUsage();
   const s = await W.runNyraNewsImport(env);
-  const ms = performance.now() - t0;
-  console.log(`run ${run}: subrequests=${fetchLog.length} | fetched=${s.fetched} sections=${s.sections} written=${s.written} dup=${s.duplicates} untracked=${s.untracked}${s.error ? " ERROR " + s.error : ""} | KV get=${ops.get} put=${ops.put} ${JSON.stringify(ops.putKeys)} | ${ms.toFixed(0)} ms wall`);
+  const cu = process.cpuUsage(c0); const ms = (cu.user + cu.system) / 1000;
+  console.log(`run ${run}: subrequests=${fetchLog.length} | fetched=${s.fetched} sections=${s.sections} written=${s.written} dup=${s.duplicates} untracked=${s.untracked}${s.error ? " ERROR " + s.error : ""} | KV get=${ops.get} put=${ops.put} ${JSON.stringify(ops.putKeys)} | CPU ${ms.toFixed(1)} ms (node; incl. fixture file reads)`);
   console.log(`        per track: ${JSON.stringify(s.tracks)}`);
-  if (!s.fetched) break;
+  if (!s.fetched && run > 1) break;
 }
 const notes = JSON.parse(store.get("notes"));
 const added = notes.slice(before);
@@ -73,6 +73,16 @@ const forced = await W.runNyraNewsImport(env, { force: true });
 console.log(`force re-run: fetched=${forced.fetched} written=${forced.written} duplicates=${forced.duplicates} (expect written=0)`);
 const unt = JSON.parse(store.get("nyra:untracked") || "[]");
 console.log(`\nnyra:untracked entries: ${unt.length}`); for (const u of unt.slice(0, 15)) console.log(`  ${u.role.padEnd(9)} ${String(u.name).padEnd(22)} / ${u.horse.padEnd(20)} ${u.link.replace("https://www.nyra.com", "")}`);
+
+// Crash safety: a run that dies while saving notes must mark nothing imported.
+{
+  const c = fakeEnv();
+  const realPut = c.env.STABLE_KV.put;
+  c.env.STABLE_KV.put = async (k, v, o) => { if (k === "notes") throw new Error("simulated CPU-limit kill"); return realPut(k, v, o); };
+  const r = await W.runNyraNewsImport(c.env);
+  const seenKeys = [...c.store.keys()].filter((k) => k.startsWith("nyra:seen:")).length;
+  console.log(`\ncrash test: run error="${r.error}" | articles marked imported afterwards: ${seenKeys} (expect 0)`);
+}
 
 // scheduled() dispatch: NYRA cron at 7am ET runs the job; at 9am ET does nothing; other crons untouched
 const RealDate = Date;

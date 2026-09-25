@@ -11,7 +11,7 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 **Decision:** NYRA News (job #20) quote extraction was rewritten, and importing moved into the
 Worker as `runNyraNewsImport()` on its own Cron Trigger (`0 11,12,19,20 * * *`; it only does work
 at 7am and 3pm Eastern, so no DST edits). Each run skips articles older than 4 weeks or already
-imported (a `nyra:seen:` flag per article) *before* fetching them, fetches at most 10 new articles,
+imported (a `nyra:seen:` flag per article) *before* fetching them, fetches at most 5 new articles,
 files notes only for tracked trainers/jockeys (untracked ones go to a review list at
 `/debug-nyra-untracked`, never auto-added), and writes the `notes` key once, only if something was
 added. The browser's `autoImportNyraNews()` stays as a fallback until the server job is confirmed live.
@@ -26,12 +26,16 @@ the horse is what a note hangs off. It scores 98% with 0 wrong horses on the lab
 reviewed by eye on ~40 more articles. Running server-side means notes arrive whether or not anyone
 has the dashboard open. A separate cron keeps it off the 8am/4pm entry-alert invocation, which is
 already close to the free plan's 50-subrequest cap.
+**CPU safety:** the multi-MB `notes` key is only read when an article is actually new, so the
+usual run is ~1–2 ms of CPU. A run that saves notes costs ~27 ms (1 article) to ~50 ms (5), most of
+it reading and rewriting `notes`, the same cost the existing BloodHorse/TDN/DRF jobs already pay and
+which the free plan has been tolerating (BloodHorse notes were saved from the 8am cron on 9/21 and
+9/24). Articles are marked imported only *after* the notes are saved, so a run that gets cut short
+loses nothing: the next run redoes it, and dedupe prevents duplicates.
 **Alternatives considered:** Piggybacking the existing entry-alert cron like BloodHorse/TDN/DRF
 (rejected: that invocation is already near/over the subrequest budget); the Claude API for
 extraction (rejected: free-only); keeping the old extractor server-side (rejected: 7.8% coverage
-with wrong horses). **Known limits:** extraction costs ~7 ms CPU per article (over the free plan's
-nominal 10 ms per run on backlog runs, like the existing jobs that parse the multi-MB notes key);
-two Delacour quotes that follow a two-horse paragraph are dropped by design; a quote that praises
+with wrong horses). **Known limits:** two Delacour quotes that follow a two-horse paragraph are dropped by design; a quote that praises
 a stablemate by name can still be filed under that stablemate.
 
 ---
