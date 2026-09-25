@@ -7735,11 +7735,12 @@ const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (
 const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
 const NYRA_IMPORT_MAX_NEW_PER_RUN = 5; // ~7 ms CPU each; a backlog drains over a few runs
 const NYRA_IMPORT_MAX_AGE_DAYS = 28;
-// Scope (confirmed ask 2026-09-25): "I want the Sep 24 article and any future
-// NYRA Belmont notes" — Belmont's news page only, nothing published before
-// the Sep 24 Belmont Notes column (no backfill). Saratoga's news is still
-// served to the browser by GET /nyra-news; add "saratoga" here to import it.
-const NYRA_IMPORT_TRACKS = ["belmont"];
+// Scope (confirmed asks 2026-09-25): "the Sep 24 article and any future NYRA
+// Belmont notes", plus Saratoga ("that will start being added as it gets
+// closer to summer and I want it to be auto as well"). Nothing published
+// before the Sep 24 Belmont Notes column is imported, at either track (no
+// backfill) — new Saratoga articles get picked up whenever they appear.
+const NYRA_IMPORT_TRACKS = ["belmont", "saratoga"];
 const NYRA_IMPORT_START_DATE = "2026-09-24";
 const NYRA_UNTRACKED_KV_KEY = "nyra:untracked";
 const NYRA_UNTRACKED_MAX = 300;

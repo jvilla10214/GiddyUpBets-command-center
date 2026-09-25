@@ -10,8 +10,8 @@ meaningful architectural or data-source decision, add a new entry here in the sa
 **Date:** 2026-09-25
 **Decision:** NYRA News (job #20) quote extraction was rewritten, and importing moved into the
 Worker as `runNyraNewsImport()` on its own Cron Trigger (`0 11,12,19,20 * * *`; it only does work
-at 7am and 3pm Eastern, so no DST edits). Scope: Belmont's news page only, from the Sep 24 Belmont
-Notes column onward (no backfill; Saratoga can be added in `NYRA_IMPORT_TRACKS`). Each run skips
+at 7am and 3pm Eastern, so no DST edits). Scope: Belmont's and Saratoga's news pages, from the Sep 24
+Belmont Notes column onward (no backfill; new Saratoga articles import as they appear). Each run skips
 articles older than that (or 4 weeks) or already
 imported (a `nyra:seen:` flag per article) *before* fetching them, fetches at most 5 new articles,
 files notes only for tracked trainers/jockeys (untracked ones go to a review list at
