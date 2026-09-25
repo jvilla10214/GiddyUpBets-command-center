@@ -603,7 +603,7 @@ const NYRA_NEWS_MAX_ARTICLES_PER_RUN = 20;
 // bot-labeled UA -> 403, a real browser's UA -> 200) — the feed endpoint
 // itself didn't seem to care, but using a real UA everywhere here anyway
 // rather than relying on that being a permanent distinction.
-const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 // api.weather.gov documents a descriptive User-Agent (app name + contact) as
 // required, not optional — and this is the one call in this file a browser
 // could never make directly, since fetch() is spec-forbidden from setting
