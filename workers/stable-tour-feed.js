@@ -5039,10 +5039,17 @@ function stripHorseCountrySuffix(name) {
 // never treated as that kind of ambiguity — their notes always pass
 // through untouched. Kept as an exact mirror of index.html's
 // findHorseStableNotes() — same fix, same reasoning, both places.
+// Curly and straight apostrophes are the same horse: NYRA's articles (and
+// much of SmartPony's data) write "Howard’s Hope", entries cards write
+// "Howard's Hope" — confirmed 2026-09-25 that 114 stored notes used the
+// curly form and so never matched an entry or an alert email.
+function horseMatchKey(name) {
+  return stripHorseCountrySuffix(name.trim().toLowerCase().replace(/[’‘ʼ]/g, "'"));
+}
 function notesForHorse(notes, trainer, horseName) {
   if (!horseName) return [];
-  const wantHorse = stripHorseCountrySuffix(horseName.trim().toLowerCase());
-  const horseMatches = notes.filter((n) => n.horse && stripHorseCountrySuffix(n.horse.trim().toLowerCase()) === wantHorse);
+  const wantHorse = horseMatchKey(horseName);
+  const horseMatches = notes.filter((n) => n.horse && horseMatchKey(n.horse) === wantHorse);
   const untracked = horseMatches.filter((n) => !n.trainer);
   const tracked = horseMatches.filter((n) => n.trainer);
   let resolvedTracked = tracked;

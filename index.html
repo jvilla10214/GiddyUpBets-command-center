@@ -10091,10 +10091,16 @@
   // a rare same-surname coincidence can't leak another trainer's horse in.
   // A different-surname former trainer is never treated as that kind of
   // ambiguity — their notes always pass through untouched.
+  // Curly and straight apostrophes are the same horse — see the Worker's
+  // horseMatchKey(): articles write "Howard’s Hope", entries cards write
+  // "Howard's Hope".
+  function horseMatchKey(name){
+    return stripHorseCountrySuffix(name.trim().toLowerCase().replace(/[’‘ʼ]/g, "'"));
+  }
   function findHorseStableNotes(trainer, horseName){
     if (!horseName) return [];
-    const wantHorse = stripHorseCountrySuffix(horseName.trim().toLowerCase());
-    const horseMatches = stableNotes.filter(n => n.horse && stripHorseCountrySuffix(n.horse.trim().toLowerCase()) === wantHorse);
+    const wantHorse = horseMatchKey(horseName);
+    const horseMatches = stableNotes.filter(n => n.horse && horseMatchKey(n.horse) === wantHorse);
     const untracked = horseMatches.filter(n => !n.trainer);
     const tracked = horseMatches.filter(n => n.trainer);
     let resolvedTracked = tracked;
