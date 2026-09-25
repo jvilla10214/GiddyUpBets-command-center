@@ -6259,6 +6259,16 @@ async function discoverDrfArticleLinks() {
 async function fetchDrfNews() {
   const items = await discoverDrfArticleLinks();
 
+  // Temporary diagnostics (2026-09-25): DRF's bot detection just started
+  // blocking the sitemap specifically (see discoverDrfArticleLinks()'s own
+  // comment) — these counts exist to see, from this PUBLIC route with no
+  // passphrase needed, whether that's now ALSO affecting individual article
+  // fetches (a further escalation) versus discovery itself coming back
+  // thin/empty. Safe to remove once job #26 is confirmed reliably finding
+  // real articles again.
+  let fetchFailed = 0, fetchNotOk = 0, noSections = 0;
+  const statusCounts = {};
+
   const articles = [];
   for (const item of items.slice(0, DRF_MAX_ARTICLES_PER_RUN)) {
     let articleRes;
@@ -6268,17 +6278,24 @@ async function fetchDrfNews() {
         cf: { cacheTtl: 3600, cacheEverything: true },
       });
     } catch (err) {
+      fetchFailed++;
       continue; // skip this one article, don't fail the whole batch
     }
-    if (!articleRes.ok) continue;
+    statusCounts[articleRes.status] = (statusCounts[articleRes.status] || 0) + 1;
+    if (!articleRes.ok) { fetchNotOk++; continue; }
     const html = await articleRes.text();
     const keywords = extractDrfKeywords(html);
     const sections = extractDrfSections(html, keywords);
-    if (!sections.length) continue;
+    if (!sections.length) { noSections++; continue; }
     articles.push({ guid: item.link, title: item.title, link: item.link, pubDate: item.pubDate, sections });
   }
 
-  return { source: DRF_SITEMAP_NEWS_URL, fetchedAt: new Date().toISOString(), articles };
+  return {
+    source: DRF_SITEMAP_NEWS_URL,
+    fetchedAt: new Date().toISOString(),
+    articles,
+    _diagnostics: { itemsDiscovered: items.length, itemsChecked: Math.min(items.length, DRF_MAX_ARTICLES_PER_RUN), fetchFailed, fetchNotOk, noSections, statusCounts },
+  };
 }
 
 // ---------- DRF server-side import (job #26) ----------
