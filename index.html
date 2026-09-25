@@ -3412,13 +3412,16 @@
         </div>
       </div>
 
-      <!-- Manual article import — paste a link + the article's own text
-           (you read it in your own browser, so no fetch/proxy/scraping on
-           this app's end at all) and every "Quote," Name said quote gets
-           found and the trainer auto-resolved against the tracked list;
-           you just confirm/fix the trainer and fill in the horse before
-           saving each one. Deliberately source-agnostic — works for DRF,
-           a press release, anything with normal quote attribution. -->
+      <!-- Manual article import — paste a link and this fetches the page
+           itself for most sources; every "Quote," Name said quote gets
+           found, the trainer auto-resolved and the horse auto-guessed from
+           the page title where possible. A source that can't be fetched
+           (DRF specifically, while it's bot-blocking this app — see
+           STABLE_IMPORT_NO_FETCH_HINT below) instead asks you to paste the
+           article's own text, read in your own browser — no fetch/proxy on
+           this app's end at all for that fallback. Either way, you confirm
+           the trainer/horse and nothing saves until each card's own Save is
+           clicked. Deliberately source-agnostic, not DRF-specific. -->
       <div class="bias-form" id="stableImportArticleForm">
         <div class="bias-form-row">
           <label>Article Link
@@ -3431,7 +3434,12 @@
             <input type="date" id="stableImportDate">
           </label>
         </div>
-        <label>Paste the article's text here
+        <div class="bias-form-row" id="stableImportTitleRow" hidden>
+          <label>Article title <span style="font-weight:400; text-transform:none; letter-spacing:0;">(used to guess the horse)</span>
+            <input type="text" id="stableImportTitle" placeholder="Paste the headline here">
+          </label>
+        </div>
+        <label id="stableImportBodyTextLabel" hidden>Couldn't fetch that link automatically — paste the article's text here
           <textarea id="stableImportBodyText" placeholder="Paste the full article text — every &quot;Quote,&quot; Name said (or Name said, &quot;Quote&quot;) will be found automatically below."></textarea>
         </label>
         <div class="bias-form-actions">
@@ -9478,7 +9486,10 @@
     $("stableImportLink").value = "";
     $("stableImportSource").value = "";
     $("stableImportDate").value = nowInTrackTZ().date;
+    $("stableImportTitle").value = "";
+    $("stableImportTitleRow").hidden = true;
     $("stableImportBodyText").value = "";
+    $("stableImportBodyTextLabel").hidden = true;
     $("stableImportResults").innerHTML = "";
     $("stableImportArticleForm").classList.add("open");
     $("stableImportLink").focus();
@@ -9492,14 +9503,15 @@
   });
   $("stableImportCancelBtn").addEventListener("click", closeStableImportArticleForm);
 
-  function renderStableImportCandidate(c, index){
+  function renderStableImportCandidate(c, horseGuess, index){
     const safeQuote = escapeHtml(c.quote);
     const safeTrainer = escapeHtml(c.resolvedTrainer || c.rawName || "");
+    const safeHorse = escapeHtml(horseGuess || "");
     return `
       <div class="stable-import-card" data-index="${index}">
         <div class="bias-form-row">
           <label>Trainer <input type="text" class="stableImportTrainer stable-autocomplete-trainer" value="${safeTrainer}" autocomplete="off"></label>
-          <label>Horse <input type="text" class="stableImportHorse stable-autocomplete-horse" placeholder="Horse name" autocomplete="off"></label>
+          <label>Horse <input type="text" class="stableImportHorse stable-autocomplete-horse" value="${safeHorse}" placeholder="Horse name" autocomplete="off"></label>
         </div>
         <label>Quote <textarea class="stableImportQuote">${safeQuote}</textarea></label>
         <div class="bias-form-actions">
@@ -9509,15 +9521,30 @@
       </div>`;
   }
 
+  // Link-only by default (this route fetches the page itself); falls back
+  // to asking for a manual paste only when the fetch can't happen (a
+  // refused/blocked domain, a dead link, a timeout) — see the worker's own
+  // MANUAL_IMPORT_NO_FETCH_DOMAINS comment for why some domains are
+  // refused before even trying. Re-clicking Extract Quotes after that
+  // fallback appears sends the now-filled bodyText/title instead.
   $("stableImportExtractBtn").addEventListener("click", async () => {
+    const link = $("stableImportLink").value.trim();
+    const title = $("stableImportTitle").value.trim();
     const bodyText = $("stableImportBodyText").value.trim();
-    if (!bodyText){ $("stableImportBodyText").focus(); return; }
+    if (!link && !bodyText){ $("stableImportLink").focus(); return; }
     let data;
-    try{ data = await stableApiWrite("POST", "/notes/extract-quotes", { bodyText }); }
+    try{ data = await stableApiWrite("POST", "/notes/extract-quotes", { link, title, bodyText }); }
     catch(err){ stableApiError("extract quotes", err); return; }
+    if (data.needsBodyText){
+      $("stableImportTitleRow").hidden = false;
+      $("stableImportBodyTextLabel").hidden = false;
+      $("stableImportResults").innerHTML = `<div class="log-empty">${escapeHtml(data.reason || "Paste the article's text below, then click Extract Quotes again.")}</div>`;
+      $("stableImportBodyText").focus();
+      return;
+    }
     const candidates = data.candidates || [];
     $("stableImportResults").innerHTML = candidates.length
-      ? candidates.map(renderStableImportCandidate).join("")
+      ? candidates.map((c, i) => renderStableImportCandidate(c, data.horseGuess, i)).join("")
       : `<div class="log-empty">No "Name said" style quotes found in that text.</div>`;
   });
 
@@ -13432,7 +13459,7 @@
   // something typed and unsaved, so a background refresh can't silently
   // wipe someone's in-progress entry.
   function stableHasUnsavedInput(){
-    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse, #stableQuickAddTrainer, #stableImportBodyText, #stableImportLink, .stableImportTrainer, .stableImportHorse, .stableImportQuote";
+    const selector = ".stablePasteInput, .stableNoteInput, .stableHorseInput, .stableSourceInput, .stableExtractNote, .stableExtractHorse, #stableQuickAddTrainer, #stableImportBodyText, #stableImportLink, #stableImportTitle, .stableImportTrainer, .stableImportHorse, .stableImportQuote";
     return [...document.querySelectorAll(selector)].some(el => el.value.trim().length > 0);
   }
   async function refreshStableDataIfIdle(){

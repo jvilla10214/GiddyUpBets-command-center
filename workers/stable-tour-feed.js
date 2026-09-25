@@ -920,13 +920,60 @@ async function handleRequest(request, env) {
     // Stateless extraction only — no KV write, so no auth gate (matches
     // /drf-news and the other read-only news routes). See job #27's own
     // comment (near extractManualQuoteCandidates()) for why this exists.
+    //
+    // Two modes: `bodyText` supplied (manual paste — the human already
+    // fetched the page in their own browser, so this route touches nothing
+    // external) or just `link` (auto-fetch mode, added 2026-09-25 — this
+    // route itself fetches the page). Auto-fetch deliberately REFUSES any
+    // domain in MANUAL_IMPORT_NO_FETCH_DOMAINS (drf.com specifically,
+    // fetch or not, per the user's own explicit "leave DRF alone entirely"
+    // instruction during its block/cooldown — see
+    // project_drf_server_side_import_blocked memory) rather than trying and
+    // failing, so it never adds even one more request to a domain that's
+    // asked to be left alone. Any OTHER fetch failure (a genuinely
+    // different site blocking us, a dead link, a timeout) falls back the
+    // same way — `needsBodyText: true`, not an error — so the client can
+    // seamlessly ask for a manual paste instead of just showing a dead end.
     if (url.pathname === "/notes/extract-quotes" && request.method === "POST") {
       const body = await request.json().catch(() => ({}));
-      const bodyText = (body.bodyText || "").trim();
-      if (!bodyText) return json({ error: "Missing bodyText" }, 400);
       const trainers = await readTrainers(env);
+      let bodyText = (body.bodyText || "").trim();
+      let pageTitle = (body.title || "").trim();
+      const link = (body.link || "").trim();
+
+      if (!bodyText && link) {
+        let hostname = "";
+        try { hostname = new URL(link).hostname.replace(/^www\./, ""); } catch (err) { /* leave blank, treated as unfetchable below */ }
+        if (MANUAL_IMPORT_NO_FETCH_DOMAINS.has(hostname)) {
+          return json({ needsBodyText: true, reason: `${hostname} can't be auto-fetched right now — paste the article's text instead.` }, 200, { "Cache-Control": "no-store" });
+        }
+        try {
+          const pageRes = await fetch(link, { headers: { "User-Agent": BROWSER_UA }, cf: { cacheTtl: 3600, cacheEverything: true } });
+          if (!pageRes.ok) {
+            return json({ needsBodyText: true, reason: `That link returned HTTP ${pageRes.status} — paste the article's text instead.` }, 200, { "Cache-Control": "no-store" });
+          }
+          const html = await pageRes.text();
+          if (!pageTitle) {
+            pageTitle = decodeEntities(
+              (html.match(/<meta property="og:title" content="([^"]*)"/) || [])[1] ||
+              (html.match(/<title>([^<]*)<\/title>/) || [])[1] ||
+              ""
+            ).trim();
+          }
+          bodyText = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
+            .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
+            .filter(Boolean)
+            .join("\n");
+        } catch (err) {
+          return json({ needsBodyText: true, reason: "Couldn't fetch that link — paste the article's text instead." }, 200, { "Cache-Control": "no-store" });
+        }
+      }
+
+      if (!bodyText) return json({ error: "Missing bodyText or a fetchable link" }, 400);
       const candidates = extractManualQuoteCandidates(bodyText, trainers);
-      return json({ candidates }, 200, { "Cache-Control": "no-store" });
+      const paragraphs = bodyText.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+      const horseGuess = pageTitle ? guessHorseFromTitleSafely(pageTitle, paragraphs, trainers) : null;
+      return json({ candidates, horseGuess }, 200, { "Cache-Control": "no-store" });
     }
 
     if (url.pathname === "/notes" && request.method === "POST") {
@@ -7016,6 +7063,33 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers) {
     }
   }
   return candidates;
+}
+
+// Domains the manual-import "just paste a link" auto-fetch (added
+// 2026-09-25) refuses to even try — checked BEFORE attempting a fetch, so
+// a domain that's asked to be left alone (drf.com, currently cooling down
+// from a bot-detection block — see project_drf_server_side_import_blocked
+// memory) never gets one more request from this app while that's ongoing,
+// auto-fetch or not. Add a domain here (and remove once resolved) rather
+// than letting auto-fetch discover a fresh block the hard way.
+const MANUAL_IMPORT_NO_FETCH_DOMAINS = new Set(["drf.com"]);
+
+// Guesses ONE horse name from a page/article title for the manual-import
+// auto-fetch path (added 2026-09-25) — same extractNyraTitleHorse() already
+// proven for BloodHorse/TDN, with the SAME two safety checks
+// extractGenericQuoteSections() already applies (kept as a separate small
+// function rather than refactoring that one, to avoid any risk to its
+// already-proven BloodHorse/TDN behavior): the guess must actually appear
+// in the article's own body text, and must not collide with a tracked
+// trainer's surname (a headline naming the trainer before the horse reads
+// as a "capitalized word run" identically to a real horse name otherwise).
+function guessHorseFromTitleSafely(title, paragraphs, trackedTrainers) {
+  const guess = extractNyraTitleHorse(title);
+  if (!guess) return null;
+  if (!paragraphs.some((p) => p.includes(guess))) return null;
+  const guessWords = guess.split(/\s+/).map((w) => w.toLowerCase().replace(/[.,]/g, ""));
+  if (trackedTrainers.some((name) => guessWords.includes(lastNameKey(name)))) return null;
+  return guess;
 }
 
 // Piggybacks job #16's Cron Trigger (both the morning and evening fires —
