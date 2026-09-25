@@ -9711,18 +9711,9 @@
   }
   let stableHrnSeen = loadStableHrnSeen();
 
-  // Same per-device "seen" convention again, for job #19's Daily Racing
-  // Form source.
-  const STABLE_DRF_SEEN_KEY = "giddyupbets_stable_drf_seen_v1";
-  function loadStableDrfSeen(){
-    try { return new Set(JSON.parse(localStorage.getItem(STABLE_DRF_SEEN_KEY)) ?? []); }
-    catch { return new Set(); }
-  }
-  function saveStableDrfSeen(){
-    try { localStorage.setItem(STABLE_DRF_SEEN_KEY, JSON.stringify([...stableDrfSeen])); }
-    catch(err){ console.error("Stable DRF-seen failed to save", err); }
-  }
-  let stableDrfSeen = loadStableDrfSeen();
+  // Job #19's own "seen" tracking (STABLE_DRF_SEEN_KEY) removed 2026-09-24
+  // along with autoImportDrfNews() itself — see that function's own retired
+  // comment. DRF dedup now lives server-side (KV, job #26).
 
   // Same per-device "seen" convention again, for job #20's NYRA News source.
   const STABLE_NYRA_NEWS_SEEN_KEY = "giddyupbets_stable_nyra_news_seen_v1";
@@ -10033,57 +10024,13 @@
     }
   }
 
-  // Job #19 — same shape as autoImportHrnNews() above, pointed at the
-  // worker's /drf-news route. DRF's one real quirk versus TDN/HRN: since
-  // horse identification there comes from an article's <meta name=
-  // "keywords"> tag rather than in-prose links, an occasional untracked
-  // track name can slip through and get filed as if it were a horse (see
-  // the worker's own DRF_KEYWORD_TRACK_NAMES/DRF_RACE_NAME_SUFFIXES
-  // comments) — same review-by-
-  // glancing-at-the-note backstop as any other auto-import here, not
-  // something this function tries to further filter client-side.
-  async function autoImportDrfNews(){
-    if (!stableTrainers.length) return; // nothing to match against
-    let data;
-    try{ data = await stableApiGet("/drf-news"); }
-    catch(err){ console.error("Daily Racing Form fetch failed", err); return; }
-
-    const noteItems = [];
-    for (const article of data.articles || []){
-      for (const section of article.sections || []){
-        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
-        if (!matchedTrainer) continue;
-        for (const horseName of section.horseNames || []){
-          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
-          if (stableDrfSeen.has(seenKey)) continue;
-          noteItems.push({
-            trainer: matchedTrainer,
-            horse: horseName,
-            note: section.text,
-            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
-            source: article.title,
-            link: article.link,
-            autoImported: true,
-          });
-          stableDrfSeen.add(seenKey);
-        }
-      }
-    }
-    if (!noteItems.length) return;
-
-    try{
-      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
-      saveStableDrfSeen();
-      const fresh = await loadStableData();
-      stableTrainers = fresh.trainers;
-      stableNotes = fresh.notes;
-      stableTrainerMeta = fresh.trainerMeta;
-      stableDataVersion = fresh.version;
-      renderStableTour();
-    } catch(err){
-      console.error("Daily Racing Form import failed to save", err);
-    }
-  }
+  // Job #19 — RETIRED 2026-09-24, moved server-side as job #26
+  // (runDrfImport() in workers/stable-tour-feed.js). This client-side
+  // version only ever ran in a browser tab that happened to be open, on a
+  // 6-hour timer — real coverage gap confirmed (a Charlton Baker/White
+  // Smoke Rising quote sat unscraped for 2+ days), same reason jobs #24/#25
+  // (BloodHorse/TDN) were already server-side. DRF now runs on the Worker's
+  // own Cron Trigger regardless of whether this app is open anywhere.
 
   // Job #20 — same shape as autoImportHrnNews()/autoImportDrfNews() above,
   // pointed at the worker's /nyra-news route (NYRA's own press releases —
@@ -10218,7 +10165,6 @@
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
-    autoImportDrfNews();
     autoImportNyraNews();
     autoImportSmartPonyQuotes();
   });
@@ -10226,7 +10172,6 @@
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
-    autoImportDrfNews();
     autoImportNyraNews();
     autoImportSmartPonyQuotes();
   });
@@ -10235,7 +10180,9 @@
   // switching Worker URLs — but that means moving Stable Tour to a fresh
   // shared store (or pointing at a different Worker) leaves this device
   // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs all seven auto-import checks.
+  // This clears that local memory and re-runs all six remaining auto-import
+  // checks (DRF's own moved server-side 2026-09-24, nothing left to clear
+  // for it here).
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
     stableSeenArticles = [];
     saveStableSeenArticles();
@@ -10245,8 +10192,6 @@
     saveStableTdnSeen();
     stableHrnSeen = new Set();
     saveStableHrnSeen();
-    stableDrfSeen = new Set();
-    saveStableDrfSeen();
     stableNyraNewsSeen = new Set();
     saveStableNyraNewsSeen();
     stableSmartPonySeen = new Set();
@@ -10255,7 +10200,6 @@
     fetchStableTourFeed();
     autoImportTdnNotebook();
     autoImportHrnNews();
-    autoImportDrfNews();
     autoImportNyraNews();
     autoImportSmartPonyQuotes();
     fetchNewsWire();
@@ -13311,14 +13255,12 @@
     fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
     autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
     autoImportHrnNews(); // same reasoning
-    autoImportDrfNews(); // same reasoning
     autoImportNyraNews(); // same reasoning
     autoImportSmartPonyQuotes(); // same reasoning
   })();
   setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
   setInterval(autoImportTdnNotebook, 6 * 60 * 60 * 1000); // every 6 hours, separate interval so one source's hiccup can't block the other
   setInterval(autoImportHrnNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
-  setInterval(autoImportDrfNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
   setInterval(autoImportNyraNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
   setInterval(autoImportSmartPonyQuotes, 6 * 60 * 60 * 1000); // same cadence, separate interval too
 

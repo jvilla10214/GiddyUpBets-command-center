@@ -691,6 +691,9 @@ export default {
     ctx.waitUntil(
       runTdnMainImport(env).catch((err) => console.error("TDN main feed import failed", err.message))
     );
+    ctx.waitUntil(
+      runDrfImport(env).catch((err) => console.error("DRF import failed", err.message))
+    );
     // These two piggyback on job #16's Cron Trigger rather than needing
     // their own, but only make sense once a day — gated to the morning fire
     // only so adding the evening trigger doesn't silently double their
@@ -1734,6 +1737,14 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-tdn-main" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runTdnMainImport(env);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual trigger for job #26's runDrfImport() — same reasoning as
+    // /debug-run-bloodhorse above.
+    if (url.pathname === "/debug-run-drf" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runDrfImport(env);
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -5787,21 +5798,35 @@ const DRF_SITEMAP_NEWS_URL = "https://www.drf.com/sitemap-news.xml";
 const DRF_ALL_NEWS_LIST_URL = "https://www.drf.com/news/all-news";
 const DRF_BASE_URL = "https://www.drf.com";
 
-// Third discovery source (requested 2026-08-27, specifically for Saratoga):
-// DRF's own track hub page at /horse-racing-tracks/saratoga. Confirmed
-// real: this is a MUCH deeper, track-filtered feed than either the sitemap
-// or /news/all-news — a single fetch surfaced 70+ Saratoga-specific
-// articles spanning the whole meet (Race Preview/Race Recap/Track Notes
-// categories), not just the last day or two. Same RSC-stream escaped-JSON
-// shipping as /news/all-news, but a different, richer shape: a
-// "component":"tracks_news_section" block containing
-// "news_configuration":{"articleList":[{...}, {...}]} — parseDrf
-// TrackNewsListing() below splits on each object's own leading \"id\":N
-// field rather than chaining field-to-field regexes across the whole
-// blob, since some objects have fields in a different order than others
-// (confirmed real: naive field-chaining paired titles with the WRONG
-// article's slug on the first attempt).
-const DRF_SARATOGA_TRACK_URL = "https://www.drf.com/horse-racing-tracks/saratoga";
+// Third discovery source (requested 2026-08-27, specifically for Saratoga;
+// widened 2026-09-24 to every track with a currently-active meet — see
+// runDrfImport()'s own comment for why coverage tracks "which meets are
+// actually open" rather than every track this app knows about): DRF's own
+// track hub page at /horse-racing-tracks/<slug>. Confirmed real: this is a
+// MUCH deeper, track-filtered feed than either the sitemap or
+// /news/all-news — a single fetch surfaced 70+ Saratoga-specific articles
+// spanning the whole meet (Race Preview/Race Recap/Track Notes categories),
+// not just the last day or two. Same RSC-stream escaped-JSON shipping as
+// /news/all-news, but a different, richer shape: a "component":
+// "tracks_news_section" block containing "news_configuration":
+// {"articleList":[{...}, {...}]} — parseDrfTrackNewsListing() below splits
+// on each object's own leading \"id\":N field rather than chaining
+// field-to-field regexes across the whole blob, since some objects have
+// fields in a different order than others (confirmed real: naive
+// field-chaining paired titles with the WRONG article's slug on the first
+// attempt). Each URL confirmed real via a direct fetch before adding
+// (Santa Anita's page, e.g., does NOT follow the "-park" suffix pattern
+// Belmont/Gulfstream do — a guessed slug silently 404s or lands on the
+// wrong track, so don't add one without checking first). A track whose hub
+// page doesn't carry this "tracks_news_section" block just contributes zero
+// extra items here — same fault-tolerant per-source try/catch as the
+// all-news listing below, not a hard dependency.
+const DRF_TRACK_HUB_URLS = {
+  saratoga: "https://www.drf.com/horse-racing-tracks/saratoga",
+  belmont: "https://www.drf.com/horse-racing-tracks/belmont-park",
+  santaanita: "https://www.drf.com/horse-racing-tracks/santa-anita",
+  gulfstream: "https://www.drf.com/horse-racing-tracks/gulfstream-park",
+};
 
 const DRF_KEYWORD_TRACK_NAMES = new Set([
   "saratoga", "saratoga race course", "belmont", "belmont park", "aqueduct", "del mar", "santa anita", "santa anita park",
@@ -6125,7 +6150,21 @@ function parseDrfTrackNewsListing(html) {
   return items;
 }
 
-async function fetchDrfNews() {
+// Discovery only (no article fetch/extraction) — shared by fetchDrfNews()
+// (client-facing display route, no dedup, just "give me the current
+// merged list") and runDrfImport() (server-side cron job, added
+// 2026-09-24, with its own KV seen-tracking — see that function's comment
+// for why it needed splitting out of what used to be one combined
+// function). Interleaved, not concatenated — confirmed real that the
+// sitemap alone usually has 20-30 items (mostly harness/wagering/analysis
+// content with zero quotes, per this job's own top comment), which would
+// fill an entire per-run budget before the other sources ever got a turn
+// if the lists were just appended one after another. Round-robining one
+// from each list (now one per TRACK HUB too, not just Saratoga) means every
+// source actually gets processed most runs regardless of how many the
+// sitemap alone has (a single track hub page can have 70+ articles
+// spanning a whole meet, easily the largest single source).
+async function discoverDrfArticleLinks() {
   const sitemapRes = await fetch(DRF_SITEMAP_NEWS_URL, {
     headers: { "User-Agent": BROWSER_UA },
     cf: { cacheTtl: 300, cacheEverything: true },
@@ -6145,10 +6184,10 @@ async function fetchDrfNews() {
     sitemapItems.push({ link, title: title ? decodeEntities(title).trim() : null, pubDate: pubDate || null });
   }
 
-  // Second and third sources (page 1 of /news/all-news, and the Saratoga
-  // track hub page — see each URL constant's own comment) — both
-  // best-effort, so a hiccup fetching or parsing either just means falling
-  // back to whatever else succeeded this run, not failing the whole job.
+  // Remaining sources (page 1 of /news/all-news, and every track hub page
+  // in DRF_TRACK_HUB_URLS) — all best-effort, so a hiccup fetching or
+  // parsing any one of them just means falling back to whatever else
+  // succeeded this run, not failing the whole discovery pass.
   const allNewsItems = [];
   try {
     const allNewsRes = await fetch(DRF_ALL_NEWS_LIST_URL, {
@@ -6167,34 +6206,29 @@ async function fetchDrfNews() {
     console.error("DRF all-news listing fetch failed", err.message);
   }
 
-  const saratogaTrackItems = [];
-  try {
-    const saratogaRes = await fetch(DRF_SARATOGA_TRACK_URL, {
-      headers: { "User-Agent": BROWSER_UA },
-      cf: { cacheTtl: 900, cacheEverything: true },
-    });
-    if (saratogaRes.ok) {
-      const saratogaHtml = await saratogaRes.text();
-      for (const item of parseDrfTrackNewsListing(saratogaHtml)) {
-        if (seenLinks.has(item.link)) continue;
-        seenLinks.add(item.link);
-        saratogaTrackItems.push(item);
+  const trackHubLists = [];
+  for (const [trackId, hubUrl] of Object.entries(DRF_TRACK_HUB_URLS)) {
+    const hubItems = [];
+    try {
+      const hubRes = await fetch(hubUrl, {
+        headers: { "User-Agent": BROWSER_UA },
+        cf: { cacheTtl: 900, cacheEverything: true },
+      });
+      if (hubRes.ok) {
+        const hubHtml = await hubRes.text();
+        for (const item of parseDrfTrackNewsListing(hubHtml)) {
+          if (seenLinks.has(item.link)) continue;
+          seenLinks.add(item.link);
+          hubItems.push(item);
+        }
       }
+    } catch (err) {
+      console.error(`DRF track-hub fetch failed (${trackId})`, err.message);
     }
-  } catch (err) {
-    console.error("DRF Saratoga track-page fetch failed", err.message);
+    trackHubLists.push(hubItems);
   }
 
-  // Interleaved, not concatenated — confirmed real that the sitemap alone
-  // usually has 20-30 items (mostly harness/wagering/analysis content with
-  // zero quotes, per this job's own top comment), which would fill the
-  // entire DRF_MAX_ARTICLES_PER_RUN budget before the other sources ever
-  // got a turn if the lists were just appended one after another.
-  // Round-robining one-from-each list means all three actually get
-  // processed most runs regardless of how many the sitemap alone has (the
-  // Saratoga track page alone can have 70+ articles spanning the whole
-  // meet, easily the largest of the three).
-  const sourceLists = [sitemapItems, allNewsItems, saratogaTrackItems];
+  const sourceLists = [sitemapItems, allNewsItems, ...trackHubLists];
   const items = [];
   const maxLen = Math.max(...sourceLists.map((l) => l.length));
   for (let i = 0; i < maxLen; i++) {
@@ -6202,6 +6236,11 @@ async function fetchDrfNews() {
       if (list[i]) items.push(list[i]);
     }
   }
+  return items;
+}
+
+async function fetchDrfNews() {
+  const items = await discoverDrfArticleLinks();
 
   const articles = [];
   for (const item of items.slice(0, DRF_MAX_ARTICLES_PER_RUN)) {
@@ -6223,6 +6262,129 @@ async function fetchDrfNews() {
   }
 
   return { source: DRF_SITEMAP_NEWS_URL, fetchedAt: new Date().toISOString(), articles };
+}
+
+// ---------- DRF server-side import (job #26) ----------
+// Migrates DRF quote-scraping off the client-only pattern job #19
+// (autoImportDrfNews() in index.html) used — that version only ever runs
+// in a browser tab that happens to be open, on a 6-hour timer, so coverage
+// silently depended on someone having the app open at the right time.
+// Confirmed real gap this caused (2026-09-24): a fresh, on-topic Charlton
+// Baker quote about White Smoke Rising sat unscraped for 2+ days with
+// nobody the wiser. This follows the exact same server-side pattern
+// runBloodHorseImport()/runTdnMainImport() (jobs #24/#25) already
+// established: real KV-based "seen" tracking (not localStorage), walks the
+// FULL discovered list rather than a fixed top-N slice (same stalled-window
+// bug those jobs already had to fix once), and writes notes directly rather
+// than depending on a client ever calling /notes/bulk. The client-side
+// version is retired now that this exists — see index.html's own comment
+// where autoImportDrfNews() used to be.
+//
+// DRF_TRACK_HUB_URLS is deliberately kept to tracks with an ACTIVE meet
+// right now (confirmed via real meet-calendar research, not the full
+// 20+ track registry this app knows about) — the sitemap/all-news sources
+// above already catch anything DRF publishes about any OTHER track
+// incidentally (they aren't track-filtered), so a track only needs its own
+// hub-page entry once its meet is actually running and worth the deeper
+// coverage. Add an entry here (and confirm the URL with a real fetch first
+// — see that map's own comment on why a guessed slug is dangerous) as each
+// of this app's other tracks' meets open.
+const DRF_BACKFILL_MAX_AGE_DAYS = 7;
+function drfSeenKvKey(link) {
+  return `drf:seen:${link.replace(/[^a-z0-9]/gi, "").slice(-60)}`;
+}
+// Permissive on purpose: only REJECTS an article when its pubDate parses to
+// something older than the cutoff. A missing or unparseable date (e.g. a
+// track-hub source whose listed_at format turns out not to match) never
+// silently drops an otherwise-good article — same "no guess beats a wrong
+// guess" spirit the rest of this file already applies, just pointed at
+// "don't guess this is stale" instead of "don't guess who said this."
+function drfArticleTooOld(pubDate) {
+  if (!pubDate) return false;
+  const parsed = new Date(pubDate);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const ageMs = Date.now() - parsed.getTime();
+  return ageMs > DRF_BACKFILL_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+}
+
+async function runDrfImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const items = await discoverDrfArticleLinks();
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+
+    for (const item of items) {
+      if (checked >= DRF_MAX_ARTICLES_PER_RUN) break;
+      const seenKey = drfSeenKvKey(item.link);
+      if (await env.STABLE_KV.get(seenKey)) continue;
+      if (drfArticleTooOld(item.pubDate)) {
+        // Too old to backfill, but still real/already-published — mark
+        // seen so this doesn't get re-checked forever as discovery keeps
+        // surfacing it (a sitemap/all-news item stays listed for a while
+        // after publish).
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+        continue;
+      }
+      checked++;
+      try {
+        let articleRes;
+        try {
+          articleRes = await fetch(item.link, {
+            headers: { "User-Agent": BROWSER_UA },
+            cf: { cacheTtl: 3600, cacheEverything: true },
+          });
+        } catch (err) {
+          continue; // transient fetch hiccup — not marked seen, worth retrying next run
+        }
+        if (!articleRes.ok) continue;
+        const html = await articleRes.text();
+        const keywords = extractDrfKeywords(html);
+        const sections = extractDrfSections(html, keywords);
+        for (const section of sections) {
+          // DRF's own extraction only ever yields a bare surname (see
+          // extractDrfSections()'s "said"/"wrote" attribution regex) —
+          // resolveTrackedTrainer() already handles that via its
+          // parts.length < 2 branch, same as every other bare-surname
+          // caller in this file.
+          const matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
+          if (!matchedTrainer) continue;
+          for (const horseName of section.horseNames) {
+            const dup = notes.find((n) => n.trainer === matchedTrainer && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            if (dup) continue;
+            notes.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              trainer: matchedTrainer,
+              horse: horseName,
+              note: section.text,
+              date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : "",
+              source: item.title,
+              link: item.link,
+              autoImported: true,
+              sentiment: null,
+              importedVia: "drf",
+              capturedAt: new Date().toISOString(),
+            });
+            addedAny = true;
+            written++;
+          }
+        }
+      } finally {
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+      }
+    }
+
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+    }
+    return { checked, written };
+  } catch (err) {
+    console.error("DRF import failed", err.message);
+    return { checked, written, error: err.message };
+  }
 }
 
 // ---------- NYRA News (job #20) ----------
