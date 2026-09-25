@@ -2217,6 +2217,7 @@ const TRAINER_FIRST_NAME_ALIASES = {
   charlie: "charles", // Charlie Appleby — confirmed real: SmartPony spelled his formal first name out ("Charles Appleby") and spawned a duplicate alongside the already-tracked "Charlie Appleby"
   gus: "gustavo", // Gus Rodriguez — confirmed real (user's own ID): same person as the already-tracked "Gustavo Rodriguez," separate from "Rudy Rodriguez"
   phillip: "philip", // General double-L/single-L spelling variant — confirmed real for Capuano ("Phillip" vs the already-tracked "Phil"), same category of gap "phil" above already covers for the single-L spelling
+  charlton: "charles", // Charlton Baker — confirmed real: DRF's own prose uses his formal first name while the already-tracked entry is "Charlie Baker"; mapped to the SAME target "charles" the existing charlie->charles entry already resolves to, so both spellings converge instead of needing a second, disagreeing alias
 };
 // Normalizes ONE name token — see index.html's normalizeNameToken() for why
 // this checks every token of a tracked name, not just its own first token
