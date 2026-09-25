@@ -6205,12 +6205,19 @@ async function discoverDrfArticleLinks() {
   // in DRF_TRACK_HUB_URLS) — all best-effort, so a hiccup fetching or
   // parsing any one of them just means falling back to whatever else
   // succeeded this run, not failing the whole discovery pass.
+  //
+  // sourceDiagnostics (temporary, see fetchDrfNews()'s own note) records
+  // each source's raw outcome — separate from `items.length` because a 200
+  // response that yields zero PARSED items (a page structure change broke
+  // the regex, e.g.) looks identical to "nothing new to find" without this.
+  const sourceDiagnostics = { sitemap: sitemapItems.length ? "ok" : "0 items" };
   const allNewsItems = [];
   try {
     const allNewsRes = await fetch(DRF_ALL_NEWS_LIST_URL, {
       headers: { "User-Agent": BROWSER_UA },
       cf: { cacheTtl: 300, cacheEverything: true },
     });
+    sourceDiagnostics.allNews = `HTTP ${allNewsRes.status}`;
     if (allNewsRes.ok) {
       const allNewsHtml = await allNewsRes.text();
       for (const item of parseDrfAllNewsListing(allNewsHtml)) {
@@ -6218,9 +6225,10 @@ async function discoverDrfArticleLinks() {
         seenLinks.add(item.link);
         allNewsItems.push(item);
       }
+      sourceDiagnostics.allNews += `, ${allNewsItems.length} parsed, ${allNewsHtml.length} bytes`;
     }
   } catch (err) {
-    console.error("DRF all-news listing fetch failed", err.message);
+    sourceDiagnostics.allNews = `error: ${err.message}`;
   }
 
   const trackHubLists = [];
@@ -6231,6 +6239,7 @@ async function discoverDrfArticleLinks() {
         headers: { "User-Agent": BROWSER_UA },
         cf: { cacheTtl: 900, cacheEverything: true },
       });
+      sourceDiagnostics[`hub:${trackId}`] = `HTTP ${hubRes.status}`;
       if (hubRes.ok) {
         const hubHtml = await hubRes.text();
         for (const item of parseDrfTrackNewsListing(hubHtml)) {
@@ -6238,9 +6247,10 @@ async function discoverDrfArticleLinks() {
           seenLinks.add(item.link);
           hubItems.push(item);
         }
+        sourceDiagnostics[`hub:${trackId}`] += `, ${hubItems.length} parsed, ${hubHtml.length} bytes`;
       }
     } catch (err) {
-      console.error(`DRF track-hub fetch failed (${trackId})`, err.message);
+      sourceDiagnostics[`hub:${trackId}`] = `error: ${err.message}`;
     }
     trackHubLists.push(hubItems);
   }
@@ -6253,11 +6263,11 @@ async function discoverDrfArticleLinks() {
       if (list[i]) items.push(list[i]);
     }
   }
-  return items;
+  return { items, sourceDiagnostics };
 }
 
 async function fetchDrfNews() {
-  const items = await discoverDrfArticleLinks();
+  const { items, sourceDiagnostics } = await discoverDrfArticleLinks();
 
   // Temporary diagnostics (2026-09-25): DRF's bot detection just started
   // blocking the sitemap specifically (see discoverDrfArticleLinks()'s own
@@ -6294,7 +6304,7 @@ async function fetchDrfNews() {
     source: DRF_SITEMAP_NEWS_URL,
     fetchedAt: new Date().toISOString(),
     articles,
-    _diagnostics: { itemsDiscovered: items.length, itemsChecked: Math.min(items.length, DRF_MAX_ARTICLES_PER_RUN), fetchFailed, fetchNotOk, noSections, statusCounts },
+    _diagnostics: { itemsDiscovered: items.length, itemsChecked: Math.min(items.length, DRF_MAX_ARTICLES_PER_RUN), fetchFailed, fetchNotOk, noSections, statusCounts, sourceDiagnostics },
   };
 }
 
@@ -6345,7 +6355,7 @@ async function runDrfImport(env) {
   let checked = 0;
   let written = 0;
   try {
-    const items = await discoverDrfArticleLinks();
+    const { items } = await discoverDrfArticleLinks();
     const state = await readNotesAndTrainers(env);
     const notes = state.notes;
     let addedAny = false;
