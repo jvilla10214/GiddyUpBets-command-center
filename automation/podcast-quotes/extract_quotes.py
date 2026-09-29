@@ -73,6 +73,41 @@ BULLET_RE = re.compile(
     r"^-\s*\[(?P<ts>[\d:]+)\]\s*Q:\s*(?P<question>.*?)\s*—\s*Horse:\s*(?P<horse>.*?)\s*—\s*A:\s*\"(?P<quote>.*)\"\s*$"
 )
 
+# Confirmed real (2026-09-29): telling the model "say 'unclear', don't guess"
+# in the prompt isn't reliable enough on its own — same lesson as this
+# project's Workers AI narration-limits finding (a model told not to
+# embellish embellishes anyway; the fix has to be a real check, not a
+# stronger instruction). In practice the model sometimes invents a
+# descriptive placeholder instead of the literal word "unclear" when no real
+# registered name was ever stated — two real examples that made it all the
+# way into Stable Tour before this existed: "(Curlin half-sister, unnamed)"
+# and "Somerset West (sibling)" (a hypothetical, not-yet-existing horse the
+# trainer was just speculating about). Neither is a real registered name,
+# and no amount of prompt wording fixes that reliably — so this normalizes
+# any horse field matching these patterns to the literal "unclear" instead,
+# which write_notes.py already skips (its own "unclear" in horse.lower()
+# check) — one shared filter, not a second parallel skip-list to keep in
+# sync.
+NOT_A_REAL_HORSE_NAME_RE = re.compile(
+    r"[()]|\bunnamed\b|\bsibling\b|\bhalf[- ]sister\b|\bhalf[- ]brother\b|"
+    r"\bfull[- ]sister\b|\bfull[- ]brother\b|\byearling\b|\bfoal\b|"
+    r"\bcolt by\b|\bfilly by\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_horse_field(horse):
+    """Real registered horse names don't contain parentheses or descriptive
+    placeholder words ("sibling", "unnamed", etc.) — anything matching those
+    is a model-invented placeholder for a horse that was never actually
+    named, not a parsing artifact to clean up. Collapses to the literal
+    "unclear" so the one existing downstream filter (write_notes.py) is the
+    only place that decides what to do with an unnamed horse."""
+    horse = horse.strip()
+    if not horse or NOT_A_REAL_HORSE_NAME_RE.search(horse):
+        return "unclear"
+    return horse
+
 
 def parse_bullets(raw_text):
     """Parses the model's bullet-list output into structured entries. Any
@@ -90,7 +125,7 @@ def parse_bullets(raw_text):
                 {
                     "timestamp": m.group("ts"),
                     "question": m.group("question").strip(),
-                    "horse": m.group("horse").strip(),
+                    "horse": normalize_horse_field(m.group("horse")),
                     "quote": m.group("quote").strip(),
                 }
             )
