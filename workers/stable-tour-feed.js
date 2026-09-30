@@ -2571,7 +2571,14 @@ const RACE_RECAP_DOC_EXPORT_URL = "https://docs.google.com/document/d/1mp4oK11Um
 // positives before shipping (13 sections in, 13 out, all sane).
 // (?!\d) instead of a trailing \b because real entries in this doc run the
 // date straight into the next word with no separator at all ("8/21Card:").
-const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:[A-Za-z][A-Za-z .]*[A-Za-z]\s*[-–—]\s*)?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
+// The track-name lead-in is now a CAPTURING group (added 2026-09-29) — it
+// was matched-and-discarded before, which is exactly why
+// resyncRaceRecapsFromDoc() could only ever pick a section by date, with no
+// way to tell two same-day sections for different tracks apart (confirmed
+// real risk, never yet hit in practice, flagged 2026-09-20). Capture group
+// indices shifted: 1 = track label (undefined when a section has no
+// prefix), 2 = month, 3 = day.
+const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:([A-Za-z][A-Za-z .]*[A-Za-z])\s*[-–—]\s*)?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
 
 // Race marker: "R#" at the START of its own line, optionally followed —
 // still on that SAME line only — by "(...conditions...)" and/or a —/:
@@ -2609,10 +2616,43 @@ function cleanRaceRecapDocText(raw) {
 function findRaceRecapDateSections(docText) {
   const matches = [...docText.matchAll(RACE_RECAP_DATE_MARKER)];
   return matches.map((m, i) => ({
-    month: Number(m[1]),
-    day: Number(m[2]),
+    trackLabel: m[1] || null, // null (not "") when the heading had no "TrackName - " prefix at all
+    month: Number(m[2]),
+    day: Number(m[3]),
     body: docText.slice(m.index, i + 1 < matches.length ? matches[i + 1].index : docText.length),
   }));
+}
+
+// Matches a doc section's captured track label ("Bel", "SA", "Woodbine",
+// "Gulf", ...) against one of this app's real track ids. Two checks, either
+// one is enough: (1) an explicit alias table for abbreviations that AREN'T
+// just a prefix of the real name (confirmed real ones the user actually
+// uses: "SA" for Santa Anita, "Gulf" for Gulfstream — neither is a leading
+// substring of ENTRIES_TRACK_LABEL's own display name); (2) a generic
+// prefix check against ENTRIES_TRACK_LABEL's real display name, which
+// covers the common case for free ("Bel"/"Belmont", "Sar"/"Saratoga",
+// "Wood"/"Woodbine") without needing an explicit entry for every track.
+// Both sides compared lowercase, diacritics-stripped, same normalization
+// every other name-matching helper in this file already uses.
+const RACE_RECAP_TRACK_ALIASES = {
+  santaanita: ["sa"],
+  gulfstreampark: ["gulf", "gp"],
+  churchilldowns: ["cd"],
+  kentuckydowns: ["kd"],
+  oaklawnpark: ["op", "oaklawn"],
+  ellispark: ["ep"],
+  fairgrounds: ["fg"],
+  colonialdowns: ["cnl", "colonial"],
+  delmar: ["dmr"],
+  saratoga: ["sar", "spa"],
+};
+function raceRecapTrackLabelMatches(trackLabel, trackId) {
+  if (!trackLabel) return true; // no label on this section — never excludes a match, same backward-compat reasoning as the null-check at the call site
+  const norm = stripDiacritics(trackLabel).toLowerCase().trim();
+  const aliases = RACE_RECAP_TRACK_ALIASES[trackId] || [];
+  if (aliases.includes(norm)) return true;
+  const realName = stripDiacritics(ENTRIES_TRACK_LABEL[trackId] || trackId).toLowerCase();
+  return realName.startsWith(norm) || norm.startsWith(realName);
 }
 
 function parseRaceRecapsFromSection(sectionBody) {
@@ -2693,8 +2733,22 @@ async function resyncRaceRecapsFromDoc(env, track, date) {
   const docText = await docRes.text();
 
   const sections = findRaceRecapDateSections(docText);
-  const section = sections.find((s) => s.month === month && s.day === day);
-  if (!section) return { available: false, error: "No section for this date found in the doc" };
+  // Two-stage lookup (added 2026-09-29 — see RACE_RECAP_TRACK_ALIASES'
+  // comment): filter to date matches first, THEN require the track to
+  // actually agree — raceRecapTrackLabelMatches() already treats an
+  // unlabeled section as a match for any track, so a single, unlabeled
+  // date-match (the common case today) still resolves exactly like before.
+  // What changes is a labeled section that names a DIFFERENT track: it's
+  // now correctly excluded instead of being the only candidate and getting
+  // used anyway — a real mismatch should never fall back to "closest
+  // available," same "no guess beats a wrong guess" rule as everywhere
+  // else in this file.
+  const dateCandidates = sections.filter((s) => s.month === month && s.day === day);
+  if (!dateCandidates.length) return { available: false, error: "No section for this date found in the doc" };
+  const section = dateCandidates.find((s) => raceRecapTrackLabelMatches(s.trackLabel, track));
+  if (!section) {
+    return { available: false, error: `Found ${dateCandidates.length} section(s) for this date, but none labeled for ${track}` };
+  }
 
   const recapsByRace = parseRaceRecapsFromSection(section.body);
   const fullCardRecap = parseFullCardRecapFromSection(section.body);
