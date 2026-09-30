@@ -777,6 +777,9 @@ async function handleRequest(request, env) {
       const body = await request.json().catch(() => ({}));
       const name = (body.name || "").trim();
       if (!name) return json({ error: "Missing name" }, 400);
+      if (TRAINER_DENYLIST.has(name.toLowerCase())) {
+        return json({ error: `"${name}" is a known-fake/duplicate name, not added. See feedback_verify_before_untracking_a_person memory.` }, 400);
+      }
       // Provenance tag for the roster UI — who/what added this trainer.
       // Defaults to "manual" so any older caller that doesn't send it (or a
       // future one that forgets to) still gets a sensible value rather than
@@ -1008,6 +1011,12 @@ async function handleRequest(request, env) {
 
     if (url.pathname === "/notes" && request.method === "POST") {
       const body = await request.json().catch(() => ({}));
+      // See TRAINER_DENYLIST's own comment — rewrites a known-fake trainer
+      // string ("Bill Mott" -> "William Mott") or drops it to untracked
+      // ("The Little Guys" -> "", same as a manual note with no trainer
+      // known yet) before it can ever reach storage, regardless of which
+      // write path a caller uses.
+      if (body.trainer) body.trainer = sanitizeDenylistedTrainer(body.trainer) || "";
       // Trainer is optional for a manually-added note (not for /notes/bulk,
       // which is auto-import only and always resolves a real trainer first)
       // — confirmed real need: a tip about a horse that hasn't run yet can
@@ -1079,6 +1088,7 @@ async function handleRequest(request, env) {
         // guessing" gate as before, just widened 2026-09-20 so a jockey-
         // attributed auto-import (real post-race interview quotes) isn't
         // silently dropped by a check written before jockeys existed here.
+        if (item.trainer) item.trainer = sanitizeDenylistedTrainer(item.trainer) || "";
         if ((!item.trainer && !item.jockey) || !item.horse || !item.note) continue;
         if (item.link) {
           const dup = notes.find(n => n.trainer === item.trainer && n.jockey === item.jockey && n.horse === item.horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
@@ -2346,6 +2356,38 @@ function normalizeNameToken(token) {
 function firstNameKey(fullName) {
   return normalizeNameToken(fullName.trim().split(/\s+/)[0]);
 }
+// Confirmed-fake trainer names that keep getting silently reintroduced by
+// whatever periodically re-imports old, already-corrected Fasig-Tipton/
+// SmartPony-style batches (source unidentified as of 2026-09-29 — the user
+// confirmed nobody is running anything knowingly, manually or otherwise).
+// Neither is a real trainer: "The Little Guys" is a group-profile article
+// headline, not a person, with no single real trainer to rewrite it to
+// (it covers dozens of different small outfits per horse); "Bill Mott" is
+// the same real person as tracked "William Mott" under a press nickname
+// (normally caught by TRAINER_FIRST_NAME_ALIASES's bill->william entry,
+// but only for callers that go through resolveTrackedTrainer() — a direct
+// write to /notes or /notes/bulk with a raw, already-attributed trainer
+// string bypasses that resolution step entirely). Cleaned up twice already
+// (2026-09-18, 2026-09-29) — checked at every write path that accepts a
+// free-text trainer field, not just the tracked-trainer roster, since that
+// roster never gated what a note's own trainer field could say to begin
+// with (confirmed real: the reintroduced batches all had literal "Bill
+// Mott"/"The Little Guys" in already-live notes despite neither being
+// tracked at the time).
+const TRAINER_DENYLIST = new Set(["the little guys", "bill mott"]);
+// "Bill Mott" specifically has one unambiguous real name to rewrite to;
+// "The Little Guys" doesn't (see above) — a note using it gets dropped
+// instead, same "no guess beats a wrong guess" rule as everywhere else in
+// this file. Returns the ORIGINAL name unchanged for anything not on the
+// denylist, so a caller can always do `trainer = sanitizeDenylistedTrainer(trainer)`
+// unconditionally rather than branching.
+function sanitizeDenylistedTrainer(trainer) {
+  const key = (trainer || "").trim().toLowerCase();
+  if (key === "bill mott") return "William Mott";
+  if (key === "the little guys") return null;
+  return trainer;
+}
+
 // See index.html's resolveTrackedTrainer() for the full reasoning,
 // including the confirmed real case (untracked British trainer "Clive Cox"
 // silently matched to tracked US trainer "Brad Cox") that motivated
