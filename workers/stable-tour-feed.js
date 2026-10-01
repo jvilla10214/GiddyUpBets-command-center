@@ -724,6 +724,20 @@ export default {
     ctx.waitUntil(
       runDrfImport(env).catch((err) => console.error("DRF import failed", err.message))
     );
+    // Jobs #28-31 — same reasoning as #24-26 above: run on both daily fires,
+    // each with its own KV dedup so that's safe.
+    ctx.waitUntil(
+      runStableTourFeedImport(env).catch((err) => console.error("Stable Tour feed import failed", err.message))
+    );
+    ctx.waitUntil(
+      runTdnNotebookImport(env).catch((err) => console.error("TDN Saratoga Notebook import failed", err.message))
+    );
+    ctx.waitUntil(
+      runHrnNewsImport(env).catch((err) => console.error("Horse Racing Nation import failed", err.message))
+    );
+    ctx.waitUntil(
+      runSmartPonyImport(env).catch((err) => console.error("SmartPony import failed", err.message))
+    );
     // These two piggyback on job #16's Cron Trigger rather than needing
     // their own, but only make sense once a day — gated to the morning fire
     // only so adding the evening trigger doesn't silently double their
@@ -1860,6 +1874,29 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-drf" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runDrfImport(env);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Manual triggers for jobs #28-31's server-side migrations — same
+    // reasoning as /debug-run-bloodhorse above.
+    if (url.pathname === "/debug-run-stable-tour-feed" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runStableTourFeedImport(env);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+    if (url.pathname === "/debug-run-tdn-notebook" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runTdnNotebookImport(env);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+    if (url.pathname === "/debug-run-hrn-news" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runHrnNewsImport(env);
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+    if (url.pathname === "/debug-run-smartpony" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const result = await runSmartPonyImport(env);
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -8465,6 +8502,291 @@ async function runTdnMainImport(env) {
   } catch (err) {
     console.error("TDN main feed import failed", err.message);
     return { checked, written, error: err.message };
+  }
+}
+
+// ---------- Jobs #28-31: server-side migration of the last 4 client-only
+// auto-import jobs (This Is Horse Racing [job #2], TDN Saratoga Notebook
+// [job #7], Horse Racing Nation [job #17], SmartPony partner quotes [job
+// #18]) ----------
+// All four used to run ONLY as a client-side setInterval in index.html,
+// meaning they only ever fired in a browser tab that happened to be open —
+// the exact same gap already confirmed and fixed for DRF (job #19->#26) and
+// NYRA News (job #20): real coverage holes (a quote sitting unscraped for
+// days with nobody's tab open), and in SmartPony's case specifically, a
+// real misattribution bug (confirmed 2026-09-30, 677 bad notes) that a
+// client-only job has no way to get patched everywhere at once — a stale
+// browser tab just keeps running the OLD code until that tab reloads. Moved
+// here so all four run on job #16's existing Cron Trigger (both daily
+// fires, same as BloodHorse/TDN-main/DRF below — no new Cron Trigger
+// needed) regardless of whether the app is open anywhere. The client-side
+// originals are retired in index.html in the SAME change (see each one's
+// own retirement comment there) — not doing that in the same deploy is
+// exactly how job #20's old client version kept running in parallel and
+// silently duplicating notes for weeks before anyone noticed.
+function stableTourFeedSeenKvKey(guid) {
+  return `stabletour:seen:${String(guid).replace(/[^a-z0-9]/gi, "").slice(-60)}`;
+}
+// Job #2's server-side counterpart — same feed, same trainerFromTitle()/
+// extractHorseChunks() parsing the existing GET / route already uses, just
+// with KV-backed dedup and a direct write instead of returning raw articles
+// for the client to dedupe/write itself. Unlike jobs #29-31 below, this one
+// DOES auto-add a new trainer (matching the original client behavior) —
+// every Stable Tour article genuinely profiles one real trainer by the
+// site's own naming, unlike SmartPony's much broader/noisier national
+// coverage (see job #18's own "why SmartPony doesn't auto-add" comment).
+async function runStableTourFeedImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const feedRes = await fetch(FEED_URL, { headers: { "User-Agent": BROWSER_UA }, cf: { cacheTtl: 900, cacheEverything: true } });
+    if (!feedRes.ok) throw new Error(`Stable Tour feed returned HTTP ${feedRes.status}`);
+    const feedXml = await feedRes.text();
+    const items = parseFeedItems(feedXml);
+
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    const trainers = state.trainers;
+    let notesChanged = false;
+    let trainersChanged = false;
+
+    for (const item of items) {
+      if (checked >= MAX_ARTICLES_PER_RUN) break;
+      const trainer = trainerFromTitle(item.title);
+      if (!trainer) continue; // "Stable Tour Rewind" or an unrecognized title format — not a single-trainer piece
+      const seenKey = stableTourFeedSeenKvKey(item.guid || item.link);
+      if (await env.STABLE_KV.get(seenKey)) continue;
+      checked++;
+      try {
+        let articleRes;
+        try {
+          articleRes = await fetch(item.link, { headers: { "User-Agent": BROWSER_UA }, cf: { cacheTtl: 3600, cacheEverything: true } });
+        } catch (err) {
+          continue; // transient fetch hiccup — not marked seen, worth retrying next run
+        }
+        if (!articleRes.ok) continue;
+        const horses = await extractHorseChunks(articleRes, trainer);
+        if (!horses.length) continue;
+
+        if (!trainers.some((t) => t.toLowerCase() === trainer.toLowerCase())) {
+          trainers.push(trainer);
+          trainersChanged = true;
+        }
+        for (const h of horses) {
+          notes.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            trainer,
+            horse: h.horse,
+            note: h.text,
+            date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : "",
+            source: item.title,
+            link: item.link,
+            autoImported: true,
+            sentiment: null,
+            importedVia: "stable-tour-feed",
+            capturedAt: new Date().toISOString(),
+          });
+          written++;
+          notesChanged = true;
+        }
+      } finally {
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+      }
+    }
+
+    if (trainersChanged) {
+      trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
+    }
+    if (notesChanged) await env.STABLE_KV.put("notes", JSON.stringify(notes));
+    if (trainersChanged || notesChanged) await bumpDataVersion(env);
+    return { checked, written };
+  } catch (err) {
+    console.error("Stable Tour feed import failed", err.message);
+    return { checked, written, error: err.message };
+  }
+}
+
+function tdnNotebookSeenKvKey(link, trainer, horse) {
+  return `tdnnb:seen:${String(`${link}|${trainer}|${horse}`).replace(/[^a-z0-9]/gi, "").slice(-80)}`;
+}
+// Job #7's server-side counterpart — fetchTdnNotebook() already does all
+// the fetching/section-parsing (unchanged, still used by GET /tdn-notebook
+// too); this just adds the resolve-against-tracked-trainers + KV dedup +
+// write steps the client used to do itself. Never auto-adds a trainer (see
+// that function's own original comment on why "trainer NAME" in prose isn't
+// reliable enough to trust for that).
+async function runTdnNotebookImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+    const data = await fetchTdnNotebook();
+    for (const article of data.articles || []) {
+      for (const section of article.sections || []) {
+        const matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
+        if (!matchedTrainer) continue;
+        for (const horseName of section.horseNames || []) {
+          const seenKey = tdnNotebookSeenKvKey(article.link, matchedTrainer, horseName);
+          if (await env.STABLE_KV.get(seenKey)) continue;
+          checked++;
+          notes.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            trainer: matchedTrainer,
+            horse: horseName,
+            note: section.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : "",
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+            sentiment: null,
+            importedVia: "tdn-notebook",
+            capturedAt: new Date().toISOString(),
+          });
+          written++;
+          addedAny = true;
+          await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+        }
+      }
+    }
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+    }
+    return { checked, written };
+  } catch (err) {
+    console.error("TDN Saratoga Notebook import failed", err.message);
+    return { checked, written, error: err.message };
+  }
+}
+
+function hrnSeenKvKey(link, trainer, horse) {
+  return `hrn:seen:${String(`${link}|${trainer}|${horse}`).replace(/[^a-z0-9]/gi, "").slice(-80)}`;
+}
+// Job #17's server-side counterpart — same shape as runTdnNotebookImport()
+// above, pointed at fetchHrnNews() instead (see autoImportHrnNews()'s own
+// comment in index.html for why this stays a separate copy rather than one
+// shared function).
+async function runHrnNewsImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+    const data = await fetchHrnNews();
+    for (const article of data.articles || []) {
+      for (const section of article.sections || []) {
+        const matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
+        if (!matchedTrainer) continue;
+        for (const horseName of section.horseNames || []) {
+          const seenKey = hrnSeenKvKey(article.link, matchedTrainer, horseName);
+          if (await env.STABLE_KV.get(seenKey)) continue;
+          checked++;
+          notes.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            trainer: matchedTrainer,
+            horse: horseName,
+            note: section.text,
+            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : "",
+            source: article.title,
+            link: article.link,
+            autoImported: true,
+            sentiment: null,
+            importedVia: "hrn-news",
+            capturedAt: new Date().toISOString(),
+          });
+          written++;
+          addedAny = true;
+          await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+        }
+      }
+    }
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+    }
+    return { checked, written };
+  } catch (err) {
+    console.error("Horse Racing Nation import failed", err.message);
+    return { checked, written, error: err.message };
+  }
+}
+
+// Same embedded-speaker guard as index.html's client-side version (added
+// 2026-10-01 after the 2026-09-30 cleanup, 677 notes — see that cleanup's
+// own notes): SmartPony's own article extraction sometimes pulls the quote
+// text correctly but credits the wrong person — a multi-speaker article (a
+// roundup, a rival trainer's reaction, an owner/agent quote) gets every
+// quote in it bound to whichever ONE tracked trainer SmartPony's own
+// matching found anywhere in the piece. Kept as its own server-side copy
+// rather than shared with index.html's version — same "don't risk a
+// refactor across a working client/server split" reasoning as
+// autoImportHrnNews()'s own comment there. No attempt to re-attribute to the
+// real speaker — confirming the embedded name is even a tracked trainer/
+// jockey AND is actually talking about THIS horse needs a human read, not a
+// guess. Skip, same "no guess beats a wrong guess" behavior as every other
+// check in this file.
+const SMARTPONY_EMBEDDED_SPEAKER_RE = /^([A-Z][a-zA-Z'.]+(?:\s+[A-Z][a-zA-Z'.]+){1,2}):\s/;
+function smartPonyQuoteMisattributed(text, trainerName) {
+  const m = SMARTPONY_EMBEDDED_SPEAKER_RE.exec(text || "");
+  if (!m) return false;
+  return trainerLastName(m[1]) !== trainerLastName(trainerName || "");
+}
+// Job #18's server-side counterpart — fetchSmartPonyQuotes() already
+// resolves against the tracked list internally where it can; this re-checks
+// via resolveTrackedTrainer() anyway (cheap, and correct either way) before
+// applying the embedded-speaker guard above and writing. Never auto-adds a
+// trainer (see fetchSmartPonyQuotes()'s own section and the client's
+// original comment on why SmartPony's national/international coverage
+// makes that unsafe).
+async function runSmartPonyImport(env) {
+  let checked = 0;
+  let written = 0;
+  let skippedMisattributed = 0;
+  try {
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+    const quotes = await fetchSmartPonyQuotes(env);
+    for (const q of quotes) {
+      const seenKey = `smartpony:seen:${q.quoteId}`;
+      if (await env.STABLE_KV.get(seenKey)) continue;
+      checked++;
+      const matchedTrainer = resolveTrackedTrainer(q.trainerName, state.trainers);
+      if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next poll
+      if (smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
+        skippedMisattributed++;
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+        continue; // embedded speaker doesn't match the credited trainer — see smartPonyQuoteMisattributed()'s own comment
+      }
+      notes.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        trainer: matchedTrainer,
+        horse: q.horseName,
+        note: q.text,
+        date: q.date || "",
+        source: q.source || "SmartPony",
+        link: q.link || "",
+        autoImported: true,
+        sentiment: q.sentiment || null,
+        importedVia: "SmartPony",
+        capturedAt: new Date().toISOString(),
+      });
+      written++;
+      addedAny = true;
+      await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+    }
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+      await bumpDataVersion(env);
+    }
+    return { checked, written, skippedMisattributed };
+  } catch (err) {
+    console.error("SmartPony import failed", err.message);
+    return { checked, written, skippedMisattributed, error: err.message };
   }
 }
 

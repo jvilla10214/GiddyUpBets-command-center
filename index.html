@@ -9783,122 +9783,24 @@
     }
   });
 
-  // ---------- Stable Tour auto-import (Cloudflare Worker feed) ----------
-  // The Worker (workers/stable-tour-feed.js in this repo) does the actual
-  // fetching/parsing server-side — thisishorseracing.com has no CORS
-  // headers, and the free public CORS proxies tested against it were
-  // unreliable (500s, gateway timeouts), same conclusion reached for Del
-  // Mar's scratches page. This just polls whatever Worker URL is
-  // configured and skips anything already imported, tracked by a persisted
-  // set of article GUIDs — same "seen" dedup pattern already used for NWS
-  // alerts elsewhere in this app. Auto-imported notes save directly (no
-  // per-item review step, unlike the paste-to-parse flow) since the user
-  // asked for hands-off import — the "Auto" badge + source link on each
-  // note keep it easy to spot-check and remove anything wrong after the
-  // fact instead.
-  const STABLE_SEEN_ARTICLES_KEY = "giddyupbets_stable_seen_articles_v1";
-  let stableSeenArticles = [];
+  // Job #2 — RETIRED 2026-10-01, moved server-side as runStableTourFeedImport()
+  // in workers/stable-tour-feed.js (its own Cron Trigger slot, piggybacked on
+  // job #16's — see that function's own comment, and /debug-run-stable-tour-
+  // feed for the on-demand equivalent). This client-side version only ever
+  // ran in a browser tab that happened to be open (hourly timer, or the
+  // "Check Now"/"Save" buttons), same gap already confirmed and fixed for
+  // DRF (job #19->#26) and NYRA News (job #20) — real coverage holes when
+  // nobody has the tab open. STABLE_SEEN_ARTICLES_KEY and stableSeenArticles
+  // removed along with it; dedup now lives server-side (KV).
 
-  function loadStableSeenArticles(){
-    try{
-      const raw = localStorage.getItem(STABLE_SEEN_ARTICLES_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch(err){
-      console.error("Stable seen-articles failed to load", err);
-      return [];
-    }
-  }
-  function saveStableSeenArticles(){
-    try{ localStorage.setItem(STABLE_SEEN_ARTICLES_KEY, JSON.stringify(stableSeenArticles)); }
-    catch(err){ console.error("Stable seen-articles failed to save", err); }
-  }
+  // Job #7's own "seen" tracking (STABLE_TDN_SEEN_KEY) removed 2026-10-01
+  // along with autoImportTdnNotebook() itself — see that function's own
+  // retired comment below. TDN Notebook dedup now lives server-side (KV,
+  // runTdnNotebookImport()).
 
-  async function fetchStableTourFeed(){
-    const statusEl = $("stableFeedStatus");
-    statusEl.textContent = "Checking…";
-    try{
-      const data = await stableApiGet("/"); // Worker's root path — the thisishorseracing.com scrape, unrelated to /data
-      const newArticles = (data.articles || []).filter(a => !stableSeenArticles.includes(a.guid));
-
-      let importedHorses = 0;
-      const trainerNames = [];
-      const noteItems = [];
-      newArticles.forEach(article => {
-        trainerNames.push(article.trainer);
-        (article.horses || []).forEach(h => {
-          noteItems.push({
-            trainer: article.trainer,
-            horse: h.horse,
-            note: h.text,
-            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
-            source: article.title,
-            link: article.link,
-            autoImported: true,
-          });
-          importedHorses++;
-        });
-        stableSeenArticles.push(article.guid);
-      });
-      // One write for all trainers, one write for all notes — regardless of
-      // how many articles/horses this poll picked up (see /trainers/bulk and
-      // /notes/bulk in the Worker for why: KV write quota is a hard daily cap).
-      if (trainerNames.length) await stableApiWrite("POST", "/trainers/bulk", { names: trainerNames, source: "stable-tour" });
-      if (noteItems.length) await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
-      saveStableSeenArticles();
-
-      if (trainerNames.length || noteItems.length){
-        const fresh = await loadStableData();
-        stableTrainers = fresh.trainers;
-        stableNotes = fresh.notes;
-        stableTrainerMeta = fresh.trainerMeta;
-        stableDataVersion = fresh.version;
-        renderStableTour();
-      }
-
-      const checkedAt = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-      statusEl.textContent = newArticles.length
-        ? `Checked ${checkedAt} — imported ${importedHorses} horse note${importedHorses === 1 ? "" : "s"} from ${newArticles.length} new article${newArticles.length === 1 ? "" : "s"}.`
-        : `Checked ${checkedAt} — no new Stable Tour articles since last check.`;
-    } catch(err){
-      console.error("Stable Tour feed fetch failed", err);
-      statusEl.textContent = `Couldn't reach the auto-import source (${err.message}) — check the Worker URL and try again.`;
-    }
-  }
-
-  // ---------- TDN Saratoga Notebook auto-import ----------
-  // Same shared-storage/passphrase model as fetchStableTourFeed() above, but
-  // scoped differently: this NEVER adds a new trainer (see the worker's job
-  // #7 comment for why a "trainer NAME" mention in prose isn't reliable
-  // enough to trust for that) — it only files notes under trainers already
-  // in stableTrainers. Also unlike that function, coverage here is
-  // partial by design: TDN doesn't bold horse names in every Notebook
-  // article (verified against several real ones — roughly half do, half
-  // don't), and an article that doesn't gets zero sections back from the
-  // worker, silently skipped rather than guessed at.
-  const STABLE_TDN_SEEN_KEY = "giddyupbets_stable_tdn_seen_v1";
-  function loadStableTdnSeen(){
-    try { return new Set(JSON.parse(localStorage.getItem(STABLE_TDN_SEEN_KEY)) ?? []); }
-    catch { return new Set(); }
-  }
-  function saveStableTdnSeen(){
-    try { localStorage.setItem(STABLE_TDN_SEEN_KEY, JSON.stringify([...stableTdnSeen])); }
-    catch(err){ console.error("Stable TDN-seen failed to save", err); }
-  }
-  let stableTdnSeen = loadStableTdnSeen();
-
-  // Same per-device "seen" convention as stableTdnSeen above, for job #17's
-  // Horse Racing Nation source.
-  const STABLE_HRN_SEEN_KEY = "giddyupbets_stable_hrn_seen_v1";
-  function loadStableHrnSeen(){
-    try { return new Set(JSON.parse(localStorage.getItem(STABLE_HRN_SEEN_KEY)) ?? []); }
-    catch { return new Set(); }
-  }
-  function saveStableHrnSeen(){
-    try { localStorage.setItem(STABLE_HRN_SEEN_KEY, JSON.stringify([...stableHrnSeen])); }
-    catch(err){ console.error("Stable HRN-seen failed to save", err); }
-  }
-  let stableHrnSeen = loadStableHrnSeen();
+  // Job #17's own "seen" tracking (STABLE_HRN_SEEN_KEY) removed 2026-10-01
+  // along with autoImportHrnNews() itself — see that function's own retired
+  // comment below. HRN dedup now lives server-side (KV, runHrnNewsImport()).
 
   // Job #19's own "seen" tracking (STABLE_DRF_SEEN_KEY) removed 2026-09-24
   // along with autoImportDrfNews() itself — see that function's own retired
@@ -9909,20 +9811,10 @@
   // own retired comment. NYRA dedup now lives server-side (KV, job #20's
   // server-side rewrite).
 
-  // Same idea again, for job #18's SmartPony source — keyed by SmartPony's
-  // own quote id (a real unique id, unlike TDN/HRN's composite string keys
-  // built out of link+trainer+horse since those sources have no id of
-  // their own to dedupe on).
-  const STABLE_SMARTPONY_SEEN_KEY = "giddyupbets_stable_smartpony_seen_v1";
-  function loadStableSmartPonySeen(){
-    try { return new Set(JSON.parse(localStorage.getItem(STABLE_SMARTPONY_SEEN_KEY)) ?? []); }
-    catch { return new Set(); }
-  }
-  function saveStableSmartPonySeen(){
-    try { localStorage.setItem(STABLE_SMARTPONY_SEEN_KEY, JSON.stringify([...stableSmartPonySeen])); }
-    catch(err){ console.error("Stable SmartPony-seen failed to save", err); }
-  }
-  let stableSmartPonySeen = loadStableSmartPonySeen();
+  // Job #18's own "seen" tracking (STABLE_SMARTPONY_SEEN_KEY) removed
+  // 2026-10-01 along with autoImportSmartPonyQuotes() itself — see that
+  // function's own retired comment below. SmartPony dedup now lives
+  // server-side (KV, runSmartPonyImport()).
 
   // Strips combining diacritical marks ("é" -> "e", "ñ" -> "n", ...) and
   // normalizes curly/smart apostrophes to a plain one before any name
@@ -10121,96 +10013,18 @@
     return (Date.now() - noteMs) / 86400000 > STABLE_NOTE_STALE_DAYS;
   }
 
-  async function autoImportTdnNotebook(){
-    if (!stableTrainers.length) return; // nothing to match against
-    let data;
-    try{ data = await stableApiGet("/tdn-notebook"); }
-    catch(err){ console.error("TDN Saratoga Notebook fetch failed", err); return; }
+  // Job #7 — RETIRED 2026-10-01, moved server-side as runTdnNotebookImport()
+  // in workers/stable-tour-feed.js (piggybacked on job #16's Cron Trigger —
+  // see that function's own comment, and /debug-run-tdn-notebook for the
+  // on-demand equivalent). Same client-side-only-runs-if-a-tab-is-open gap
+  // as every other job retired this same pass — see job #2's own retired
+  // comment above. STABLE_TDN_SEEN_KEY and stableTdnSeen removed along with
+  // it; dedup now lives server-side (KV).
 
-    const noteItems = [];
-    for (const article of data.articles || []){
-      for (const section of article.sections || []){
-        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
-        if (!matchedTrainer) continue;
-        for (const horseName of section.horseNames || []){
-          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
-          if (stableTdnSeen.has(seenKey)) continue;
-          noteItems.push({
-            trainer: matchedTrainer,
-            horse: horseName,
-            note: section.text,
-            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
-            source: article.title,
-            link: article.link,
-            autoImported: true,
-          });
-          stableTdnSeen.add(seenKey);
-        }
-      }
-    }
-    if (!noteItems.length) return;
-
-    try{
-      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems }); // one write for the whole batch — see /notes/bulk's own comment on KV write quota
-      saveStableTdnSeen();
-      const fresh = await loadStableData();
-      stableTrainers = fresh.trainers;
-      stableNotes = fresh.notes;
-      stableTrainerMeta = fresh.trainerMeta;
-      stableDataVersion = fresh.version;
-      renderStableTour();
-    } catch(err){
-      console.error("TDN Saratoga Notebook import failed to save", err);
-    }
-  }
-
-  // Job #17 — same shape as autoImportTdnNotebook() above (deliberately not
-  // shared as one generic function — see that function's own reasoning
-  // this session for why duplicating a short, working, already-shipped
-  // import loop beats risking it via a refactor), pointed at the worker's
-  // /hrn-news route instead.
-  async function autoImportHrnNews(){
-    if (!stableTrainers.length) return; // nothing to match against
-    let data;
-    try{ data = await stableApiGet("/hrn-news"); }
-    catch(err){ console.error("Horse Racing Nation fetch failed", err); return; }
-
-    const noteItems = [];
-    for (const article of data.articles || []){
-      for (const section of article.sections || []){
-        const matchedTrainer = resolveTrackedTrainer(section.trainerName, stableTrainers);
-        if (!matchedTrainer) continue;
-        for (const horseName of section.horseNames || []){
-          const seenKey = `${article.link}|${matchedTrainer}|${horseName}`;
-          if (stableHrnSeen.has(seenKey)) continue;
-          noteItems.push({
-            trainer: matchedTrainer,
-            horse: horseName,
-            note: section.text,
-            date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : nowInTrackTZ().date,
-            source: article.title,
-            link: article.link,
-            autoImported: true,
-          });
-          stableHrnSeen.add(seenKey);
-        }
-      }
-    }
-    if (!noteItems.length) return;
-
-    try{
-      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
-      saveStableHrnSeen();
-      const fresh = await loadStableData();
-      stableTrainers = fresh.trainers;
-      stableNotes = fresh.notes;
-      stableTrainerMeta = fresh.trainerMeta;
-      stableDataVersion = fresh.version;
-      renderStableTour();
-    } catch(err){
-      console.error("Horse Racing Nation import failed to save", err);
-    }
-  }
+  // Job #17 — RETIRED 2026-10-01, moved server-side as runHrnNewsImport() in
+  // workers/stable-tour-feed.js — same reasoning as job #7 immediately
+  // above. STABLE_HRN_SEEN_KEY and stableHrnSeen removed along with it;
+  // dedup now lives server-side (KV, /debug-run-hrn-news).
 
   // Job #19 — RETIRED 2026-09-24, moved server-side as job #26
   // (runDrfImport() in workers/stable-tour-feed.js). This client-side
@@ -10232,134 +10046,51 @@
   // (29 notes, real Saratoga/Belmont NYRA quotes already covered by the
   // server-side job) traced directly to this still-active function.
 
-  // Job #18 — SmartPony partner quotes, same overall shape as the imports
-  // above but simpler: the worker's /smartpony-quotes route already
-  // returns one quote per horse/trainer (SmartPony did the article
-  // extraction and horse-matching on their own end), so there's no
-  // paragraph-proximity section-building to do here at all — just resolve
-  // each quote's trainer against the tracked list and file it.
-  //
-  // Used to auto-ADD an unmatched trainer instead of skipping (unlike TDN/
-  // HRN/News Wire) — reverted after confirming real: SmartPony's own
-  // coverage is national/international (Paulick Report, TDN, King George,
-  // Fasig-Tipton sale listings — not scoped to any tracked meet at all), so
-  // auto-adding every unmatched name would have taken this from a curated
-  // ~186-trainer list to ~900+, mostly trainers with nothing to do with
-  // what's actually being tracked. Unmatched full names are now surfaced
-  // for a manual look (see the SmartPony review flow) instead of being
-  // silently added — same "skip, re-checked next poll" behavior as every
-  // other import job here.
-  //
-  // Embedded-speaker guard (added 2026-10-01): SmartPony's own article
-  // extraction sometimes pulls the quote text correctly but credits the
-  // wrong person — confirmed real in a 2026-09-30 cleanup (677 notes, ~98%
-  // from this exact job) where the quote text itself opens with "Jose
-  // Ortiz:", "Terry Finley:", etc. while SmartPony's trainerName field says
-  // someone else entirely. Always traces back to a multi-speaker article
-  // (a roundup, a rival trainer's reaction, an owner/agent quote) where
-  // SmartPony's matching bound every quote in the piece to whichever ONE
-  // tracked trainer it found anywhere in it. No attempt to re-attribute to
-  // the real speaker here — confirming the embedded name is even a tracked
-  // trainer/jockey AND is actually talking about THIS horse (not someone
-  // else's, a frequent case — see the cleanup notes) needs a human read, not
-  // a guess. Skip, same "no guess beats a wrong guess" behavior as every
-  // other check in this function.
-  const SMARTPONY_EMBEDDED_SPEAKER_RE = /^([A-Z][a-zA-Z'.]+(?:\s+[A-Z][a-zA-Z'.]+){1,2}):\s/;
-  function smartPonyQuoteMisattributed(text, trainerName){
-    const m = SMARTPONY_EMBEDDED_SPEAKER_RE.exec(text || "");
-    if (!m) return false;
-    return trainerLastName(m[1]) !== trainerLastName(trainerName);
-  }
-  async function autoImportSmartPonyQuotes(){
-    if (!stableTrainers.length) return; // nothing to match against
-    let data;
-    try{ data = await stableApiGet("/smartpony-quotes"); }
-    catch(err){ console.error("SmartPony fetch failed", err); return; }
+  // Job #18 — RETIRED 2026-10-01, moved server-side as runSmartPonyImport()
+  // in workers/stable-tour-feed.js (piggybacked on job #16's Cron Trigger —
+  // /debug-run-smartpony for the on-demand equivalent). Same client-side-
+  // only-runs-if-a-tab-is-open gap as every job retired this pass, plus one
+  // more: this was also the source of a confirmed real misattribution bug
+  // (2026-09-30 cleanup, 677 notes) where the quote text opens with a
+  // different name ("Jose Ortiz:", "Terry Finley:") than the credited
+  // trainer — a multi-speaker article bound every quote to whichever ONE
+  // tracked trainer matched anywhere in it. The embedded-speaker guard that
+  // was added here to catch that (smartPonyQuoteMisattributed(), same day)
+  // is preserved server-side in runSmartPonyImport()'s own copy — a
+  // client-only fix has no way to protect notes added by a cron job anyway.
+  // Never auto-added an unmatched trainer (SmartPony's coverage is
+  // national/international, not scoped to any tracked meet — see the
+  // server-side job's own comment). STABLE_SMARTPONY_SEEN_KEY and
+  // stableSmartPonySeen removed along with it; dedup now lives server-side
+  // (KV).
 
-    const noteItems = [];
-    for (const q of data.quotes || []){
-      if (stableSmartPonySeen.has(q.quoteId)) continue;
-      const matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
-      if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next poll
-      if (smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
-        stableSmartPonySeen.add(q.quoteId); // seen, so this doesn't get re-flagged forever
-        continue; // embedded speaker doesn't match the credited trainer — see this function's own comment above
-      }
-      noteItems.push({
-        trainer: matchedTrainer,
-        horse: q.horseName,
-        note: q.text,
-        date: q.date || nowInTrackTZ().date,
-        source: q.source || "SmartPony",
-        link: q.link || "",
-        autoImported: true,
-        sentiment: q.sentiment || null,
-        // q.link/q.source above are often the ORIGINAL article SmartPony
-        // itself pulled from (e.g. a real drf.com URL/title) — this is the
-        // only record that SmartPony's own aggregation was what actually
-        // surfaced the note, since the site badge alone would just say
-        // "drf.com" with no sign SmartPony was involved at all.
-        importedVia: "SmartPony",
-      });
-      stableSmartPonySeen.add(q.quoteId);
-    }
-    if (!noteItems.length) return;
-
-    try{
-      await stableApiWrite("POST", "/notes/bulk", { notes: noteItems });
-      saveStableSmartPonySeen();
-      const fresh = await loadStableData();
-      stableTrainers = fresh.trainers;
-      stableNotes = fresh.notes;
-      stableTrainerMeta = fresh.trainerMeta;
-      stableDataVersion = fresh.version;
-      renderStableTour();
-    } catch(err){
-      console.error("SmartPony import failed to save", err);
-    }
-  }
-
+  // Worker URL/passphrase config still matters for every other shared-
+  // storage write in the app (manual notes, trainer/jockey adds, etc.) even
+  // though the 4 auto-import jobs this button used to also trigger are all
+  // server-side now (jobs #2/#7/#17/#18 — see their own retirement comments
+  // above) — saving here no longer kicks off a client-side check.
   $("stableFeedSaveBtn").addEventListener("click", () => {
     const url = $("stableFeedUrlInput").value.trim();
     const key = $("stableApiKeyInput").value;
     saveStableFeedUrl(url || STABLE_WORKER_URL_DEFAULT);
     saveStableApiKey(key);
-    $("stableFeedStatus").textContent = "Saved — click Check Now to fetch.";
-    fetchStableTourFeed();
-    autoImportTdnNotebook();
-    autoImportHrnNews();
-    autoImportSmartPonyQuotes();
+    $("stableFeedStatus").textContent = "Saved.";
   });
+  // All four sources this used to manually re-check now run automatically
+  // server-side (both daily cron fires, regardless of whether this tab is
+  // open) — nothing left here to trigger on demand.
   $("stableFeedCheckBtn").addEventListener("click", () => {
-    fetchStableTourFeed();
-    autoImportTdnNotebook();
-    autoImportHrnNews();
-    autoImportSmartPonyQuotes();
+    $("stableFeedStatus").textContent = "Auto-import now runs automatically server-side (This Is Horse Racing, TDN Notebook, Horse Racing Nation, SmartPony) — no manual check needed.";
   });
-  // Auto-import "seen" tracking lives in THIS browser's localStorage (per
-  // device, deliberately not moved to the shared backend) so it survives
-  // switching Worker URLs — but that means moving Stable Tour to a fresh
-  // shared store (or pointing at a different Worker) leaves this device
-  // thinking it already imported articles the new store has never seen.
-  // This clears that local memory and re-runs all five remaining auto-import
-  // checks (DRF and NYRA News both moved server-side — 2026-09-24 and
-  // 2026-09-29 respectively — nothing left to clear for either here).
+  // Only News Wire's own "seen" tracking is left to reset here — the four
+  // Stable Tour auto-import jobs this used to also clear (This Is Horse
+  // Racing, TDN Notebook, HRN, SmartPony) all moved server-side 2026-10-01,
+  // same as DRF/NYRA News before them, with dedup living in KV now instead
+  // of this browser's localStorage.
   $("stableResetImportHistoryBtn").addEventListener("click", () => {
-    stableSeenArticles = [];
-    saveStableSeenArticles();
     stableNewsSeen = new Set();
     saveStableNewsSeen();
-    stableTdnSeen = new Set();
-    saveStableTdnSeen();
-    stableHrnSeen = new Set();
-    saveStableHrnSeen();
-    stableSmartPonySeen = new Set();
-    saveStableSmartPonySeen();
-    $("stableFeedStatus").textContent = "Import history cleared — checking now…";
-    fetchStableTourFeed();
-    autoImportTdnNotebook();
-    autoImportHrnNews();
-    autoImportSmartPonyQuotes();
+    $("stableFeedStatus").textContent = "News Wire import history cleared — checking now…";
     fetchNewsWire();
   });
 
@@ -11282,9 +11013,9 @@
     let added = false;
     for (const item of items){
       // TDN's Saratoga Notebook articles get their own dedicated, structured
-      // import (autoImportTdnNotebook() — per-horse notes, not this
-      // function's "whole headline as the horse name" fallback) — skip them
-      // here so a mention doesn't also file a second, cruder note.
+      // import (runTdnNotebookImport() server-side — per-horse notes, not
+      // this function's "whole headline as the horse name" fallback) — skip
+      // them here so a mention doesn't also file a second, cruder note.
       if (/^saratoga notebook/i.test(item.title)) continue;
       // Cuts off before any embedded entries/results table — verified
       // directly this isn't just noise (same reasoning job #17's own
@@ -13398,7 +13129,6 @@
 
   loadRaceDayArchive();
 
-  stableSeenArticles = loadStableSeenArticles();
   $("stableFeedUrlInput").value = loadStableFeedUrl();
   $("stableApiKeyInput").value = loadStableApiKey();
   (async () => {
@@ -13410,15 +13140,11 @@
     stableJockeyMeta = data.jockeyMeta;
     stableDataVersion = data.version;
     renderStableTour();
-    fetchStableTourFeed(); // one-time scrape check now that the shared trainer list is loaded
-    autoImportTdnNotebook(); // same reasoning — needs stableTrainers loaded first to match against
-    autoImportHrnNews(); // same reasoning
-    autoImportSmartPonyQuotes(); // same reasoning
+    // This Is Horse Racing / TDN Notebook / HRN / SmartPony auto-import all
+    // moved server-side 2026-10-01 (jobs #2/#7/#17/#18 — see each one's own
+    // retirement comment near where its function used to live) — nothing
+    // left to kick off here on load.
   })();
-  setInterval(fetchStableTourFeed, 60 * 60 * 1000); // hourly — this content updates infrequently
-  setInterval(autoImportTdnNotebook, 6 * 60 * 60 * 1000); // every 6 hours, separate interval so one source's hiccup can't block the other
-  setInterval(autoImportHrnNews, 6 * 60 * 60 * 1000); // same cadence, separate interval too
-  setInterval(autoImportSmartPonyQuotes, 6 * 60 * 60 * 1000); // same cadence, separate interval too
 
   // Refresh from the shared source periodically and whenever the tab
   // regains focus, so a friend's changes on another device show up without
