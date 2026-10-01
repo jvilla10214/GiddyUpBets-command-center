@@ -8753,6 +8753,20 @@ function smartPonyQuoteMisattributed(text, trainerName) {
 // trainer (see fetchSmartPonyQuotes()'s own section and the client's
 // original comment on why SmartPony's national/international coverage
 // makes that unsafe).
+// Confirmed real 2026-10-01: with a 120-day lookback, fetchSmartPonyQuotes()
+// can return several thousand rows (4,598 the day this was found) — walking
+// the FULL list here, even just for the cheap-looking `seenKey` check,
+// means one KV read per quote, and Cloudflare's free-plan cap on total
+// binding operations (KV/D1/etc.) per invocation is real: this hit "Too
+// many API requests by single Worker invocation" partway through (at 576
+// of 4,598). Bounding the per-run LOOP ITERATION count (not just `checked`,
+// which only counts not-yet-seen ones — every iteration costs a KV read
+// regardless) keeps this job safely under that cap. quotes are already
+// newest-first (fetchSmartPonyQuotes()'s own order=created_at.desc), so
+// capping from the front always processes the newest backlog first and
+// drains into older rows over subsequent runs — same "takes several runs
+// to drain a big one-time backlog" shape as NYRA News/DRF's own history.
+const SMARTPONY_MAX_PER_RUN = 300;
 async function runSmartPonyImport(env) {
   let checked = 0;
   let written = 0;
@@ -8762,7 +8776,7 @@ async function runSmartPonyImport(env) {
     const notes = state.notes;
     let addedAny = false;
     const quotes = await fetchSmartPonyQuotes(env);
-    for (const q of quotes) {
+    for (const q of quotes.slice(0, SMARTPONY_MAX_PER_RUN)) {
       const seenKey = `smartpony:seen:${q.quoteId}`;
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
