@@ -10249,6 +10249,27 @@
   // for a manual look (see the SmartPony review flow) instead of being
   // silently added — same "skip, re-checked next poll" behavior as every
   // other import job here.
+  //
+  // Embedded-speaker guard (added 2026-10-01): SmartPony's own article
+  // extraction sometimes pulls the quote text correctly but credits the
+  // wrong person — confirmed real in a 2026-09-30 cleanup (677 notes, ~98%
+  // from this exact job) where the quote text itself opens with "Jose
+  // Ortiz:", "Terry Finley:", etc. while SmartPony's trainerName field says
+  // someone else entirely. Always traces back to a multi-speaker article
+  // (a roundup, a rival trainer's reaction, an owner/agent quote) where
+  // SmartPony's matching bound every quote in the piece to whichever ONE
+  // tracked trainer it found anywhere in it. No attempt to re-attribute to
+  // the real speaker here — confirming the embedded name is even a tracked
+  // trainer/jockey AND is actually talking about THIS horse (not someone
+  // else's, a frequent case — see the cleanup notes) needs a human read, not
+  // a guess. Skip, same "no guess beats a wrong guess" behavior as every
+  // other check in this function.
+  const SMARTPONY_EMBEDDED_SPEAKER_RE = /^([A-Z][a-zA-Z'.]+(?:\s+[A-Z][a-zA-Z'.]+){1,2}):\s/;
+  function smartPonyQuoteMisattributed(text, trainerName){
+    const m = SMARTPONY_EMBEDDED_SPEAKER_RE.exec(text || "");
+    if (!m) return false;
+    return trainerLastName(m[1]) !== trainerLastName(trainerName);
+  }
   async function autoImportSmartPonyQuotes(){
     if (!stableTrainers.length) return; // nothing to match against
     let data;
@@ -10260,6 +10281,10 @@
       if (stableSmartPonySeen.has(q.quoteId)) continue;
       const matchedTrainer = resolveTrackedTrainer(q.trainerName, stableTrainers);
       if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next poll
+      if (smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
+        stableSmartPonySeen.add(q.quoteId); // seen, so this doesn't get re-flagged forever
+        continue; // embedded speaker doesn't match the credited trainer — see this function's own comment above
+      }
       noteItems.push({
         trainer: matchedTrainer,
         horse: q.horseName,
