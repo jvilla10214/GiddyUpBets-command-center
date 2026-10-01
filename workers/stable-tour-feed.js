@@ -8744,7 +8744,7 @@ const SMARTPONY_EMBEDDED_SPEAKER_RE = /^([A-Z][a-zA-Z'.]+(?:\s+[A-Z][a-zA-Z'.]+)
 function smartPonyQuoteMisattributed(text, trainerName) {
   const m = SMARTPONY_EMBEDDED_SPEAKER_RE.exec(text || "");
   if (!m) return false;
-  return trainerLastName(m[1]) !== trainerLastName(trainerName || "");
+  return lastNameKey(m[1]) !== lastNameKey(trainerName || "");
 }
 // Job #18's server-side counterpart — fetchSmartPonyQuotes() already
 // resolves against the tracked list internally where it can; this re-checks
