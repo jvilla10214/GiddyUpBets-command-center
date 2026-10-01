@@ -8552,8 +8552,19 @@ async function runStableTourFeedImport(env) {
 
     for (const item of items) {
       if (checked >= MAX_ARTICLES_PER_RUN) break;
-      const trainer = trainerFromTitle(item.title);
+      let trainer = trainerFromTitle(item.title);
       if (!trainer) continue; // "Stable Tour Rewind" or an unrecognized title format — not a single-trainer piece
+      // Confirmed real 2026-10-01: this is the ONLY one of the 8 import
+      // jobs that auto-adds a brand-new trainer name rather than only
+      // matching an already-tracked one (see this job's own comment above)
+      // — every other job is safe by construction as long as the tracked
+      // list itself stays clean, but THIS one needs the same denylist gate
+      // the client-facing /trainers, /notes, and /notes/bulk routes already
+      // have. Caught live: "The Little Guys" (a real thisishorseracing.com
+      // article title, not a real person) got auto-added as a tracked
+      // trainer with 35 notes on this job's very first run.
+      trainer = sanitizeDenylistedTrainer(trainer);
+      if (!trainer) continue;
       const seenKey = stableTourFeedSeenKvKey(item.guid || item.link);
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
@@ -8873,7 +8884,20 @@ function reformatLastFirstName(raw) {
 // list syntax needs each value double-quoted since horse names contain
 // spaces; the whole list is percent-encoded as one unit and decoded back to
 // literal syntax server-side, same as any other query string value.
-const SMARTPONY_LOOKUP_BATCH = 40;
+// Raised from 40 to 250 (2026-10-01) after confirming real: with a 120-day
+// lookback and the backlog this big by now, the number of unique horses
+// referenced routinely runs into the thousands, which at a batch of 40 was
+// 25+ requests for THIS lookup alone, before even counting the quotes
+// pagination, the race_entries lookup below, and the login call — Cloudflare
+// Workers' free-plan cap is 50 subrequests per invocation, and this was
+// blowing well past it ("Too many subrequests by single Worker invocation"),
+// silently failing every single call site (the client's own 6-hourly poll
+// included — confirmed the exact same error via the plain GET /smartpony-
+// quotes route, so this wasn't new, just never surfaced). 250 names/ids at
+// ~15-20 chars each plus quoting is still a comfortably short URL (Supabase/
+// PostgREST handles query strings far longer than this) while cutting the
+// request count by 6x+.
+const SMARTPONY_LOOKUP_BATCH = 250;
 async function lookupHorseIdsByName(accessToken, horseNames) {
   const nameToHorseId = {};
   for (let i = 0; i < horseNames.length; i += SMARTPONY_LOOKUP_BATCH) {
