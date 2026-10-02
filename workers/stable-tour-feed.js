@@ -284,9 +284,10 @@
 //    tically (nobody has to be watching for results to go final), a day
 //    nobody had open keeps an entries-only snapshot forever — so
 //    backfillRaceDayResults() re-checks the trailing 10 days' archived
-//    snapshots on every scheduled() firing (piggybacking job #16's Cron
-//    Trigger, no new one needed) and fills in results wherever they're
-//    missing. Manual equivalent: GET /debug-backfill-raceday-results.
+//    snapshots once a day (the 13:30 UTC slot of SIDE_JOBS_CRON's Cron
+//    Trigger — moved off job #16's own 2026-10-02, see that cron's own
+//    comment) and fills in results wherever they're missing. Manual
+//    equivalent: GET /debug-backfill-raceday-results.
 //
 // 16. Tracked-horse entry alert emails (Cron Trigger -> scheduled(), plus a
 //    manual GET /debug-run-scheduled for on-demand testing without waiting
@@ -458,8 +459,9 @@
 // 21. Stable Tour note dedupe (Cron Trigger -> scheduled(), plus manual GET
 //    /debug-dedupe-notes) — deletes exact-duplicate notes (same trainer,
 //    same horse, byte-identical text after whitespace normalization),
-//    keeping the earliest by capturedAt. Piggybacks the existing job #16
-//    Cron Trigger, no new trigger needed. Deliberately narrow: a live audit
+//    keeping the earliest by capturedAt. Runs once a day on the 13:30 UTC
+//    slot of SIDE_JOBS_CRON's Cron Trigger (moved off job #16's own
+//    2026-10-02 — see that cron's own comment). Deliberately narrow: a live audit
 //    (2026-09-03) found 227 true duplicates from articles getting
 //    re-imported a few days apart, but ALSO found that "same trainer+horse
 //    +source link" is NOT a safe duplicate signal — every one of 39 such
@@ -488,7 +490,8 @@
 //    "never clears on empty match" safety rule. Also pulls that date's
 //    whole-card "Full Card Recap:" writeup (record.fullCardRecap, manual
 //    set/clear at POST /raceday/fullcard) in the same read-modify-write.
-// 24. BloodHorse News (Cron Trigger -> scheduled(), piggybacking job #16's,
+// 24. BloodHorse News (Cron Trigger -> scheduled(), on SIDE_JOBS_CRON's
+//    twice-daily slot since 2026-10-02 — see that cron's own comment —
 //    plus manual GET /debug-run-bloodhorse) — see runBloodHorseImport()'s
 //    own comment for the full design. Unlike jobs #7/#17/#19/#20, this one
 //    is entirely server-side: fetches BLOODHORSE_FEED_URL, matches quoted
@@ -500,7 +503,8 @@
 //    those polls replayed the ENTIRE import history from scratch. This job
 //    can't have that failure mode — its dedup (bloodhorseSeenKvKey(), one
 //    KV flag per article ID) lives in the Worker, not the browser.
-// 25. TDN Main Feed (Cron Trigger -> scheduled(), piggybacking job #16's,
+// 25. TDN Main Feed (Cron Trigger -> scheduled(), on SIDE_JOBS_CRON's
+//    twice-daily slot since 2026-10-02 — see that cron's own comment —
 //    plus manual GET /debug-run-tdn-main) — see runTdnMainImport()'s own
 //    comment for the full design. Same fully-server-side shape as job #24
 //    (KV dedup, no client/localStorage involvement), widening job #7's TDN
@@ -541,6 +545,18 @@
 // both the EDT and EST UTC hours for 7am/3pm Eastern and only does work when
 // it actually is 7am or 3pm Eastern, so unlike the two above it never needs
 // a DST edit.
+// A FOURTH Cron Trigger, "0,30 13,21 * * *" (SIDE_JOBS_CRON — the expression
+// must match exactly, scheduled() dispatches on it), was added 2026-10-02 to
+// carry every import/maintenance job that used to piggyback on the morning/
+// evening entry-alert trigger above (jobs #15/#21/#24/#25/#28-31) — see
+// SIDE_JOBS_CRON's own comment for why (the entry-alert emails were
+// silently sending 0 on days those jobs' combined subrequests exceeded
+// Cloudflare's per-invocation cap). Fixed UTC times, no DST edit needed —
+// runSideJobs() dispatches on event.scheduledTime's own minute/hour, not
+// the literal cron string. DEPLOY ORDER MATTERS: paste and deploy this file
+// FIRST, then add this fourth trigger — adding the trigger before the code
+// that recognizes it is live would make the OLD scheduled() handler treat
+// it as an entry-alert fire and send extra digests.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -683,6 +699,15 @@ export default {
       }
       return;
     }
+    // Same isolation as NYRA News above, added 2026-10-02 — see
+    // SIDE_JOBS_CRON's own comment for why: every import/maintenance job
+    // that used to run alongside the entry-alert emails below now runs here
+    // instead, on its own Cron Trigger, so a subrequest-heavy news day can
+    // never again starve the emails of their own budget.
+    if (event.cron === SIDE_JOBS_CRON) {
+      runSideJobs(event, env, ctx);
+      return;
+    }
     // Confirmed real bug (2026-08-26): this was `event.waitUntil`, which
     // doesn't exist in the module-worker syntax this file uses — waitUntil
     // lives on `ctx` (the ExecutionContext), not the ScheduledController.
@@ -709,12 +734,32 @@ export default {
     const { hour } = nyNowParts();
     const isEveningRun = hour >= 14;
     const alertOptions = isEveningRun ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
+    // This fire now runs ONLY the entry-alert emails — see SIDE_JOBS_CRON's
+    // own comment for why everything else that used to run alongside them
+    // here got moved to its own Cron Trigger.
     ctx.waitUntil(
       runEntryAlerts(env, "scheduled", alertOptions).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
     );
-    // Jobs #24 and #25 — run on both fires (their own KV dedup makes that
-    // safe, and twice-daily freshness is worth it for a news source),
-    // unlike the two below which are gated to once a day.
+  },
+};
+
+// SIDE_JOBS_CRON's actual dispatch — fires at 13:00, 13:30, 21:00, and 21:30
+// UTC. Keyed off event.scheduledTime's own minute/hour (not the literal
+// cron string, same DST-safety reasoning as the NYRA News check above) so a
+// missed twice-a-year DST edit can't misroute a run: minute<30 (13:00/21:00)
+// is the twice-daily news-import slot (moved here from job #16's Cron
+// Trigger — see SIDE_JOBS_CRON's own comment); the 13:30 slot is the
+// once-daily jobs that were gated to the morning fire there; 21:30 does
+// nothing (kept as its own slot rather than reusing 13:30's gate, so a
+// slipped DST edit that shifted a fire by an hour couldn't accidentally
+// double-run the once-daily jobs).
+function runSideJobs(event, env, ctx) {
+  const fireTime = new Date(event.scheduledTime);
+  const hour = fireTime.getUTCHours();
+  const minute = fireTime.getUTCMinutes();
+  if (minute < 30) {
+    // Jobs #24-26 and #28-31 — run on both fires (their own KV dedup makes
+    // that safe, and twice-daily freshness is worth it for a news source).
     ctx.waitUntil(
       runBloodHorseImport(env).catch((err) => console.error("BloodHorse import failed", err.message))
     );
@@ -724,8 +769,6 @@ export default {
     ctx.waitUntil(
       runDrfImport(env).catch((err) => console.error("DRF import failed", err.message))
     );
-    // Jobs #28-31 — same reasoning as #24-26 above: run on both daily fires,
-    // each with its own KV dedup so that's safe.
     ctx.waitUntil(
       runStableTourFeedImport(env).catch((err) => console.error("Stable Tour feed import failed", err.message))
     );
@@ -738,24 +781,25 @@ export default {
     ctx.waitUntil(
       runSmartPonyImport(env).catch((err) => console.error("SmartPony import failed", err.message))
     );
-    // These two piggyback on job #16's Cron Trigger rather than needing
-    // their own, but only make sense once a day — gated to the morning fire
-    // only so adding the evening trigger doesn't silently double their
+    return;
+  }
+  if (hour === 13) {
+    // Only make sense once a day — gated to the 13:30 slot (not also
+    // 21:30) so adding the evening slot doesn't silently double their
     // frequency (and KV read/write volume; see the KV write-quota incident
     // this project already had once).
-    if (!isEveningRun) {
-      ctx.waitUntil(
-        backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
-      );
-      ctx.waitUntil(
-        dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
-      );
-      ctx.waitUntil(
-        computeTrainerAngleStats(env).catch((err) => console.error("Trainer angle stats computation failed", err.message))
-      );
-    }
-  },
-};
+    ctx.waitUntil(
+      backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
+    );
+    ctx.waitUntil(
+      dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
+    );
+    ctx.waitUntil(
+      computeTrainerAngleStats(env).catch((err) => console.error("Trainer angle stats computation failed", err.message))
+    );
+  }
+  // 21:30 UTC — no work.
+}
 
 async function handleRequest(request, env) {
     const url = new URL(request.url);
@@ -7872,6 +7916,22 @@ async function fetchNyraNews(track, options = {}) {
 // (trainer, jockey, horse, link-without-fragment), same as /notes/bulk.
 // The notes key is written once per run, only if something was added.
 const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (11/19 UTC) and EST (12/20 UTC)
+// Confirmed real 2026-10-02: /debug-last-run showed the entry-alert emails
+// themselves sending 0, with tracks failing on "Too many subrequests by
+// single Worker invocation" -- scheduled() was starting runEntryAlerts() in
+// the SAME invocation as six other jobs (BloodHorse/TDN-main/DRF on both
+// fires, backfill/dedupe/trainer-angle-stats on the morning fire), all
+// sharing one subrequest budget. The entry-alert emails are the most
+// important thing this Worker does, so they now get a run to themselves --
+// every import/maintenance job that used to piggyback on job #16's Cron
+// Trigger (jobs #21/#24/#25/#28-31, plus backfillRaceDayResults/
+// dedupeStableTourNotes/computeTrainerAngleStats) moved here instead. Fixed
+// UTC times (not NY-local like job #16 itself) since this has no "send at
+// 8am Eastern" requirement to track across DST -- see runSideJobs() for the
+// actual dispatch, keyed off event.scheduledTime's minute/hour rather than
+// the literal cron string for the same DST-safety reason NYRA_NEWS_CRON's
+// own check above uses nyNowParts() instead of matching its cron verbatim.
+const SIDE_JOBS_CRON = "0,30 13,21 * * *";
 const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
 const NYRA_IMPORT_MAX_NEW_PER_RUN = 5; // ~7 ms CPU each; a backlog drains over a few runs
 const NYRA_IMPORT_MAX_AGE_DAYS = 28;
@@ -8037,9 +8097,10 @@ async function runNyraNewsImport(env, { force = false } = {}) {
 // per-device with no server memory of what had already been processed.
 // This job instead runs entirely inside the Worker — fetch, parse, match
 // against tracked trainers (resolveTrackedTrainer(), same function jobs
-// #7/#17 rely on client-side), and write, all in one place — piggybacking
-// job #16's Cron Trigger (both daily fires, see runBloodHorseImport()'s own
-// comment) rather than depending on anyone's browser ever being open.
+// #7/#17 rely on client-side), and write, all in one place — running on
+// SIDE_JOBS_CRON's twice-daily slot (see that cron's own comment; moved off
+// job #16's Cron Trigger 2026-10-02) rather than depending on anyone's
+// browser ever being open.
 // Dedup is server-side KV, one key per article ID (bloodhorseSeenKvKey(),
 // same one-flag-per-item shape as raceNotifyKvKey() — deliberately NOT one
 // big JSON set, which would need a read-modify-write on every single check
@@ -8254,11 +8315,12 @@ function guessHorseFromTitleSafely(title, paragraphs, trackedTrainers) {
   return guess;
 }
 
-// Piggybacks job #16's Cron Trigger (both the morning and evening fires —
-// unlike backfillRaceDayResults()/dedupeStableTourNotes(), which are gated
-// to morning-only, this is cheap enough (BLOODHORSE_MAX_ARTICLES_PER_RUN
-// caps it) and benefits from checking twice a day, not once) rather than
-// needing its own. Also reachable on demand at GET /debug-run-bloodhorse.
+// Runs on SIDE_JOBS_CRON's twice-daily slot (moved off job #16's Cron
+// Trigger 2026-10-02 — see that cron's own comment) — unlike
+// backfillRaceDayResults()/dedupeStableTourNotes(), which are gated to the
+// once-daily slot, this is cheap enough (BLOODHORSE_MAX_ARTICLES_PER_RUN
+// caps it) and benefits from checking twice a day, not once. Also reachable
+// on demand at GET /debug-run-bloodhorse.
 async function runBloodHorseImport(env) {
   let checked = 0;
   let written = 0;
@@ -8408,9 +8470,9 @@ function tdnMainSeenKvKey(slug) {
   return `tdnmain:seen:${String(slug).replace(/[^a-z0-9]/gi, "").slice(0, 40)}`;
 }
 
-// Piggybacks job #16's Cron Trigger the same way BloodHorse (job #24)
-// does — see that job's own comment on why both daily fires (not just the
-// morning one) make sense here. Also reachable on demand at GET
+// Runs on SIDE_JOBS_CRON's twice-daily slot the same way BloodHorse (job
+// #24) does — see that job's own comment on why both daily fires (not just
+// the once-daily slot) make sense here. Also reachable on demand at GET
 // /debug-run-tdn-main.
 async function runTdnMainImport(env) {
   let checked = 0;
@@ -8517,9 +8579,10 @@ async function runTdnMainImport(env) {
 // real misattribution bug (confirmed 2026-09-30, 677 bad notes) that a
 // client-only job has no way to get patched everywhere at once — a stale
 // browser tab just keeps running the OLD code until that tab reloads. Moved
-// here so all four run on job #16's existing Cron Trigger (both daily
-// fires, same as BloodHorse/TDN-main/DRF below — no new Cron Trigger
-// needed) regardless of whether the app is open anywhere. The client-side
+// here so all four run on SIDE_JOBS_CRON's twice-daily slot (same as
+// BloodHorse/TDN-main/DRF below — originally job #16's existing Cron
+// Trigger, moved 2026-10-02, see that cron's own comment) regardless of
+// whether the app is open anywhere. The client-side
 // originals are retired in index.html in the SAME change (see each one's
 // own retirement comment there) — not doing that in the same deploy is
 // exactly how job #20's old client version kept running in parallel and
