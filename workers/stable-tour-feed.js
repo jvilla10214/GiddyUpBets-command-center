@@ -9386,35 +9386,54 @@ function smartponyMedicationLabel(code) {
   return code;
 }
 
+// Confirmed real 2026-10-02: this used to be TWO fetches (races, then
+// race_entries filtered by the race IDs from the first) — with 11 of
+// ALERT_TRACKS' 13 tracks routed through this function, that alone was
+// ~22 subrequests in one runEntryAlerts() invocation, enough by itself
+// (before even counting Saratoga/Belmont/Del Mar or a retry) to exceed
+// Cloudflare's 50-subrequest-per-invocation cap — confirmed directly via
+// /debug-last-run showing "Too many subrequests" on most tracks even
+// AFTER runEntryAlerts() got its own isolated Cron Trigger (2026-10-02),
+// proving the problem was never just "sharing a budget with other jobs."
+// Combined into ONE request via PostgREST's embedded-resource join
+// (race_entries -> races), confirmed directly against the live API: the
+// relationship name has to be explicit (races!fk_race_entries_race_id,
+// not just races) since race_entries carries two separate FKs to races —
+// PostgREST's own error without it ("more than one relationship was
+// found") names the exact fix. The `!inner` modifier is what makes the
+// races.track/races.race_date filter actually restrict which race_entries
+// rows come back at all — without it those fields come back null but
+// every race_entries row in the table is still returned.
+// One real behavior change from the old two-query version: a race that
+// exists in SmartPony's `races` table but has zero `race_entries` rows yet
+// no longer appears at all (the old version still listed it with
+// horses: []). Accepted deliberately — a race with literally nothing
+// entered has nothing for entry-alerts to match anyway, and showing it as
+// an empty placeholder on the Entries tab (this function's other caller)
+// isn't meaningfully more useful than it simply not being there yet.
 async function fetchSmartPonyEntriesDay(track, date) {
   const code = SMARTPONY_TRACK_CODE[track];
   if (!code) return { date, races: [] };
   const timeZone = SMARTPONY_TRACK_TIMEZONE[track] || "America/New_York";
 
-  const racesRes = await fetch(
-    `${SMARTPONY_SUPABASE_URL}/rest/v1/races?track=eq.${code}&race_date=eq.${date}` +
-      `&select=id,race_num,distance_yards,surface,race_class,purse,post_time_utc,is_hurdle_race&order=race_num.asc`,
-    { headers: { apikey: SMARTPONY_ANON_KEY }, cf: { cacheTtl: 300, cacheEverything: true } }
-  );
-  if (!racesRes.ok) throw new Error(`SmartPony races returned HTTP ${racesRes.status}`);
-  const raceRows = await racesRes.json();
-  if (!raceRows.length) return { date, races: [] };
-
-  const raceIdList = raceRows.map((r) => r.id).join(",");
   const entriesRes = await fetch(
-    `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?race_id=in.(${raceIdList})` +
-      `&select=race_id,post_position,program_number,jockey,trainer,owner,weight,medication,ml_odds,is_scratched,` +
-      `horses!fk_race_entries_horse_id(horse_name,sex,birth_year)&order=post_position.asc`,
+    `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?select=race_id,post_position,program_number,jockey,trainer,owner,weight,medication,ml_odds,is_scratched,` +
+      `horses!fk_race_entries_horse_id(horse_name,sex,birth_year),` +
+      `races!fk_race_entries_race_id!inner(id,race_num,distance_yards,surface,race_class,purse,post_time_utc,is_hurdle_race)` +
+      `&races.track=eq.${code}&races.race_date=eq.${date}&order=post_position.asc`,
     { headers: { apikey: SMARTPONY_ANON_KEY }, cf: { cacheTtl: 300, cacheEverything: true } }
   );
   if (!entriesRes.ok) throw new Error(`SmartPony race_entries returned HTTP ${entriesRes.status}`);
   const entryRows = await entriesRes.json();
+  if (!entryRows.length) return { date, races: [] };
 
   const raceYear = parseInt(date.slice(0, 4), 10);
   const entriesByRace = {};
+  const raceInfoById = {};
   for (const e of entryRows) {
     const horse = e.horses || {};
     const age = horse.birth_year ? raceYear - horse.birth_year : null;
+    if (e.races && !raceInfoById[e.race_id]) raceInfoById[e.race_id] = e.races;
     (entriesByRace[e.race_id] ??= []).push({
       postPosition: e.program_number || (e.post_position != null ? String(e.post_position) : null),
       name: horse.horse_name ? titleCaseName(horse.horse_name) : "Unknown",
@@ -9442,6 +9461,7 @@ async function fetchSmartPonyEntriesDay(track, date) {
     return track === "woodbine" && s === "Dirt" ? "Tapeta" : s;
   };
 
+  const raceRows = Object.values(raceInfoById).sort((a, b) => a.race_num - b.race_num);
   const races = raceRows.map((r) => ({
     raceNumber: r.race_num,
     postTimeIso: toTrackLocalIso(r.post_time_utc, timeZone),
