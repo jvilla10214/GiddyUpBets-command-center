@@ -6329,7 +6329,7 @@
     const race = races.find(r => r.raceNumber === selectedEntriesRace);
     const metaBits = [
       race.raceName || null,
-      [race.purse, race.raceType].filter(Boolean).join(" "),
+      [cleanRaceMeta(race.purse), cleanRaceMeta(race.raceType)].filter(Boolean).join(" "),
       [race.distanceLabel, race.surface].filter(Boolean).join(" · "),
     ].filter(Boolean);
 
@@ -7122,8 +7122,15 @@
     `;
   }
 
+  // Archived Belmont 9/26-9/27 and Saratoga 7/29-7/30 (cancelled cards)
+  // were saved with raw NYRA Owners/Breeders HTML in purse/raceType by an
+  // old Worker parser bug — drop any value that's markup, not a label.
+  function cleanRaceMeta(value){
+    return value && !/<[a-z\/]/i.test(value) ? value : null;
+  }
+
   function archiveRaceHtml(entryRace, result, date, recap){
-    const metaBits = [entryRace.purse, entryRace.raceType].filter(Boolean).join(" ");
+    const metaBits = [cleanRaceMeta(entryRace.purse), cleanRaceMeta(entryRace.raceType)].filter(Boolean).join(" ");
     const nameAndMeta = [entryRace.raceName, metaBits].filter(Boolean).join(" — ");
     const distBits = [entryRace.distanceLabel, entryRace.surface].filter(Boolean).join(" · ");
     const timeLabel = formatPostTimeLabel(entryRace.postTimeIso);

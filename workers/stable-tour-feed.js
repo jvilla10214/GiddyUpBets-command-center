@@ -3906,9 +3906,18 @@ function parseNyraRaceFragment(html, date) {
     }
   }
 
-  const purseMatch = html.match(/<section class="flex items-baseline gap-5">[\s\S]*?<div>\s*([\s\S]*?)\s*<\/div>\s*<\/section>/);
+  // Scoped to the one info <section> (never past its own </section>).
+  // Confirmed real bug (2026-10-01): a cancelled race renders a red
+  // "Racing Cancelled" <div class=...> there instead of the plain purse
+  // <div>, and the old unscoped lazy match ran on down the page into the
+  // Owners/Breeders block, archiving that raw HTML as purse/raceType for
+  // Belmont 9/26 + 9/27 and Saratoga 7/29 + 7/30 R8.
+  const infoSection = (html.match(/<section class="flex items-baseline gap-5">((?:(?!<\/section>)[\s\S])*)<\/section>/) || [])[1] || "";
+  const purseMatch = infoSection.match(/<div>\s*([\s\S]*?)\s*<\/div>/);
   let purse = null, raceType = null;
-  if (purseMatch) {
+  if (/Racing Cancelled/i.test(infoSection)) {
+    raceType = "Racing Cancelled";
+  } else if (purseMatch) {
     const lines = purseMatch[1].split("\n").map((s) => decodeEntities(s).trim()).filter(Boolean);
     purse = lines[0] || null;
     raceType = lines.slice(1).join(" ") || null;
