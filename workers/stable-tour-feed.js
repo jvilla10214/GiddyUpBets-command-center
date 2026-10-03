@@ -8822,14 +8822,30 @@ function smartPonyQuoteMisattributed(text, trainerName) {
 // means one KV read per quote, and Cloudflare's free-plan cap on total
 // binding operations (KV/D1/etc.) per invocation is real: this hit "Too
 // many API requests by single Worker invocation" partway through (at 576
-// of 4,598). Bounding the per-run LOOP ITERATION count (not just `checked`,
-// which only counts not-yet-seen ones — every iteration costs a KV read
-// regardless) keeps this job safely under that cap. quotes are already
-// newest-first (fetchSmartPonyQuotes()'s own order=created_at.desc), so
-// capping from the front always processes the newest backlog first and
-// drains into older rows over subsequent runs — same "takes several runs
-// to drain a big one-time backlog" shape as NYRA News/DRF's own history.
+// of 4,598). Bounding the per-run LOOP ITERATION count keeps this job
+// safely under that cap.
+//
+// First version of that fix (same day) just took quotes.slice(0, 300) —
+// confirmed real bug 2026-10-03: since quotes are always refetched
+// newest-first with no cursor, this always re-examines the SAME top-300
+// window every run. Untracked-trainer quotes in that window never get
+// marked seen (deliberate — see below), so they permanently occupy slots
+// in that fixed window forever (confirmed directly: two manual runs in a
+// row both reported "checked: 81", the IDENTICAL count), and the other
+// ~4,500 older quotes were NEVER reached by any number of scheduled runs.
+// Fixed with a real cursor (SMARTPONY_DRAIN_CURSOR_KV_KEY) storing the
+// quoteId of the last quote walked, not a raw array index or offset —
+// robust to new quotes landing at the newest end and shifting everything
+// below them, since position is located by ID each run, not assumed
+// stable. Once a full pass reaches the end of the list, it wraps back to
+// the newest and starts over (quotes.findIndex returns -1 for a cursor
+// that's since aged out of the 120-day window too, which the same
+// wrap-to-start fallback handles) — at this cadence a full pass takes
+// roughly (total quotes / 300 / fires-per-day) days, after which an
+// untracked-trainer quote DOES get reconsidered (unlike before, forever),
+// just once per pass instead of every single run.
 const SMARTPONY_MAX_PER_RUN = 300;
+const SMARTPONY_DRAIN_CURSOR_KV_KEY = "smartpony:drain:cursor";
 async function runSmartPonyImport(env) {
   let checked = 0;
   let written = 0;
@@ -8839,12 +8855,28 @@ async function runSmartPonyImport(env) {
     const notes = state.notes;
     let addedAny = false;
     const quotes = await fetchSmartPonyQuotes(env);
-    for (const q of quotes.slice(0, SMARTPONY_MAX_PER_RUN)) {
+
+    const cursorId = await env.STABLE_KV.get(SMARTPONY_DRAIN_CURSOR_KV_KEY);
+    let startIdx = 0;
+    if (cursorId) {
+      const idx = quotes.findIndex((q) => q.quoteId === cursorId);
+      startIdx = idx === -1 ? 0 : idx + 1; // -1 means the cursor quote aged out of the 120-day window — restart from the top
+    }
+    let slice = quotes.slice(startIdx, startIdx + SMARTPONY_MAX_PER_RUN);
+    if (!slice.length && quotes.length) {
+      // Reached the end of a full pass — wrap around so quotes that have
+      // arrived since are picked up, and previously-untracked ones get a
+      // fresh look.
+      startIdx = 0;
+      slice = quotes.slice(0, SMARTPONY_MAX_PER_RUN);
+    }
+
+    for (const q of slice) {
       const seenKey = `smartpony:seen:${q.quoteId}`;
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
       const matchedTrainer = resolveTrackedTrainer(q.trainerName, state.trainers);
-      if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next poll
+      if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next full pass
       if (smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
         skippedMisattributed++;
         await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
@@ -8867,11 +8899,14 @@ async function runSmartPonyImport(env) {
       addedAny = true;
       await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
     }
+    if (slice.length) {
+      await env.STABLE_KV.put(SMARTPONY_DRAIN_CURSOR_KV_KEY, slice[slice.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 180 });
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
       await bumpDataVersion(env);
     }
-    return { checked, written, skippedMisattributed };
+    return { checked, written, skippedMisattributed, scanned: slice.length, startIdx, totalQuotes: quotes.length };
   } catch (err) {
     console.error("SmartPony import failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
