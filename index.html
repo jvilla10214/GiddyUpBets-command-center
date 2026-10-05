@@ -2033,6 +2033,25 @@
   #stableFeedCheckBtn:hover{ background: rgba(111,168,201,0.1); }
   #stableResetImportHistoryBtn{ background:none; border: 1px solid var(--parchment-dim); color: var(--parchment-dim); }
   #stableResetImportHistoryBtn:hover{ background: rgba(255,255,255,0.06); color: var(--parchment); }
+
+  /* ---------- Import Pipeline Health ---------- */
+  .pipeline-health{ margin-top: 10px; display:flex; flex-direction:column; gap:6px; }
+  .pipeline-health:empty{ display:none; }
+  .pipeline-health-banner{
+    display:flex; align-items:center; gap:8px;
+    background: rgba(179,71,59,0.12); border:1px solid rgba(179,71,59,0.35);
+    color:#e2897c; border-radius:8px; padding:8px 12px; font-size:12.5px;
+  }
+  .pipeline-health-row{
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    background: var(--panel-2); border:1px solid var(--panel-border);
+    border-radius:8px; padding:8px 12px; font-size:12.5px;
+  }
+  .pipeline-health-row .pill{ flex:0 0 auto; }
+  .pipeline-health-name{ font-weight:600; color: var(--parchment); flex:0 0 auto; }
+  .pipeline-health-detail{ color: var(--parchment-dim); font-family:'IBM Plex Mono', monospace; font-size: 11.5px; }
+  .pill.warn .dot{ background: var(--tote-amber); box-shadow:0 0 8px var(--tote-amber); animation:none; }
+  .pill.muted .dot{ background: var(--parchment-dim); box-shadow:none; animation:none; }
   .stable-bulk-import{
     background: var(--panel-2);
     border: 1px solid var(--panel-border);
@@ -3485,7 +3504,7 @@
           </div>
           <div class="bias-form-actions">
             <button type="button" id="stableFeedSaveBtn">Save</button>
-            <button type="button" id="stableFeedCheckBtn">Check Now</button>
+            <button type="button" id="stableFeedCheckBtn">Check Pipeline Health</button>
             <button type="button" id="stableResetImportHistoryBtn" title="Forget which articles this browser already imported, so the next check re-fetches everything into the shared store">Reset Auto-Import History</button>
           </div>
           <div class="log-note" id="stableFeedStatus">
@@ -3494,6 +3513,15 @@
             without it you can still view everyone's notes, just not change them. This also checks
             thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per detected horse.
           </div>
+          <!-- One health view across every automated job (side jobs #24-26/
+               #28-31, NYRA News, both entry-alert runs) — built after the
+               2026-10-04 KV quota-wall incident, which only got noticed
+               because a cleanup call happened to land at that exact moment.
+               Repurposes the "Check Now" button above (previously a dead
+               stub once auto-import moved server-side) since it already
+               represented "is the automatic import working" — now it
+               actually answers that. -->
+          <div class="pipeline-health" id="pipelineHealthPanel"></div>
         </div>
 
         <div class="stable-bulk-import">
@@ -6147,7 +6175,7 @@
   // key each already used), so clicking one chip doesn't affect the others,
   // and a horse with zero signals still renders nothing, same as before.
   const SIGNAL_LABEL = {
-    insight: { aligned: "Aligned", caution: "Worth a look", "no-signal": "No signal" },
+    insight: { aligned: "Aligned", caution: "Worth a look" },
     classmove: { up: "Up in class", down: "Down in class", same: "Same level" },
     angle: { elevated: "Elevated", depressed: "Below average" },
   };
@@ -6156,7 +6184,7 @@
   // same neutral gray, so this reuses one set of chip/label CSS rules
   // instead of duplicating them per verdict type.
   const SIGNAL_COLOR_CLASS = {
-    insight: { aligned: "entries-signal-rail-green", caution: "entries-signal-tote-amber", "no-signal": "entries-signal-neutral" },
+    insight: { aligned: "entries-signal-rail-green", caution: "entries-signal-tote-amber" },
     classmove: { up: "entries-signal-sky", down: "entries-signal-clay", same: "entries-signal-neutral" },
     angle: { elevated: "entries-signal-tote-amber", depressed: "entries-signal-silk-red" },
   };
@@ -6168,7 +6196,7 @@
     const signals = [];
 
     const insightVerdict = raceInsightVerdict(trainer, horseName, race);
-    if (insightVerdict){
+    if (insightVerdict && insightVerdict.state !== "no-signal"){
       signals.push({
         key: `${trainer}|${horseName}`,
         label: SIGNAL_LABEL.insight[insightVerdict.state],
@@ -10078,10 +10106,11 @@
   });
   // All four sources this used to manually re-check now run automatically
   // server-side (both daily cron fires, regardless of whether this tab is
-  // open) — nothing left here to trigger on demand.
-  $("stableFeedCheckBtn").addEventListener("click", () => {
-    $("stableFeedStatus").textContent = "Auto-import now runs automatically server-side (This Is Horse Racing, TDN Notebook, Horse Racing Nation, SmartPony) — no manual check needed.";
-  });
+  // open) — nothing to manually re-trigger here, but "is the automatic
+  // import actually working" is still a real question worth answering on
+  // demand — see checkPipelineHealth() below, which this button now runs
+  // instead of showing a static "no action needed" message.
+  $("stableFeedCheckBtn").addEventListener("click", checkPipelineHealth);
   // Only News Wire's own "seen" tracking is left to reset here — the four
   // Stable Tour auto-import jobs this used to also clear (This Is Horse
   // Racing, TDN Notebook, HRN, SmartPony) all moved server-side 2026-10-01,
@@ -10170,6 +10199,92 @@
     const diffHr = Math.round(diffMin / 60);
     if (diffHr < 24) return `${diffHr}h ago`;
     return `${Math.round(diffHr / 24)}d ago`;
+  }
+
+  // ---------- Import Pipeline Health ----------
+  // Reads the worker's /debug-pipeline-health route (built 2026-10-05 after
+  // the KV quota-wall incident) and renders it as a real status list instead
+  // of the raw JSON — one row per job, worst-first (errors/quota hits before
+  // clean runs), so a broken job is the first thing seen, not something
+  // scrolled past. Display-only: this route never writes anything, so it's
+  // safe to call as often as the user clicks the button.
+  const PIPELINE_JOB_LABEL = {
+    bloodhorse: "BloodHorse Quotes", tdnmain: "TDN Main Feed", drf: "DRF Import",
+    stabletourfeed: "Stable Tour Feed", tdnnotebook: "TDN Notebook", hrnnews: "HRN News",
+    smartpony: "SmartPony Quotes", nyranews: "NYRA News Import",
+    backfillresults: "Race Day Results Backfill", dedupenotes: "Stable Tour Note Dedupe",
+    trainerangle: "Trainer Angle Stats", entryalerts_am: "Entry Alerts (AM)",
+    entryalerts_eve: "Entry Alerts (PM)",
+  };
+  // Pulls whatever common count-shaped fields a job's own summary happens to
+  // have, rather than hand-mapping each job's distinct return shape — every
+  // job here reports a different mix of these same handful of names (see
+  // runBloodHorseImport/runSmartPonyImport/backfillRaceDayResults/
+  // dedupeStableTourNotes's own return statements), so this covers all of
+  // them without 11 separate formatters to keep in sync.
+  function summarizeJobSummary(summary){
+    if (!summary || typeof summary !== "object") return "";
+    const parts = [];
+    for (const key of ["written", "checked", "backfilled", "scanned", "sent", "removed", "duplicateGroups", "skippedMisattributed"]){
+      if (typeof summary[key] === "number") parts.push(`${summary[key]} ${key}`);
+    }
+    return parts.join(" · ");
+  }
+  // Entry alerts store a slightly different shape (ranAt/source/checked/sent/
+  // tracks, see recordEntryAlertsRun()) than every other job (ranAt/ok/
+  // summary/error, see trackedRun()) — this normalizes both into one
+  // {status, detail} the render function doesn't need to know about.
+  function classifyPipelineJob(record){
+    if (!record || !record.ranAt) return { status: "muted", detail: "never run" };
+    if (typeof record.sent === "number") { // entry-alerts shape
+      return { status: "ok", detail: `${record.checked ?? 0} checked · ${record.sent} sent` };
+    }
+    if (record.ok === false){
+      const quotaHit = /quota|limit exceeded|too many/i.test(record.error || "");
+      return { status: quotaHit ? "warn" : "err", detail: record.error || "failed" };
+    }
+    return { status: "ok", detail: summarizeJobSummary(record.summary) || "ran — nothing to report" };
+  }
+  function renderPipelineHealth(jobs){
+    const entries = Object.keys(PIPELINE_JOB_LABEL).map(key => {
+      const { status, detail } = classifyPipelineJob(jobs[key]);
+      return { key, status, detail, ranAt: jobs[key]?.ranAt || null };
+    });
+    const severityRank = { err: 0, warn: 1, muted: 2, ok: 3 };
+    entries.sort((a, b) => severityRank[a.status] - severityRank[b.status]);
+    const brokenCount = entries.filter(e => e.status === "err" || e.status === "warn").length;
+    const banner = brokenCount
+      ? `<div class="pipeline-health-banner">⚠ ${brokenCount} job${brokenCount === 1 ? "" : "s"} need${brokenCount === 1 ? "s" : ""} attention</div>`
+      : "";
+    const rows = entries.map(e => `
+      <div class="pipeline-health-row">
+        <span class="pill ${e.status}"><span class="dot"></span></span>
+        <span class="pipeline-health-name">${escapeHtml(PIPELINE_JOB_LABEL[e.key])}</span>
+        <span class="pipeline-health-detail">${e.ranAt ? fmtRelativeTime(e.ranAt) + " · " : ""}${escapeHtml(e.detail)}</span>
+      </div>`).join("");
+    $("pipelineHealthPanel").innerHTML = banner + rows;
+  }
+  async function checkPipelineHealth(){
+    const key = loadStableApiKey();
+    if (!key){
+      $("stableFeedStatus").textContent = "Enter the passphrase above first — Pipeline Health needs it, same as any other admin check.";
+      return;
+    }
+    $("stableFeedStatus").textContent = "Checking pipeline health…";
+    try{
+      const res = await fetch(stableApiUrl("/debug-pipeline-health"), { headers: { "X-Stable-Key": key }, cache: "no-store" });
+      if (res.status === 401){
+        $("stableFeedStatus").textContent = "Unauthorized — check the passphrase above.";
+        return;
+      }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      renderPipelineHealth(data.jobs || {});
+      $("stableFeedStatus").textContent = `Pipeline health checked · ${fmtRelativeTime(new Date().toISOString())}.`;
+    } catch(err){
+      console.error("Pipeline health check failed", err);
+      $("stableFeedStatus").textContent = "Pipeline health check failed: " + err.message;
+    }
   }
 
   // Filter buttons are generated from ALERT_TYPES rather than hardcoded, so

@@ -694,7 +694,7 @@ export default {
     if (event.cron === NYRA_NEWS_CRON) {
       if (NYRA_NEWS_RUN_HOURS_ET.includes(nyNowParts().hour)) {
         ctx.waitUntil(
-          runNyraNewsImport(env).catch((err) => console.error("NYRA News import failed", err.message))
+          trackedRun(env, "nyranews", () => runNyraNewsImport(env), "NYRA News import")
         );
       }
       return;
@@ -761,25 +761,25 @@ function runSideJobs(event, env, ctx) {
     // Jobs #24-26 and #28-31 — run on both fires (their own KV dedup makes
     // that safe, and twice-daily freshness is worth it for a news source).
     ctx.waitUntil(
-      runBloodHorseImport(env).catch((err) => console.error("BloodHorse import failed", err.message))
+      trackedRun(env, "bloodhorse", () => runBloodHorseImport(env), "BloodHorse import")
     );
     ctx.waitUntil(
-      runTdnMainImport(env).catch((err) => console.error("TDN main feed import failed", err.message))
+      trackedRun(env, "tdnmain", () => runTdnMainImport(env), "TDN main feed import")
     );
     ctx.waitUntil(
-      runDrfImport(env).catch((err) => console.error("DRF import failed", err.message))
+      trackedRun(env, "drf", () => runDrfImport(env), "DRF import")
     );
     ctx.waitUntil(
-      runStableTourFeedImport(env).catch((err) => console.error("Stable Tour feed import failed", err.message))
+      trackedRun(env, "stabletourfeed", () => runStableTourFeedImport(env), "Stable Tour feed import")
     );
     ctx.waitUntil(
-      runTdnNotebookImport(env).catch((err) => console.error("TDN Saratoga Notebook import failed", err.message))
+      trackedRun(env, "tdnnotebook", () => runTdnNotebookImport(env), "TDN Saratoga Notebook import")
     );
     ctx.waitUntil(
-      runHrnNewsImport(env).catch((err) => console.error("Horse Racing Nation import failed", err.message))
+      trackedRun(env, "hrnnews", () => runHrnNewsImport(env), "Horse Racing Nation import")
     );
     ctx.waitUntil(
-      runSmartPonyImport(env).catch((err) => console.error("SmartPony import failed", err.message))
+      trackedRun(env, "smartpony", () => runSmartPonyImport(env), "SmartPony import")
     );
     return;
   }
@@ -789,13 +789,13 @@ function runSideJobs(event, env, ctx) {
     // frequency (and KV read/write volume; see the KV write-quota incident
     // this project already had once).
     ctx.waitUntil(
-      backfillRaceDayResults(env).catch((err) => console.error("Race day results backfill failed", err.message))
+      trackedRun(env, "backfillresults", () => backfillRaceDayResults(env), "Race day results backfill")
     );
     ctx.waitUntil(
-      dedupeStableTourNotes(env).catch((err) => console.error("Stable Tour note dedupe failed", err.message))
+      trackedRun(env, "dedupenotes", () => dedupeStableTourNotes(env), "Stable Tour note dedupe")
     );
     ctx.waitUntil(
-      computeTrainerAngleStats(env).catch((err) => console.error("Trainer angle stats computation failed", err.message))
+      trackedRun(env, "trainerangle", () => computeTrainerAngleStats(env), "Trainer angle stats computation")
     );
   }
   // 21:30 UTC — no work.
@@ -1206,6 +1206,7 @@ async function handleRequest(request, env) {
         if (typeof p.source === "string") note.source = p.source;
         if (typeof p.note === "string") note.note = p.note;
         if (typeof p.trainer === "string") note.trainer = p.trainer;
+        if (typeof p.jockey === "string") note.jockey = p.jockey;
         if (typeof p.horse === "string") note.horse = p.horse;
         if (typeof p.date === "string") note.date = p.date;
         patched++;
@@ -1886,6 +1887,7 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-bloodhorse" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runBloodHorseImport(env);
+      await recordPipelineRun(env, "bloodhorse", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1894,6 +1896,7 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-tdn-main" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runTdnMainImport(env);
+      await recordPipelineRun(env, "tdnmain", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1903,6 +1906,7 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-nyra-import" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runNyraNewsImport(env, { force: url.searchParams.get("force") === "1" });
+      await recordPipelineRun(env, "nyranews", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1918,6 +1922,7 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-drf" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runDrfImport(env);
+      await recordPipelineRun(env, "drf", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1926,21 +1931,25 @@ async function handleRequest(request, env) {
     if (url.pathname === "/debug-run-stable-tour-feed" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runStableTourFeedImport(env);
+      await recordPipelineRun(env, "stabletourfeed", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-tdn-notebook" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runTdnNotebookImport(env);
+      await recordPipelineRun(env, "tdnnotebook", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-hrn-news" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runHrnNewsImport(env);
+      await recordPipelineRun(env, "hrnnews", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-smartpony" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runSmartPonyImport(env);
+      await recordPipelineRun(env, "smartpony", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1958,8 +1967,10 @@ async function handleRequest(request, env) {
       try {
         result = await dedupeStableTourNotes(env);
       } catch (err) {
+        await recordPipelineRun(env, "dedupenotes", { ok: false, error: err.message });
         return json({ error: `Note dedupe run failed: ${err.message}` }, 500);
       }
+      await recordPipelineRun(env, "dedupenotes", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1973,8 +1984,10 @@ async function handleRequest(request, env) {
       try {
         result = await computeTrainerAngleStats(env);
       } catch (err) {
+        await recordPipelineRun(env, "trainerangle", { ok: false, error: err.message });
         return json({ error: `Trainer angle stats computation failed: ${err.message}` }, 500);
       }
+      await recordPipelineRun(env, "trainerangle", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -1988,8 +2001,10 @@ async function handleRequest(request, env) {
       try {
         result = await backfillRaceDayResults(env);
       } catch (err) {
+        await recordPipelineRun(env, "backfillresults", { ok: false, error: err.message });
         return json({ error: `Race day results backfill failed: ${err.message}` }, 500);
       }
+      await recordPipelineRun(env, "backfillresults", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
 
@@ -2139,6 +2154,33 @@ async function handleRequest(request, env) {
         am: amRaw ? JSON.parse(amRaw) : { ranAt: null },
         eve: eveRaw ? JSON.parse(eveRaw) : { ranAt: null },
       }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // One health view across every automated job (the 10 side jobs plus NYRA
+    // News and both entry-alert runs) — built after the 2026-10-04 KV
+    // quota-wall incident, which only got noticed because a cleanup call
+    // happened to land at that exact moment. Lists every pipeline:lastrun:*
+    // key instead of hardcoding each job's name here too, so a job added
+    // later (another trackedRun() call site) shows up automatically. Each
+    // job's own record (ok/error/summary) comes straight from trackedRun()
+    // or its manual-route equivalent — this route only reads KV back, it
+    // doesn't compute anything new.
+    if (url.pathname === "/debug-pipeline-health" && request.method === "GET") {
+      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
+      const listed = await env.STABLE_KV.list({ prefix: "pipeline:lastrun:" });
+      const jobs = {};
+      await Promise.all(listed.keys.map(async (k) => {
+        const jobName = k.name.slice("pipeline:lastrun:".length);
+        const raw = await env.STABLE_KV.get(k.name);
+        jobs[jobName] = raw ? JSON.parse(raw) : null;
+      }));
+      const [amRaw2, eveRaw2] = await Promise.all([
+        env.STABLE_KV.get("entryalerts:lastrun:am"),
+        env.STABLE_KV.get("entryalerts:lastrun:eve"),
+      ]);
+      jobs.entryalerts_am = amRaw2 ? JSON.parse(amRaw2) : null;
+      jobs.entryalerts_eve = eveRaw2 ? JSON.parse(eveRaw2) : null;
+      return json({ jobs }, 200, { "Cache-Control": "no-store" });
     }
 
     // Wipes every job #16 dedup record (see raceNotifyKvKey()) — a reset
@@ -3158,7 +3200,20 @@ async function backfillRaceDayResults(env) {
     const raw = await env.STABLE_KV.get(key.name);
     if (!raw) continue;
     const record = JSON.parse(raw);
-    if (Array.isArray(record.results) && record.results.length) continue; // already has results
+    // Bug fixed 2026-10-04: used to skip once ANY results array existed, but
+    // every source (fetchNyraResultsDay/fetchDmtcResultsDay/
+    // fetchSportingLifeResultsDay/fetchSmartPonyResultsDay) always returns
+    // one entry per race in the card, with isFinal:false placeholders for
+    // races that haven't run yet — so a snapshot taken mid-card (e.g. the
+    // once-daily run catching a card after only its early races had gone
+    // final) got treated as "done" forever, permanently stranding the later
+    // races at isFinal:false with zero finishers. Confirmed live on
+    // Belmont's 2026-10-03 card: races 1-4 final, 5-11 stuck for 2 days
+    // until this fix shipped. Now only skips once every race in the card is
+    // actually final. (A race that's genuinely cancelled/abandoned will
+    // never satisfy that and gets re-checked daily until it ages out past
+    // RACEDAY_BACKFILL_LOOKBACK_DAYS — an acceptable bounded cost.)
+    if (Array.isArray(record.results) && record.results.length && record.results.every(r => r.isFinal)) continue;
 
     checked++;
     let result;
@@ -3168,7 +3223,11 @@ async function backfillRaceDayResults(env) {
         : resultsSource === "smartpony" ? await fetchSmartPonyResultsDay(track, date)
         : await fetchNyraResultsDay(track, date);
     } catch (err) {
-      continue; // best-effort — one bad fetch shouldn't block the rest of the batch
+      // best-effort — one bad fetch shouldn't block the rest of the batch.
+      // Can include Cloudflare's own "Too many subrequests by single Worker
+      // invocation" when several stale days need checking in one run —
+      // self-healing, since a skipped day just gets retried on the next run.
+      continue;
     }
     const races = result?.races || [];
     if (!races.length) continue; // still nothing to backfill — card hasn't gone final yet, or genuinely no results
@@ -5771,6 +5830,35 @@ async function recordEntryAlertsRun(env, source, summary, runLabel = "am") {
     await env.STABLE_KV.put(`entryalerts:lastrun:${runLabel === "eve" ? "eve" : "am"}`, JSON.stringify({ ranAt: new Date().toISOString(), source, ...summary }));
   } catch (err) {
     // best-effort — don't fail the actual run over a bookkeeping write
+  }
+}
+
+// Same reasoning as recordEntryAlertsRun() above, extended to every other
+// side job (jobs #24-26, #28-31, the once-daily maintenance jobs, and NYRA
+// News) — before this, a side job's outcome only ever reached a
+// console.error, which Cloudflare gives no way to retrieve after the fact.
+// A failure (or a quiet, fully-successful run) was otherwise invisible until
+// its downstream symptom showed up days later — confirmed real with the
+// 2026-10-04 KV quota-wall incident, only noticed because a cleanup call
+// happened to be made at that exact moment. trackedRun() wraps a job call so
+// both outcomes get one record each, under one shared key prefix
+// (`pipeline:lastrun:`) that /debug-pipeline-health below can list and read
+// back without needing every job name hardcoded there too.
+async function recordPipelineRun(env, jobName, outcome) {
+  try {
+    await env.STABLE_KV.put(`pipeline:lastrun:${jobName}`, JSON.stringify({ ranAt: new Date().toISOString(), ...outcome }));
+  } catch (err) {
+    // best-effort — don't fail the actual job over a bookkeeping write
+  }
+}
+
+async function trackedRun(env, jobName, fn, label) {
+  try {
+    const result = await fn();
+    await recordPipelineRun(env, jobName, { ok: true, summary: result ?? null });
+  } catch (err) {
+    await recordPipelineRun(env, jobName, { ok: false, error: err.message });
+    console.error(`${label} failed`, err.message);
   }
 }
 
