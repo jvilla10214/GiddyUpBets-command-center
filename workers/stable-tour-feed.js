@@ -2180,6 +2180,33 @@ async function handleRequest(request, env) {
       ]);
       jobs.entryalerts_am = amRaw2 ? JSON.parse(amRaw2) : null;
       jobs.entryalerts_eve = eveRaw2 ? JSON.parse(eveRaw2) : null;
+
+      // Trainer-vs-jockey split per pipeline, computed live from the real
+      // notes rather than a separate incrementing counter — no new KV
+      // writes, always accurate (a counter could drift on a retried run),
+      // and the one extra read here is cheap next to the per-job reads
+      // above. Added 2026-10-05 specifically so the jockey-coverage fix
+      // shipped the same day stays visibly working instead of needing
+      // another full manual audit to notice if it silently regresses —
+      // see readNotesTrainersAndJockeys()'s own comment for the fix itself.
+      const IMPORTED_VIA_TO_JOB = {
+        bloodhorse: "bloodhorse", "tdn-main": "tdnmain", drf: "drf",
+        "stable-tour-feed": "stabletourfeed", "tdn-notebook": "tdnnotebook",
+        "hrn-news": "hrnnews", SmartPony: "smartpony", "nyra-news": "nyranews",
+      };
+      const notesRaw = await env.STABLE_KV.get("notes");
+      const notes = notesRaw ? JSON.parse(notesRaw) : [];
+      const noteSplit = {};
+      for (const n of notes) {
+        const jobName = IMPORTED_VIA_TO_JOB[n.importedVia];
+        if (!jobName) continue;
+        if (!noteSplit[jobName]) noteSplit[jobName] = { trainer: 0, jockey: 0 };
+        if (n.jockey) noteSplit[jobName].jockey++;
+        else if (n.trainer) noteSplit[jobName].trainer++;
+      }
+      for (const jobName of Object.keys(noteSplit)) {
+        if (jobs[jobName]) jobs[jobName].noteSplit = noteSplit[jobName];
+      }
       return json({ jobs }, 200, { "Cache-Control": "no-store" });
     }
 

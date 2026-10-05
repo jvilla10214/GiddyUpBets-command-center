@@ -2123,6 +2123,7 @@
   .pipeline-health-row .pill{ flex:0 0 auto; }
   .pipeline-health-name{ font-weight:600; color: var(--parchment); flex:0 0 auto; }
   .pipeline-health-detail{ color: var(--parchment-dim); font-family:'IBM Plex Mono', monospace; font-size: 11.5px; }
+  .pipeline-health-split{ color: var(--parchment-dim); font-family:'IBM Plex Mono', monospace; font-size: 11px; margin-left: auto; white-space: nowrap; }
   .pill.warn .dot{ background: var(--tote-amber); box-shadow:0 0 8px var(--tote-amber); animation:none; }
   .pill.muted .dot{ background: var(--parchment-dim); box-shadow:none; animation:none; }
   .stable-bulk-import{
@@ -10328,7 +10329,7 @@
   function renderPipelineHealth(jobs){
     const entries = Object.keys(PIPELINE_JOB_LABEL).map(key => {
       const { status, detail } = classifyPipelineJob(jobs[key]);
-      return { key, status, detail, ranAt: jobs[key]?.ranAt || null };
+      return { key, status, detail, ranAt: jobs[key]?.ranAt || null, split: jobs[key]?.noteSplit || null };
     });
     const severityRank = { err: 0, warn: 1, muted: 2, ok: 3 };
     entries.sort((a, b) => severityRank[a.status] - severityRank[b.status]);
@@ -10336,11 +10337,20 @@
     const banner = brokenCount
       ? `<div class="pipeline-health-banner">⚠ ${brokenCount} job${brokenCount === 1 ? "" : "s"} need${brokenCount === 1 ? "s" : ""} attention</div>`
       : "";
+    // Trainer-vs-jockey split (notes written to date, this pipeline) —
+    // only shown for pipelines the worker's /debug-pipeline-health route
+    // actually computed one for (the quote-import jobs, not entry alerts/
+    // backfill/dedupe/trainer-angle, which don't write trainer-or-jockey
+    // notes at all). Lets the 2026-10-05 jockey-coverage fix stay visibly
+    // working over time instead of needing another full audit to notice a
+    // silent regression — see the worker route's own comment for why this
+    // is computed live from the real notes rather than a stored counter.
     const rows = entries.map(e => `
       <div class="pipeline-health-row">
         <span class="pill ${e.status}"><span class="dot"></span></span>
         <span class="pipeline-health-name">${escapeHtml(PIPELINE_JOB_LABEL[e.key])}</span>
         <span class="pipeline-health-detail">${e.ranAt ? fmtRelativeTime(e.ranAt) + " · " : ""}${escapeHtml(e.detail)}</span>
+        ${e.split ? `<span class="pipeline-health-split">${e.split.trainer} trainer &middot; ${e.split.jockey} jockey</span>` : ""}
       </div>`).join("");
     $("pipelineHealthPanel").innerHTML = banner + rows;
   }
