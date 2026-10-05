@@ -3322,6 +3322,24 @@ async function readNotesAndTrainers(env) {
   };
 }
 
+// Same as readNotesAndTrainers() plus the tracked jockeys roster — added so
+// the quote-import jobs (BloodHorse/TDN main/HRN/TDN Notebook/DRF) can
+// resolve a quoted name against jockeys too, not just trainers (see
+// resolveTrackedTrainer()'s own comment: it's a generic name-matcher, not
+// trainer-specific — these jobs just never had a jockey list to pass it).
+async function readNotesTrainersAndJockeys(env) {
+  const [notesRaw, trainersRaw, jockeysRaw] = await Promise.all([
+    env.STABLE_KV.get("notes"),
+    env.STABLE_KV.get("trainers"),
+    env.STABLE_KV.get("jockeys"),
+  ]);
+  return {
+    notes: notesRaw ? JSON.parse(notesRaw) : [],
+    trainers: trainersRaw ? JSON.parse(trainersRaw) : [],
+    jockeys: jockeysRaw ? JSON.parse(jockeysRaw) : [],
+  };
+}
+
 async function readTrainersAndMeta(env) {
   const [trainersRaw, trainerMetaRaw] = await Promise.all([
     env.STABLE_KV.get("trainers"),
@@ -6742,7 +6760,7 @@ async function runDrfImport(env) {
   let written = 0;
   try {
     const { items } = await discoverDrfArticleLinks();
-    const state = await readNotesAndTrainers(env);
+    const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
     let addedAny = false;
 
@@ -6778,15 +6796,21 @@ async function runDrfImport(env) {
           // extractDrfSections()'s "said"/"wrote" attribution regex) —
           // resolveTrackedTrainer() already handles that via its
           // parts.length < 2 branch, same as every other bare-surname
-          // caller in this file.
-          const matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
-          if (!matchedTrainer) continue;
+          // caller in this file. Trainer checked first, jockey only as a
+          // fallback — see extractGenericQuoteSections()'s own comment on
+          // why that order matters (a name that resolves in BOTH rosters
+          // stays a trainer match, not silently flipped).
+          let matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
+          let matchedJockey = null;
+          if (!matchedTrainer) matchedJockey = resolveTrackedTrainer(section.trainerName, state.jockeys);
+          if (!matchedTrainer && !matchedJockey) continue;
           for (const horseName of section.horseNames) {
-            const dup = notes.find((n) => n.trainer === matchedTrainer && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            const dup = notes.find((n) => (matchedTrainer ? n.trainer === matchedTrainer : n.jockey === matchedJockey) && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
             if (dup) continue;
             notes.push({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              trainer: matchedTrainer,
+              trainer: matchedTrainer || "",
+              jockey: matchedJockey || "",
               horse: horseName,
               note: section.text,
               date: item.pubDate ? new Date(item.pubDate).toISOString().slice(0, 10) : "",
@@ -8267,7 +8291,7 @@ function bloodhorseSeenKvKey(articleId) {
 // first written under — genuinely generic given paragraphs/a title
 // horse guess/the tracked trainer list, so job #25 (TDN main feed) reuses
 // it as-is rather than duplicating the same regex pair a second time.
-function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainers) {
+function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainers, trackedJockeys = []) {
   if (!titleHorseGuess) return [];
   // Body cross-check: the guessed phrase must actually appear somewhere in
   // the article's own paragraphs, verbatim, or it's discarded — added
@@ -8312,7 +8336,7 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   // real article that had 18 clearly-quoted paragraphs); fixed to require
   // the name immediately after the quote's closing punctuation, verb last.
   // nameFirstRe covers the other real style, `Name said, "Quote."`.
-  const sections = {}; // trainerKey -> { trainerName, parts: [] }
+  const sections = {}; // "trainer:key" / "jockey:key" -> { role, name, parts: [] }
   const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)\b/g;
   const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
   for (const para of paragraphs) {
@@ -8321,8 +8345,18 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
     for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
     for (const { quote, name } of found) {
-      const resolved = resolveTrackedTrainer(name, trackedTrainers);
-      if (!resolved) continue; // unmatched or ambiguous surname — don't guess
+      // Trainer checked first, same priority order as before this jockey
+      // fallback existed — a name that happens to resolve against BOTH
+      // rosters (same last+first name, different people, confirmed
+      // possible though rare) keeps going to the trainer, not silently
+      // flipping to jockey depending on fallback order.
+      let role = "trainer";
+      let resolved = resolveTrackedTrainer(name, trackedTrainers);
+      if (!resolved) {
+        resolved = resolveTrackedTrainer(name, trackedJockeys);
+        role = "jockey";
+      }
+      if (!resolved) continue; // unmatched or ambiguous surname in EITHER roster — don't guess
       // Known accepted limitation, not a bug: every quote found anywhere in
       // the article gets attached to the ONE lead horse from the headline —
       // no NYRA-style bracket convention exists here to track a horse
@@ -8332,13 +8366,14 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
       // misfile that second quote under the lead horse. Accepted for now
       // given this source's unverified-in-advance structure; revisit if it
       // turns out to happen often once this is actually running.
-      const key = lastNameKey(resolved);
-      if (!sections[key]) sections[key] = { trainerName: resolved, parts: [] };
+      const key = `${role}:${lastNameKey(resolved)}`;
+      if (!sections[key]) sections[key] = { role, name: resolved, parts: [] };
       sections[key].parts.push(quote);
     }
   }
   return Object.values(sections).map((s) => ({
-    trainerName: s.trainerName,
+    trainerName: s.role === "trainer" ? s.name : null,
+    jockeyName: s.role === "jockey" ? s.name : null,
     horseNames: [titleHorseGuess],
     text: s.parts.join(" "),
   }));
@@ -8453,7 +8488,7 @@ async function runBloodHorseImport(env) {
     // unprocessed in the other two feeds).
     const items = [...itemsById.values()].sort((a, b) => Number(b.id) - Number(a.id));
 
-    const state = await readNotesAndTrainers(env);
+    const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
     let addedAny = false;
 
@@ -8488,14 +8523,15 @@ async function runBloodHorseImport(env) {
           .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
           .filter(Boolean);
         if (!paragraphs.length) continue;
-        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers);
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
         for (const section of sections) {
           for (const horseName of section.horseNames) {
-            const dup = notes.find((n) => n.trainer === section.trainerName && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            const dup = notes.find((n) => (section.trainerName ? n.trainer === section.trainerName : n.jockey === section.jockeyName) && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
             if (dup) continue;
             notes.push({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              trainer: section.trainerName,
+              trainer: section.trainerName || "",
+              jockey: section.jockeyName || "",
               horse: horseName,
               note: section.text,
               date: "",
@@ -8590,7 +8626,7 @@ async function runTdnMainImport(env) {
       items.push({ link, title, slug });
     }
 
-    const state = await readNotesAndTrainers(env);
+    const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
     let addedAny = false;
 
@@ -8623,14 +8659,15 @@ async function runTdnMainImport(env) {
           .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
           .filter(Boolean);
         if (!paragraphs.length) continue;
-        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers);
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
         for (const section of sections) {
           for (const horseName of section.horseNames) {
-            const dup = notes.find((n) => n.trainer === section.trainerName && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            const dup = notes.find((n) => (section.trainerName ? n.trainer === section.trainerName : n.jockey === section.jockeyName) && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
             if (dup) continue;
             notes.push({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              trainer: section.trainerName,
+              trainer: section.trainerName || "",
+              jockey: section.jockeyName || "",
               horse: horseName,
               note: section.text,
               date: "",
@@ -8790,21 +8827,28 @@ async function runTdnNotebookImport(env) {
   let checked = 0;
   let written = 0;
   try {
-    const state = await readNotesAndTrainers(env);
+    const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
     let addedAny = false;
     const data = await fetchTdnNotebook();
     for (const article of data.articles || []) {
       for (const section of article.sections || []) {
-        const matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
-        if (!matchedTrainer) continue;
+        // Trainer checked first, jockey only as a fallback — see
+        // extractGenericQuoteSections()'s own comment on why that order
+        // matters (a name that resolves in BOTH rosters stays a trainer
+        // match, not silently flipped).
+        let matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
+        let matchedJockey = null;
+        if (!matchedTrainer) matchedJockey = resolveTrackedTrainer(section.trainerName, state.jockeys);
+        if (!matchedTrainer && !matchedJockey) continue;
         for (const horseName of section.horseNames || []) {
-          const seenKey = tdnNotebookSeenKvKey(article.link, matchedTrainer, horseName);
+          const seenKey = tdnNotebookSeenKvKey(article.link, matchedTrainer || matchedJockey, horseName);
           if (await env.STABLE_KV.get(seenKey)) continue;
           checked++;
           notes.push({
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            trainer: matchedTrainer,
+            trainer: matchedTrainer || "",
+            jockey: matchedJockey || "",
             horse: horseName,
             note: section.text,
             date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : "",
@@ -8843,21 +8887,28 @@ async function runHrnNewsImport(env) {
   let checked = 0;
   let written = 0;
   try {
-    const state = await readNotesAndTrainers(env);
+    const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
     let addedAny = false;
     const data = await fetchHrnNews();
     for (const article of data.articles || []) {
       for (const section of article.sections || []) {
-        const matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
-        if (!matchedTrainer) continue;
+        // Trainer checked first, jockey only as a fallback — see
+        // extractGenericQuoteSections()'s own comment on why that order
+        // matters (a name that resolves in BOTH rosters stays a trainer
+        // match, not silently flipped).
+        let matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
+        let matchedJockey = null;
+        if (!matchedTrainer) matchedJockey = resolveTrackedTrainer(section.trainerName, state.jockeys);
+        if (!matchedTrainer && !matchedJockey) continue;
         for (const horseName of section.horseNames || []) {
-          const seenKey = hrnSeenKvKey(article.link, matchedTrainer, horseName);
+          const seenKey = hrnSeenKvKey(article.link, matchedTrainer || matchedJockey, horseName);
           if (await env.STABLE_KV.get(seenKey)) continue;
           checked++;
           notes.push({
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            trainer: matchedTrainer,
+            trainer: matchedTrainer || "",
+            jockey: matchedJockey || "",
             horse: horseName,
             note: section.text,
             date: article.pubDate ? new Date(article.pubDate).toISOString().slice(0, 10) : "",
