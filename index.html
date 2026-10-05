@@ -2337,44 +2337,6 @@
     border-radius: 3px;
     letter-spacing: 0.3px;
   }
-  .stable-az-jumpbar{
-    display:flex;
-    flex-wrap:wrap;
-    gap: 3px;
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--panel-1, var(--panel-2));
-    padding: 8px 0 10px;
-    margin-bottom: 4px;
-    border-bottom: 1px solid var(--panel-border);
-  }
-  .stable-az-btn{
-    min-width: 22px;
-    padding: 3px 4px;
-    background: var(--panel-2);
-    border: 1px solid var(--panel-border);
-    border-radius: 4px;
-    color: var(--parchment);
-    font-family:'Oswald', sans-serif;
-    font-weight:600;
-    font-size: 11px;
-    cursor:pointer;
-  }
-  .stable-az-btn:hover:not(:disabled){ color: var(--tote-amber); border-color: var(--tote-amber); }
-  .stable-az-btn:disabled{ color: var(--parchment-dim); opacity: 0.35; cursor:default; }
-  .stable-letter-divider{
-    font-family:'Oswald', sans-serif;
-    font-weight:700;
-    font-size: 12px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: var(--parchment-dim);
-    margin: 16px 0 4px;
-    padding-top: 10px;
-    border-top: 1px solid var(--panel-border);
-  }
-  .stable-letter-divider:first-child{ margin-top:0; padding-top:0; border-top:none; }
   .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
   .stable-trainer{
     background: var(--panel-2);
@@ -2575,12 +2537,6 @@
   }
   .stable-save-btn:hover, .stable-jockey-save-btn:hover{ background: #ffc94d; }
   .stable-note-list{ display:flex; flex-direction:column; gap:8px; margin-top:14px; }
-  .stable-added-day-divider{
-    font-family:'Oswald', sans-serif; font-weight:600; font-size:10.5px;
-    letter-spacing:1px; text-transform:uppercase; color:var(--parchment-dim);
-    margin: 14px 0 2px; padding-top: 10px; border-top: 1px solid var(--panel-border);
-  }
-  .stable-added-day-divider:first-child{ margin-top:0; padding-top:0; border-top:none; }
   .stable-note{
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -3684,25 +3640,27 @@
            this class's own CSS comment for why. -->
       <div class="stable-add-trainer-pill" id="stableAddTrainerPill" hidden>+ Add Trainer</div>
 
-      <!-- A-Z quick-jump — only populated/shown by renderStableTourByTrainer()
-           itself (210 trainers deep makes this worth it; By Jockey's ~20
-           entries don't need it, so this stays empty/hidden there). -->
-      <div class="stable-az-jumpbar" id="stableAzJumpbar" hidden></div>
       <div class="stable-trainer-list" id="stableTrainerList">
         <div class="log-empty">No trainers added yet — add one below to get started.</div>
       </div>
 
       <div class="stable-setup-section">
         <div class="log-controls">
-          <input type="text" id="stableTrainerInput" class="stable-autocomplete-trainer" placeholder="Trainer name (e.g. Todd Pletcher)" autocomplete="off">
-          <button type="button" id="addTrainerBtn">+ Add Trainer</button>
-          <input type="text" id="stableJockeyInput" placeholder="Jockey name (e.g. Antonio Fresu)" autocomplete="off">
-          <button type="button" id="addJockeyBtn">+ Add Jockey</button>
-          <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableAutoimportPanel" title="Shared data source setup">⚙</button>
+          <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableAutoimportPanel" title="Add/manage trainers &amp; jockeys, bulk-add, and shared data source setup">⚙</button>
         </div>
         <div class="log-note stable-api-status" id="stableApiStatus"></div>
 
         <div class="stable-autoimport" id="stableAutoimportPanel">
+          <div class="bias-form-row">
+            <label>Add Trainer
+              <input type="text" id="stableTrainerInput" class="stable-autocomplete-trainer" placeholder="Trainer name (e.g. Todd Pletcher)" autocomplete="off">
+            </label>
+            <button type="button" id="addTrainerBtn">+ Add Trainer</button>
+            <label>Add Jockey
+              <input type="text" id="stableJockeyInput" placeholder="Jockey name (e.g. Antonio Fresu)" autocomplete="off">
+            </label>
+            <button type="button" id="addJockeyBtn">+ Add Jockey</button>
+          </div>
           <div class="bias-form-row">
             <label>Shared Data Source (Worker URL)
               <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
@@ -3731,16 +3689,16 @@
                represented "is the automatic import working" — now it
                actually answers that. -->
           <div class="pipeline-health" id="pipelineHealthPanel"></div>
-        </div>
 
-        <div class="stable-bulk-import">
-          <label for="stableBulkTrainerInput">Bulk-add trainers (paste a list from any leaderboard/roster page — one
-            per line or comma-separated)</label>
-          <textarea id="stableBulkTrainerInput" rows="3" placeholder="Brad H. Cox, Steven M. Asmussen, Mark E. Casse, ..."></textarea>
-          <button type="button" id="stableBulkAddBtn">Add All</button>
-          <span class="log-note" id="stableBulkStatus">Names are normalized (middle initials/Jr./II/III stripped) so
-            they match how trainers are usually named in news articles — needed for the auto-import from News Wire
-            to catch mentions of them.</span>
+          <div class="stable-bulk-import">
+            <label for="stableBulkTrainerInput">Bulk-add trainers (paste a list from any leaderboard/roster page — one
+              per line or comma-separated)</label>
+            <textarea id="stableBulkTrainerInput" rows="3" placeholder="Brad H. Cox, Steven M. Asmussen, Mark E. Casse, ..."></textarea>
+            <button type="button" id="stableBulkAddBtn">Add All</button>
+            <span class="log-note" id="stableBulkStatus">Names are normalized (middle initials/Jr./II/III stripped) so
+              they match how trainers are usually named in news articles — needed for the auto-import from News Wire
+              to catch mentions of them.</span>
+          </div>
         </div>
       </div>
 
@@ -9146,7 +9104,9 @@
   // just 4 real months, meaning this view was 45 top-level cards deep to
   // scroll through for what's actually 4 months of history.
   let stableOpenAddedDates = new Set();
+  let stableOpenAddedDays = new Set(); // which day-folders are expanded within an open month, keyed by "YYYY-MM-DD"
   let stableUnassignedOpen = false; // the one fixed "Unassigned" (no-trainer notes) group in "By Trainer" view
+  let stableOpenTrainerLetters = new Set(); // which A-Z letter-folders are expanded in "By Trainer" view
 
   // Small provenance tag on the trainer roster — how this trainer got
   // added. Silent for a manual add (the expected/default case, no need to
@@ -9378,12 +9338,6 @@
 
   function renderStableTour(){
     const list = $("stableTrainerList");
-    // Reset here rather than in each branch — only renderStableTourByTrainer()
-    // repopulates/shows it, so every other view starts from a clean hidden
-    // state instead of needing its own matching reset.
-    const jumpbar = $("stableAzJumpbar");
-    jumpbar.hidden = true;
-    jumpbar.innerHTML = "";
     // A trainer-less note (see /notes POST) can exist with zero trainers
     // tracked at all — e.g. the very first thing added is a Quick Add left
     // blank on purpose — so "no trainers" alone isn't "nothing to show".
@@ -9533,23 +9487,42 @@
       return;
     }
     list.innerHTML = months.map(month => {
-      const notes = byMonth[month].slice().sort((a, b) => (b.capturedAt || "").localeCompare(a.capturedAt || ""));
-      const isOpen = query ? true : stableOpenAddedDates.has(month);
-      // Day-dividers inside the expanded month — not a second collapsible
-      // level, just a label line, so the day-level context survives the
-      // move to month-level grouping without adding a second click to see it.
-      let lastDay = null;
-      const notesHtml = notes.map(n => {
+      const notes = byMonth[month];
+      const isMonthOpen = query ? true : stableOpenAddedDates.has(month);
+
+      // Each day inside the month is its OWN collapsible folder (not just a
+      // label), same reasoning that drove month-grouping in the first
+      // place — a month can easily hold 20-30 days' worth of notes.
+      const byDay = {};
+      for (const n of notes){
         const day = n.capturedAt ? n.capturedAt.slice(0, 10) : "Unknown";
-        const dayHtml = day !== lastDay
-          ? `<div class="stable-added-day-divider">${day === "Unknown" ? "Unknown date" : fmtStableDate(day)}</div>`
-          : "";
-        lastDay = day;
-        return dayHtml + renderStableNoteHtml(n, { showHorse: true, showTrainer: true });
+        if (!byDay[day]) byDay[day] = [];
+        byDay[day].push(n);
+      }
+      const days = Object.keys(byDay).sort((a, b) => b.localeCompare(a));
+      const daysHtml = days.map(day => {
+        const dayNotes = byDay[day].slice().sort((a, b) => (b.capturedAt || "").localeCompare(a.capturedAt || ""));
+        const isDayOpen = query ? true : stableOpenAddedDays.has(day);
+        const dayLabel = day === "Unknown" ? "Unknown date" : fmtStableDate(day);
+        const notesHtml = dayNotes.map(n => renderStableNoteHtml(n, { showHorse: true, showTrainer: true })).join("");
+        return `
+          <div class="stable-trainer ${isDayOpen ? "open" : ""}">
+            <div class="stable-trainer-header">
+              <button type="button" class="stable-trainer-toggle" data-added-day-key="${escapeHtml(day)}">
+                <span class="chevron">▸</span>
+                <span class="stable-trainer-name">${escapeHtml(dayLabel)}</span>
+                <span class="tag">${dayNotes.length} note${dayNotes.length === 1 ? "" : "s"}</span>
+              </button>
+            </div>
+            <div class="stable-trainer-body" ${isDayOpen ? "" : "hidden"}>
+              <div class="stable-note-list">${notesHtml}</div>
+            </div>
+          </div>`;
       }).join("");
+
       const monthLabel = month === "Unknown" ? "Unknown" : ADDED_MONTH_LABEL_FMT(month);
       return `
-        <div class="stable-trainer ${isOpen ? "open" : ""}">
+        <div class="stable-trainer ${isMonthOpen ? "open" : ""}">
           <div class="stable-trainer-header">
             <button type="button" class="stable-trainer-toggle" data-added-key="${escapeHtml(month)}">
               <span class="chevron">▸</span>
@@ -9557,8 +9530,8 @@
               <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
             </button>
           </div>
-          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
-            <div class="stable-note-list">${notesHtml}</div>
+          <div class="stable-trainer-body" ${isMonthOpen ? "" : "hidden"}>
+            <div class="stable-trainer-list">${daysHtml}</div>
           </div>
         </div>`;
     }).join("");
@@ -9597,9 +9570,12 @@
   // stableTrainers already arrives sorted by last name (the Worker's own
   // POST /trainers sort, see lastNameKey() there), so grouping by first
   // letter needs no new sort, just this client-side equivalent
-  // (trainerLastName()) to read the same key back out. Dividers and the
-  // jump bar both skip while searching — a filtered, already-narrow result
-  // list doesn't need A-Z navigation, and showing only the few letters a
+  // (trainerLastName()) to read the same key back out. Each letter is its
+  // own collapsible folder (same shape as the month/day folders in Newest
+  // Added) rather than a sticky divider — collapsed by default, so the
+  // full 210-trainer list never has to render open at once. Folders skip
+  // entirely while searching — a filtered, already-narrow result list
+  // doesn't need letter navigation, and showing only the few letters a
   // search happens to match would read as broken rather than helpful.
   function renderStableTourByTrainer(list){
     const query = stableSearchQuery.trim().toLowerCase();
@@ -9614,36 +9590,45 @@
       return;
     }
 
-    const lettersPresent = new Set();
-    let lastLetter = null;
-    list.innerHTML = unassignedHtml + visibleTrainers.map(trainer => {
-      let letterDividerHtml = "";
-      if (!query){
-        const letter = (trainerLastName(trainer)[0] || "#").toUpperCase();
-        lettersPresent.add(letter);
-        if (letter !== lastLetter){
-          letterDividerHtml = `<div class="stable-letter-divider" id="stable-letter-${letter}">${letter}</div>`;
-          lastLetter = letter;
-        }
-      }
-      return letterDividerHtml + renderStableTrainerCardHtml(trainer, query);
+    if (query){
+      // Searching flattens the folders — just show the matching trainers.
+      list.innerHTML = unassignedHtml + visibleTrainers.map(trainer => renderStableTrainerCardHtml(trainer, query)).join("");
+      list.querySelectorAll(".stableDateInput, .stableExtractDate").forEach(input => {
+        if (!input.value) input.value = nowInTrackTZ().date;
+      });
+      return;
+    }
+
+    const byLetter = {};
+    for (const trainer of visibleTrainers){
+      const letter = (trainerLastName(trainer)[0] || "#").toUpperCase();
+      if (!byLetter[letter]) byLetter[letter] = [];
+      byLetter[letter].push(trainer);
+    }
+    const letters = Object.keys(byLetter).sort();
+
+    list.innerHTML = unassignedHtml + letters.map(letter => {
+      const trainersInLetter = byLetter[letter];
+      const isOpen = stableOpenTrainerLetters.has(letter);
+      const cardsHtml = trainersInLetter.map(trainer => renderStableTrainerCardHtml(trainer, query)).join("");
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-letter-key="${escapeHtml(letter)}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${escapeHtml(letter)}</span>
+              <span class="tag">${trainersInLetter.length} trainer${trainersInLetter.length === 1 ? "" : "s"}</span>
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="stable-trainer-list">${cardsHtml}</div>
+          </div>
+        </div>`;
     }).join("");
 
     list.querySelectorAll(".stableDateInput, .stableExtractDate").forEach(input => {
       if (!input.value) input.value = nowInTrackTZ().date;
     });
-
-    const jumpbar = $("stableAzJumpbar");
-    if (query || lettersPresent.size < 2){
-      jumpbar.hidden = true;
-      jumpbar.innerHTML = "";
-    } else {
-      jumpbar.hidden = false;
-      jumpbar.innerHTML = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(letter => {
-        const has = lettersPresent.has(letter);
-        return `<button type="button" class="stable-az-btn" data-jump-letter="${letter}" ${has ? "" : "disabled"}>${letter}</button>`;
-      }).join("");
-    }
   }
   function renderStableTrainerCardHtml(trainer, query){
     return (() => {
@@ -10027,15 +10012,6 @@
     input.value = "";
   });
 
-  // A-Z jump bar — separate container from stableTrainerList, so it needs
-  // its own delegated listener. Just scrolls; no re-render needed.
-  $("stableAzJumpbar").addEventListener("click", (e) => {
-    const btn = e.target.closest(".stable-az-btn");
-    if (!btn || btn.disabled) return;
-    const target = document.getElementById(`stable-letter-${btn.dataset.jumpLetter}`);
-    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-
   // Event delegation — the whole list is regenerated on every render, so
   // listeners on individual buttons would just be thrown away each time.
   $("stableTrainerList").addEventListener("click", (e) => {
@@ -10056,6 +10032,14 @@
         const key = toggleBtn.dataset.addedKey;
         if (stableOpenAddedDates.has(key)) stableOpenAddedDates.delete(key);
         else stableOpenAddedDates.add(key);
+      } else if (toggleBtn.dataset.addedDayKey !== undefined){
+        const key = toggleBtn.dataset.addedDayKey;
+        if (stableOpenAddedDays.has(key)) stableOpenAddedDays.delete(key);
+        else stableOpenAddedDays.add(key);
+      } else if (toggleBtn.dataset.letterKey !== undefined){
+        const key = toggleBtn.dataset.letterKey;
+        if (stableOpenTrainerLetters.has(key)) stableOpenTrainerLetters.delete(key);
+        else stableOpenTrainerLetters.add(key);
       } else if (toggleBtn.dataset.unassignedKey !== undefined){
         stableUnassignedOpen = !stableUnassignedOpen;
       } else {
