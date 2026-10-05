@@ -1272,7 +1272,7 @@ async function handleRequest(request, env) {
       const allNotes = await readNotes(env);
       const groups = new Map();
       for (const n of allNotes) {
-        const key = `${n.trainer}|${n.horse}|${(n.note || "").trim()}`;
+        const key = `${n.trainer}|${n.horse}|${normalizeNoteTextForDedup(n.note)}`;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(n);
       }
@@ -1647,6 +1647,13 @@ async function handleRequest(request, env) {
       // Short cache — a race can go from not-yet-final to final at any
       // moment during a card, unlike entries/odds which only drift slowly.
       return json(result, 200, { "Cache-Control": "public, max-age=90" });
+    }
+
+    // NYRA only (Saratoga/Belmont) — see fetchNyraScratches()'s own comment.
+    if (url.pathname === "/nyra-scratches" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "";
+      const result = await fetchNyraScratches(track);
+      return json(result, 200, { "Cache-Control": "public, max-age=60" });
     }
 
     if (url.pathname === "/changes" && request.method === "GET") {
@@ -2445,6 +2452,21 @@ function stripDiacritics(str) {
 function normalizeLinkForDedup(link) {
   if (!link) return "";
   return link.split("#")[0].toLowerCase();
+}
+
+// Confirmed real gap (2026-10-05): two Linda Rice/El Grande O notes with
+// otherwise byte-identical text, differing only by straight (') vs curly
+// (’/‘) apostrophes at 5 positions, weren't caught by
+// /debug-merge-duplicate-notes's exact-text grouping key — different
+// sources (or even the same source re-scraped) routinely disagree on
+// which quote style they use. Collapses both apostrophe and double-quote
+// variants to their plain ASCII form before the dedup key is built, so
+// that's no longer a way for the same quote to dodge detection.
+function normalizeNoteTextForDedup(text) {
+  return (text || "")
+    .replace(/[‘’‛]/g, "'")
+    .replace(/[“”‟]/g, '"')
+    .trim();
 }
 
 // Trainers sort by last name — the last whitespace-separated token, which
@@ -3623,7 +3645,12 @@ function decodeEntities(str) {
     .replace(/&#8221;|&rdquo;/g, "”")
     .replace(/&#8211;|&ndash;/g, "–")
     .replace(/&#8212;|&mdash;/g, "—")
-    .replace(/&nbsp;/g, " ")
+    // Semicolon optional — confirmed real on NYRA's scratches page template
+    // (parseNyraScratchesFragment()'s own source), which drops the trailing
+    // ";" on the last &nbsp in a run of several ("FIRM&nbsp;&nbsp</font>").
+    // Strictly widens the already-correct ";"-terminated case, not a
+    // behavior change for any existing well-formed caller.
+    .replace(/&nbsp;?/g, " ")
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&hellip;/g, "…")
@@ -4307,6 +4334,121 @@ async function fetchNyraResultsDay(track, date) {
   }
   races.sort((a, b) => a.raceNumber - b.raceNumber);
   return { date, races };
+}
+
+// ---------- NYRA Scratches & Program Changes ----------
+// Built to replace the raw iframe the frontend used to embed directly
+// (tr-cdn.nyra.com/direct/scratches/{SAR,BEL}scratch.html) — confirmed real
+// problem via this session's own UI audit: an unstyled white page inside an
+// otherwise fully dark tote-board UI, unreadable on mobile without pinch-
+// zoom. Old-school table-based HTML (TD/Font tags, no CSS classes to speak
+// of beyond a couple), but genuinely regular and parseable — verified
+// directly against a real populated day (Saratoga, 19 real scratches, 2
+// jockey changes, 2 misc changes, all correctly extracted) and the
+// "not available" dark-day case (Belmont, empty arrays, no crash) before
+// ever wiring this into a route. No date parameter on NYRA's side — same
+// "always whichever day is current" limitation as a few other NYRA
+// endpoints in this file, so this is a live-only view, nothing to archive.
+function parseNyraScratchesFragment(html) {
+  const trackMatch = /BGColor='ffffff'>[\s\S]*?<B><font color='Black'>([^<]+)<\/Font><\/B>/.exec(html);
+  const dateMatch = /SCRATCHES AND PROGRAM CHANGES FOR ([^<]+)</.exec(html);
+  const updatedMatch = /Last Updated:\s*([^<]+)</.exec(html);
+
+  const result = {
+    track: trackMatch ? decodeEntities(trackMatch[1]).trim() : null,
+    dateLabel: dateMatch ? decodeEntities(dateMatch[1]).trim() : null,
+    lastUpdated: updatedMatch ? decodeEntities(updatedMatch[1]).trim() : null,
+    conditions: {},
+    scratches: [],
+    jockeyChanges: [],
+    miscChanges: [],
+  };
+
+  const stripTags = (s) => decodeEntities((s || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+
+  // Isolates one section's own <TABLE>...</TABLE> by tracking nested TABLE
+  // depth from that section's title row forward — simpler and more robust
+  // than trying to hand-match this page's irregular nesting/indentation
+  // with a single non-greedy regex.
+  function sectionHtml(title) {
+    const headerRe = new RegExp(`<Font Color=White><B>${title}</B></Font>`, "i");
+    const m = headerRe.exec(html);
+    if (!m) return null;
+    const afterHeader = html.slice(m.index);
+    let depth = 1;
+    const tagRe = /<\/?TABLE\b[^>]*>/gi;
+    let endIdx = null, tm;
+    while ((tm = tagRe.exec(afterHeader))) {
+      if (tm[0][1] === "/") depth--; else depth++;
+      if (depth === 0) { endIdx = tm.index; break; }
+    }
+    return endIdx != null ? afterHeader.slice(0, endIdx) : afterHeader;
+  }
+
+  const condHtml = sectionHtml("TRACK CONDITIONS");
+  if (condHtml) {
+    const rowRe = /<B><font color='Black'>([^<:]+):<\/font><\/B>\s*<\/TD>\s*<TD[^>]*>([\s\S]*?)<\/TD>/gi;
+    let rm;
+    while ((rm = rowRe.exec(condHtml))) {
+      const label = stripTags(rm[1]);
+      const value = stripTags(rm[2]);
+      if (label && value) result.conditions[label] = value;
+    }
+  }
+
+  // Scratches rows carry the Race # only on the FIRST row of each race's
+  // group (a real convention on NYRA's own page — confirmed directly, not
+  // assumed) — subsequent same-race rows leave that cell blank, carried
+  // forward here rather than left empty.
+  const scratchesHtml = sectionHtml("SCRATCHES");
+  if (scratchesHtml) {
+    const rowRe = /<TR[^>]*>([\s\S]*?)<\/TR>/gi;
+    let rm, lastRace = null;
+    while ((rm = rowRe.exec(scratchesHtml))) {
+      const tds = [...rm[1].matchAll(/<TD[^>]*>([\s\S]*?)<\/TD>/gi)].map((t) => stripTags(t[1]));
+      if (tds.length < 5) continue; // spacer/section-title row
+      const [raceRaw, programRaw, horse, reason, notes] = tds;
+      if (/^Race$/i.test(raceRaw) || /^Program/i.test(programRaw) || /^Horse$/i.test(horse)) continue; // header row
+      if (!horse) continue;
+      const race = raceRaw || lastRace;
+      lastRace = race;
+      result.scratches.push({ race, program: programRaw || null, horse, reason: reason || null, notes: notes || null });
+    }
+  }
+
+  const parseChangeRows = (sectionTitle) => {
+    const out = [];
+    const sec = sectionHtml(sectionTitle);
+    if (!sec) return out;
+    const rowRe = /<TR[^>]*>([\s\S]*?)<\/TR>/gi;
+    let rm;
+    while ((rm = rowRe.exec(sec))) {
+      const tds = [...rm[1].matchAll(/<TD[^>]*>([\s\S]*?)<\/TD>/gi)].map((t) => stripTags(t[1]));
+      if (tds.length < 4) continue;
+      const [race, program, horse, change] = tds;
+      if (/^Race$/i.test(race) || /^Horse$/i.test(horse)) continue;
+      if (!horse) continue;
+      out.push({ race: race || null, program: program || null, horse, change: change || null });
+    }
+    return out;
+  };
+  result.jockeyChanges = parseChangeRows("JOCKEY CHANGES");
+  result.miscChanges = parseChangeRows("MISCELLANEOUS CHANGES");
+
+  return result;
+}
+
+const NYRA_SCRATCHES_CODE = { saratoga: "SAR", belmont: "BEL" };
+async function fetchNyraScratches(track) {
+  const code = NYRA_SCRATCHES_CODE[track];
+  if (!code) return { available: false };
+  const res = await fetch(`https://tr-cdn.nyra.com/direct/scratches/${code}scratch.html`, {
+    headers: { "User-Agent": BROWSER_UA },
+    cf: { cacheTtl: 60, cacheEverything: true }, // matches the source page's own 60s refresh meta tag
+  });
+  if (!res.ok) return { available: false };
+  const html = await res.text();
+  return { available: true, ...parseNyraScratchesFragment(html) };
 }
 
 // ---------- Del Mar (DMTC) Entries parser ----------

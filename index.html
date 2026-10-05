@@ -934,6 +934,36 @@
     height: 100%;
     border: 0;
   }
+  /* Native-rendered scratches panel — see refreshNyraScratchesNative()'s own
+     comment for why this replaces the raw iframe as the primary view. */
+  .nyra-meta-line{
+    font-family:'IBM Plex Mono', monospace; font-size: 11px;
+    color: var(--parchment-dim); margin-bottom: 10px;
+  }
+  .nyra-conditions-grid{
+    display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px; margin-bottom: 14px;
+  }
+  .nyra-cond-row{
+    display:flex; justify-content:space-between; gap:10px;
+    background: var(--panel-2); border: 1px solid var(--panel-border);
+    border-radius: 6px; padding: 7px 10px; font-size: 12.5px;
+  }
+  .nyra-cond-label{ color: var(--parchment-dim); font-family:'Oswald', sans-serif; text-transform:uppercase; font-size:10.5px; letter-spacing:0.5px; }
+  .nyra-cond-value{ color: var(--parchment); font-family:'IBM Plex Mono', monospace; text-align:right; }
+  .nyra-subheading{
+    font-family:'Oswald', sans-serif; font-weight:600; font-size:11.5px;
+    letter-spacing: 1px; text-transform: uppercase; color: var(--tote-amber);
+    margin: 14px 0 6px;
+  }
+  .nyra-scratches-table td:first-child, .nyra-changes-table td:first-child{ width: 50px; color: var(--parchment-dim); }
+  .nyra-raw-toggle{ margin-top: 14px; }
+  .nyra-raw-toggle summary{
+    cursor: pointer; color: var(--parchment-dim); font-size: 12px;
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .nyra-raw-toggle summary:hover{ color: var(--parchment); }
+  .nyra-raw-toggle .nyra-frame-wrap{ margin-top: 10px; }
   .twitter-link-card{
     display:flex;
     align-items:center;
@@ -1414,6 +1444,22 @@
   .bias-bar-fill.bias-neutral{ background: var(--parchment-dim); }
   .bias-bar-fill.bias-mixed{ background: var(--clay); }
   .bias-bar-count{ color: var(--parchment); text-align: right; }
+  .bias-month-chart{
+    display:flex; align-items:flex-end; gap:6px;
+    margin: 6px 0 16px; padding-top: 4px;
+    overflow-x: auto;
+  }
+  .bias-month-col{ display:flex; flex-direction:column; align-items:center; gap:5px; flex:0 0 auto; }
+  .bias-month-stack{
+    width: 20px; height: 70px; border-radius: 4px; overflow:hidden;
+    background: var(--panel); display:flex; flex-direction:column;
+  }
+  .bias-month-seg{ width:100%; }
+  .bias-month-seg.bias-speed{ background: var(--tote-amber); }
+  .bias-month-seg.bias-closer{ background: var(--sky); }
+  .bias-month-seg.bias-neutral{ background: var(--parchment-dim); }
+  .bias-month-seg.bias-mixed{ background: var(--clay); }
+  .bias-month-label{ font-family:'IBM Plex Mono', monospace; font-size:9.5px; color: var(--parchment-dim); }
   .bias-crosstab{ margin-top: 14px; }
   .bias-crosstab-title{
     font-family:'IBM Plex Mono', monospace;
@@ -1592,6 +1638,32 @@
     padding: 1px 4px;
     border-radius: 3px;
     vertical-align: middle;
+  }
+  /* Graded stakes callout — confirmed real formats: SmartPony's raceType
+     ("Spinster-G1") and NYRA's raceName ("Champagne Stakes (G1)"), see
+     gradedStakesGrade()'s own comment. Amber/gold, same family as the ML
+     odds badge — this app's existing "something worth noticing" color. */
+  .entries-race-tab-graded{ border-color: rgba(240,180,41,0.45); }
+  .entries-race-tab-grade{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--ink);
+    background: var(--tote-amber);
+    padding: 1px 4px;
+    border-radius: 3px;
+    vertical-align: middle;
+  }
+  .entries-race-grade-badge{
+    font-family:'Oswald', sans-serif;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--ink);
+    background: var(--tote-amber);
+    padding: 3px 10px;
+    border-radius: 999px;
   }
   .entries-date-picker{
     display: flex;
@@ -1777,6 +1849,16 @@
     background: rgba(240,180,41,0.12);
     padding: 2px 7px;
     border-radius: 4px;
+  }
+  .entries-layoff-badge{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
   }
   .pp-badge{
     display: inline-flex;
@@ -3000,22 +3082,27 @@
         <span class="tag">LIVE · NYRA.COM</span>
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="nyraScratchesInfo" title="Why this works this way">ⓘ</button>
       </div>
-      <div class="nyra-frame-wrap">
-        <iframe
-          id="nyraFrame"
-          src=""
-          loading="lazy"
-          title="Saratoga scratches, official track conditions, and turf rail settings from NYRA">
-        </iframe>
-      </div>
+      <div id="nyraScratchesNative"></div>
+      <details class="nyra-raw-toggle">
+        <summary>View NYRA's full official page</summary>
+        <div class="nyra-frame-wrap">
+          <iframe
+            id="nyraFrame"
+            src=""
+            loading="lazy"
+            title="Saratoga scratches, official track conditions, and turf rail settings from NYRA">
+          </iframe>
+        </div>
+      </details>
       <div class="info-disclosure" id="nyraScratchesInfo">
         Rail and Dirt/Turf condition both show on the track photo above — Rail, Main Track (Dirt), and Turf
         Course tiles — tagged "NYRA" with a timestamp when it's NYRA's own official call, or shown plain (no
         tag, dirt/turf only) when it's this app's own weather-based estimate, which is the only option on a
         dark day like this or before NYRA has confirmed conditions. The rail tile only ever shows a value NYRA
         itself has posted — it stays blank rather than guessing, since rail placement isn't something a
-        weather forecast can estimate anyway. The embed below is NYRA's full page, for scratches and program
-        changes.
+        weather forecast can estimate anyway. The panel above is parsed straight from NYRA's own scratches
+        page into this app's own styling; NYRA's raw page is still one click away if you want to see it as
+        published.
       </div>
     </div>
 
@@ -6147,6 +6234,24 @@
   // the only click a reader needs to actually read the quote, not a teaser
   // that then sends them somewhere else. Returns "" (nothing added) when
   // there's no note for this exact horse — see findHorseStableNotes().
+  // Raw "days since last start" for a horse, shown unconditionally whenever
+  // archived previous-start data exists — distinct from Trainer Angle
+  // Stats and Class Movement below, which only fire when the layoff/class
+  // change is statistically notable enough to be worth a directional read.
+  // Confirmed real gap: daysBetween()/classMovementCache's prevStart.date
+  // already have everything needed for this (trainerAngleVerdict() computes
+  // this exact number internally already), but it was never surfaced on
+  // its own — a horse whose trainer has no notable layoff angle showed
+  // nothing at all, hiding even the plain fact of when it last ran.
+  function entriesLayoffBadgeHtml(horseName){
+    const previousStarts = classMovementCache[`${activeTrack.id}|${lastEntriesDate}`];
+    const prevStart = previousStarts ? previousStarts[horseName] : null;
+    if (!prevStart || !prevStart.date) return "";
+    const days = daysBetween(prevStart.date, lastEntriesDate);
+    if (days <= 0) return "";
+    return `<span class="entries-layoff-badge" title="Last start: ${escapeHtml(fmtStableDate(prevStart.date))}${prevStart.track ? " at " + escapeHtml(prevStart.track) : ""}">${days}d</span>`;
+  }
+
   function entriesNoteIndicatorHtml(trainer, horseName){
     const notes = findHorseStableNotes(trainer, horseName);
     if (!notes.length) return "";
@@ -6420,9 +6525,10 @@
     const tabsHtml = races.map(race => {
       const timeLabel = formatPostTimeLabel(race.postTimeIso);
       const isFinal = !!lastResultsByRace[race.raceNumber]?.isFinal;
+      const grade = gradedStakesGrade(race);
       return `
-        <button type="button" class="entries-race-tab${race.raceNumber === selectedEntriesRace ? " active" : ""}" data-race="${race.raceNumber}">
-          <span class="entries-race-tab-num">R${race.raceNumber}${isFinal ? ` <span class="entries-race-tab-final">FINAL</span>` : ""}</span>
+        <button type="button" class="entries-race-tab${race.raceNumber === selectedEntriesRace ? " active" : ""}${grade ? " entries-race-tab-graded" : ""}" data-race="${race.raceNumber}">
+          <span class="entries-race-tab-num">R${race.raceNumber}${grade ? ` <span class="entries-race-tab-grade">G${grade}</span>` : ""}${isFinal ? ` <span class="entries-race-tab-final">FINAL</span>` : ""}</span>
           <span class="entries-race-tab-time">${escapeHtml(timeLabel || race.mtpLabel || "—")}</span>
         </button>
       `;
@@ -6485,7 +6591,7 @@
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
         <td>${ppBadgeHtml(h.postPosition)}</td>
-        <td>${escapeHtml(h.name || "—")}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
+        <td>${escapeHtml(h.name || "—")}${entriesLayoffBadgeHtml(h.name)}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${entriesOwnerHtml(h.owner, race.raceNumber, h.name)}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
         <td>${h.mlOdds ? `<span class="ml-badge">${escapeHtml(h.mlOdds)}</span>` : "—"}</td>
@@ -6562,6 +6668,7 @@
       <div class="entries-race-card">
         <div class="entries-race-header">
           <span class="entries-race-num">Race ${race.raceNumber}</span>
+          ${gradedStakesGrade(race) ? `<span class="entries-race-grade-badge">GRADE ${gradedStakesGrade(race)}</span>` : ""}
           ${metaBits.map(bit => `<span class="entries-race-meta">${escapeHtml(bit)}</span>`).join("")}
           ${race.mtpLabel ? `<span class="entries-race-mtp">${escapeHtml(race.mtpLabel)}</span>` : ""}
         </div>
@@ -6711,6 +6818,25 @@
   // "150k"/"300k", e.g. "Cotilln-G1", "GrnwdCpL150k"). Checked AFTER the
   // exact-match table above so a spelled-out raceType is never misread by
   // a pattern meant for the abbreviated one.
+  // Confirmed real, differing formats across sources rather than guessed:
+  // SmartPony's race_class puts the grade suffix on raceType itself
+  // ("Spinster-G1", "Bourbon-G2" — real Keeneland 2026-10-04 card), while
+  // NYRA puts it in raceName instead, raceType just says "Stakes"
+  // ("Champagne Stakes (G1)" — real Belmont 2026-10-03 card). Deliberately
+  // scoped to just these two confirmed patterns — Sporting Life's
+  // international tracks use "Group 1/2/3" terminology, not "Grade," and a
+  // check across several real archived UK/Ireland/Hong Kong/French cards
+  // turned up no graded races to confirm that format against, so this
+  // doesn't guess at it rather than risk mislabeling (or silently
+  // mislabeling) those tracks' real graded races.
+  function gradedStakesGrade(race){
+    if (!race) return null;
+    const fromType = /-G([123])\b/i.exec(race.raceType || "");
+    if (fromType) return fromType[1];
+    const fromName = /\(G([123])\)/i.exec(race.raceName || "");
+    if (fromName) return fromName[1];
+    return null;
+  }
   function classRankFor(raceTypeRaw){
     if (!raceTypeRaw) return null;
     const trimmed = raceTypeRaw.trim();
@@ -8000,6 +8126,61 @@
     body.appendChild(line);
   }
 
+  // Confirmed real gap: the bars above only ever show a snapshot for
+  // whichever window is selected (All Time/30/14 days) — there was no way
+  // to see how the read has actually moved over the course of a season.
+  // biasLog already has everything needed (one entry per date, classified
+  // the same way the snapshot bars are) — this just groups it by month
+  // instead of by window. Deliberately always All Time regardless of the
+  // window selector above, same reasoning synthesizeBiasTrendText() already
+  // uses for its own fixed "last 5-10 entries" read: a month-by-month trend
+  // is a different question than "what does the selected window look like,"
+  // not a view of the same thing at a different width.
+  function computeMonthlyBiasTrend(classifierFn){
+    const byMonth = {};
+    biasLog.forEach(entry => {
+      const bias = classifierFn(entry);
+      if (!bias) return;
+      const month = entry.date.slice(0, 7); // YYYY-MM
+      if (!byMonth[month]) byMonth[month] = {};
+      byMonth[month][bias] = (byMonth[month][bias] ?? 0) + 1;
+    });
+    return Object.keys(byMonth).sort().map(month => ({ month, counts: byMonth[month] }));
+  }
+  function appendBiasMonthlyTrend(body, title, classifierFn){
+    const months = computeMonthlyBiasTrend(classifierFn);
+    if (months.length < 2) return; // one month isn't a trend yet
+    const heading = document.createElement("div");
+    heading.className = "bias-trends-subheading";
+    heading.textContent = `${title} by Month (All Time)`;
+    body.appendChild(heading);
+    const chart = document.createElement("div");
+    chart.className = "bias-month-chart";
+    months.forEach(({ month, counts }) => {
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const col = document.createElement("div");
+      col.className = "bias-month-col";
+      const stack = document.createElement("div");
+      stack.className = "bias-month-stack";
+      stack.title = `${month}: ${total} ${total === 1 ? "entry" : "entries"}`;
+      Object.keys(BIAS_STYLE_CLASS).forEach(style => {
+        const count = counts[style] ?? 0;
+        if (!count) return;
+        const seg = document.createElement("div");
+        seg.className = `bias-month-seg ${BIAS_STYLE_CLASS[style]}`;
+        seg.style.height = `${(count / total) * 100}%`;
+        stack.appendChild(seg);
+      });
+      const label = document.createElement("span");
+      label.className = "bias-month-label";
+      const [y, m] = month.split("-");
+      label.textContent = new Date(Date.UTC(Number(y), Number(m) - 1, 1)).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
+      col.append(stack, label);
+      chart.appendChild(col);
+    });
+    body.appendChild(chart);
+  }
+
   function appendBiasBarSection(body, title, counts, total){
     const heading = document.createElement("div");
     heading.className = "bias-trends-subheading";
@@ -8066,6 +8247,9 @@
 
     appendBiasBarSection(body, "Dirt Bias", trends.dirtCounts, trends.dirtTotal);
     appendBiasBarSection(body, "Turf Bias", trends.turfCounts, trends.turfTotal);
+
+    appendBiasMonthlyTrend(body, "Dirt Bias", entryDirtBias);
+    appendBiasMonthlyTrend(body, "Turf Bias", entryTurfBias);
 
     // Wet vs. dry crosstab — only worth showing once there's at least one
     // logged day on each side, otherwise it's a table with an empty half.
@@ -12008,6 +12192,74 @@
     }
   }
 
+  // Native-styled replacement for the raw NYRA iframe above — confirmed
+  // real problem in this session's own UI audit: an unstyled white page
+  // sitting inside an otherwise fully dark tote-board UI, unreadable on
+  // mobile without pinch-zoom. Parses the worker's /nyra-scratches route
+  // (see parseNyraScratchesFragment()'s own comment for how that's built
+  // and verified) into this app's own look; the raw NYRA page stays one
+  // click away via the "View NYRA's full official page" toggle rather than
+  // being removed outright.
+  async function refreshNyraScratchesNative(){
+    const el = $("nyraScratchesNative");
+    if (!el || !activeTrack.nyraCode) return;
+    const trackId = activeTrack.id;
+    let data;
+    try {
+      data = await (await fetch(stableApiUrl(`/nyra-scratches?track=${trackId}`), { cache: "no-store" })).json();
+    } catch (err) {
+      console.error("NYRA scratches fetch failed", err);
+      return;
+    }
+    if (activeTrack.id !== trackId) return; // stale — switched tracks mid-fetch
+
+    const hasAnything = data.available && (Object.keys(data.conditions || {}).length || (data.scratches || []).length || (data.jockeyChanges || []).length || (data.miscChanges || []).length);
+    if (!hasAnything){
+      el.innerHTML = `<div class="log-empty">Scratches and program changes aren't posted yet for ${escapeHtml(activeTrack.shortName)}.</div>`;
+      return;
+    }
+
+    const condRows = Object.entries(data.conditions || {}).map(([label, value]) => `
+      <div class="nyra-cond-row"><span class="nyra-cond-label">${escapeHtml(label)}</span><span class="nyra-cond-value">${escapeHtml(value)}</span></div>
+    `).join("");
+
+    let lastRace = null;
+    const scratchRows = (data.scratches || []).map(s => {
+      const showRace = s.race !== lastRace;
+      lastRace = s.race;
+      return `
+        <tr>
+          <td>${showRace ? escapeHtml(s.race || "—") : ""}</td>
+          <td>${escapeHtml(s.horse)}</td>
+          <td>${escapeHtml(s.reason || "—")}</td>
+        </tr>`;
+    }).join("");
+
+    const changeRows = (label, rows) => rows.length ? `
+      <div class="nyra-subheading">${escapeHtml(label)}</div>
+      <div class="log-table-wrap">
+        <table class="log-table nyra-changes-table">
+          <thead><tr><th>Race</th><th>Horse</th><th>Change</th></tr></thead>
+          <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.race || "—")}</td><td>${escapeHtml(r.horse)}</td><td>${escapeHtml(r.change || "—")}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>` : "";
+
+    el.innerHTML = `
+      ${data.dateLabel ? `<div class="nyra-meta-line">${escapeHtml(data.dateLabel)}${data.lastUpdated ? ` · Updated ${escapeHtml(data.lastUpdated)}` : ""}</div>` : ""}
+      ${condRows ? `<div class="nyra-conditions-grid">${condRows}</div>` : ""}
+      ${scratchRows ? `
+        <div class="nyra-subheading">Scratches</div>
+        <div class="log-table-wrap">
+          <table class="log-table nyra-scratches-table">
+            <thead><tr><th>Race</th><th>Horse</th><th>Reason</th></tr></thead>
+            <tbody>${scratchRows}</tbody>
+          </table>
+        </div>` : `<div class="log-empty" style="margin-top:8px;">No scratches posted.</div>`}
+      ${changeRows("Jockey Changes", data.jockeyChanges || [])}
+      ${changeRows("Miscellaneous Changes", data.miscChanges || [])}
+    `;
+  }
+
   // Saratoga's per-race "Changes" note (see the entries-card renderer's own
   // comment above for why this exists client-side instead of coming
   // straight off the worker like DMTC's does). Rail-out distance only
@@ -12976,6 +13228,7 @@
     // Pure static UI — no network wait, so this repaints instantly.
     renderStaticTrackChrome(track);
     refreshNyraFrame();
+    refreshNyraScratchesNative();
     refreshOfficialTrackConditions();
     refreshPpStats();
     setRadarMode(currentRadarMode());
@@ -13721,6 +13974,7 @@
   initWindFlow();
   initTrackMapResize();
   refreshNyraFrame();
+  refreshNyraScratchesNative();
   refreshOfficialTrackConditions();
   refreshPpStats();
   setRadarMode("radar");
