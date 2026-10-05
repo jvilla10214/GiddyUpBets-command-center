@@ -5180,6 +5180,28 @@
   // feed, so the label shouldn't imply the same provenance.
   const RESULTS_SOURCE_LABEL = { nyra: "Official — NYRA Results", dmtc: "Official — DMTC/Equibase Results", sportinglife: "Official — Sporting Life Results", smartpony: "SmartPony Results" };
   let lastResultsByRace = {}; // { [raceNumber]: {isFinal, finishOrder, payouts, alsoRan?, scratched?} } for lastEntriesDate — reset on track/date switch
+
+  // Session-local, best-effort "what race are they in" for the track
+  // dropdown — { [trackId]: "R3" | "FIN" }. Deliberately NOT a live poll
+  // across all ~23 tracks: that would mean fetching /entries+/results for
+  // every track on a timer just to feed the dropdown, multiplying Worker
+  // load for tracks nobody's actually looking at (this repo has a real
+  // KV-quota-wall incident on record from less than that). Instead this
+  // piggybacks on data the active track already fetches for its own
+  // Entries tab — so a track only gets a badge once you've actually
+  // visited it this session, and a track with no card today never gets
+  // one at all (handled by computeActiveTrackRaceStatus() below).
+  let trackRaceStatus = {};
+  function computeActiveTrackRaceStatus(){
+    if (!lastEntriesRaces.length){
+      delete trackRaceStatus[activeTrack.id];
+      return;
+    }
+    const sorted = lastEntriesRaces.slice().sort((a, b) => a.raceNumber - b.raceNumber);
+    const nextRace = sorted.find(r => !lastResultsByRace[r.raceNumber]?.isFinal);
+    trackRaceStatus[activeTrack.id] = nextRace ? `R${nextRace.raceNumber}` : "FIN";
+    renderTrackSelectOptions();
+  }
   async function resultsApiGet(track, date){
     const res = await fetch(stableApiUrl(`/results?track=${encodeURIComponent(track)}&date=${encodeURIComponent(date)}`), { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
@@ -6522,6 +6544,7 @@
     if (!races.length){
       selectedEntriesRace = null;
       body.innerHTML = `<div class="log-empty">No races carded for ${escapeHtml(activeTrack.shortName)} on ${escapeHtml(date)}.</div>`;
+      computeActiveTrackRaceStatus();
       return;
     }
     if (selectedEntriesRace == null || !races.some(r => r.raceNumber === selectedEntriesRace)){
@@ -6688,6 +6711,7 @@
         </div>
       </div>
     `;
+    computeActiveTrackRaceStatus();
   }
 
   // ---------- Bias auto-suggest from pasted results/chart text ----------
@@ -13203,7 +13227,12 @@
       // Flag only set on UK/International tracks — US tracks are left
       // unmarked since the country's assumed for them. Weather emoji (if
       // loaded yet) goes first, same left-to-right reading order as the flag.
-      opt.textContent = [trackWeatherEmoji[t.id], t.flag, t.name].filter(Boolean).join(" ");
+      // Race status (R3/FIN) only ever appears once you've actually visited
+      // that track this session — see trackRaceStatus's own comment for why
+      // this isn't a live poll across every track. A track with no card
+      // today (or one never visited) just shows nothing extra, by design.
+      const namePart = [trackWeatherEmoji[t.id], t.flag, t.name].filter(Boolean).join(" ");
+      opt.textContent = trackRaceStatus[t.id] ? `${namePart} · ${trackRaceStatus[t.id]}` : namePart;
       group.appendChild(opt);
     });
     return group;
