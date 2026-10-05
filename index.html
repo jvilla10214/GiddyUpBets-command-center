@@ -361,6 +361,15 @@
       position:static;
       overflow-x:auto;
       width:100%;
+      /* Confirmed real problem at 375px: 8 pages don't fit, and the only
+         sign more exist off-screen was a sliver of scrollbar under the
+         row — easy to miss, so 4 of 8 pages (Historical Weather, Bias
+         Tracker, Stable Tour, Compare) were effectively undiscoverable.
+         A constant edge fade is a plainer, more reliable "there's more
+         here" cue than relying on a scroll-position-aware JS listener for
+         a strip that's always scrollable at this width anyway. */
+      -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
+      mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
     }
     .sidebar-btn{ flex: 0 0 auto; min-width: 76px; }
   }
@@ -1697,6 +1706,70 @@
   .entries-horse-table td, .entries-horse-table th{ white-space: normal; }
   .entries-scratched td{ color: var(--parchment-dim); text-decoration: line-through; }
   .entries-scratched td:nth-child(5), .entries-scratched td:nth-child(6){ text-decoration: none; }
+
+  /* ---------- Entries table -> stacked cards on a phone ----------
+     Confirmed real problem testing at 375px: 6 columns (PP/Horse/Jockey+
+     Trainer+Owner/Wt/ML/Odds) crammed into one row wraps "Jockey Name *
+     Trainer Name" and long owner strings across 4-5 lines each, destroying
+     the at-a-glance scan this table exists for. CSS-only re-layout (no JS
+     structural change, just an extra class on each <table> — see
+     entries-horse-table-6col/-4col below — since this class name is shared
+     by two genuinely different column counts: the live Entries page's 6
+     columns here, and Race Recaps' narrower 4-column table, PP/Horse/
+     Jockey-Trainer/ML only). entries-signals-row (the Insight/Class-Move/
+     Trainer-Angle chip row, colspan=6) is excluded from both — it already
+     renders as its own full-width block via entries-signals-chips.
+     First attempt at the stats row (Wt/ML/Odds sharing one grid-area as
+     inline-block) was a real bug, caught by actually looking at it
+     rendered: separate grid ITEMS placed in the same named area don't flow
+     past each other like inline content does — they paint stacked on top
+     of one another regardless of display:inline-block. Fixed by giving
+     each its own column in the same row instead of sharing one area. */
+  @media (max-width: 640px){
+    .entries-horse-table thead{ display:none; }
+    .entries-horse-table, .entries-horse-table tbody{ display:block; width:100%; }
+    .entries-horse-table tr:not(.entries-signals-row){
+      display:grid;
+      column-gap:10px;
+      row-gap:3px;
+      border:1px solid var(--panel-border);
+      border-radius:8px;
+      padding:10px 12px;
+      margin-bottom:8px;
+    }
+    .entries-horse-table tr.entries-signals-row{ display:block; margin-top:-8px; margin-bottom:8px; }
+    .entries-horse-table td{ display:block; border-bottom:none; padding:0; white-space:normal; }
+
+    .entries-horse-table-6col tr:not(.entries-signals-row){
+      grid-template-columns: auto 1fr 1fr 1fr;
+      grid-template-areas:
+        "pp horse horse horse"
+        "pp jockey jockey jockey"
+        "pp wt ml odds";
+    }
+    .entries-horse-table-6col td:nth-child(1){ grid-area:pp; align-self:start; }
+    .entries-horse-table-6col td:nth-child(2){ grid-area:horse; font-weight:600; }
+    .entries-horse-table-6col td:nth-child(3){ grid-area:jockey; color:var(--parchment-dim); font-size:11.5px; }
+    .entries-horse-table-6col td:nth-child(4){ grid-area:wt; font-size:11.5px; }
+    .entries-horse-table-6col td:nth-child(5){ grid-area:ml; font-size:11.5px; }
+    .entries-horse-table-6col td:nth-child(6){ grid-area:odds; font-size:11.5px; }
+    .entries-horse-table-6col td:nth-child(4)::before{ content:"Wt "; color:var(--parchment-dim); }
+    .entries-horse-table-6col td:nth-child(5)::before{ content:"ML "; color:var(--parchment-dim); }
+    .entries-horse-table-6col td:nth-child(6)::before{ content:"Now "; color:var(--parchment-dim); }
+
+    .entries-horse-table-4col tr:not(.entries-signals-row){
+      grid-template-columns: auto 1fr;
+      grid-template-areas:
+        "pp horse"
+        "pp jockey"
+        "pp ml";
+    }
+    .entries-horse-table-4col td:nth-child(1){ grid-area:pp; align-self:start; }
+    .entries-horse-table-4col td:nth-child(2){ grid-area:horse; font-weight:600; }
+    .entries-horse-table-4col td:nth-child(3){ grid-area:jockey; color:var(--parchment-dim); font-size:11.5px; }
+    .entries-horse-table-4col td:nth-child(4){ grid-area:ml; font-size:11.5px; }
+    .entries-horse-table-4col td:nth-child(4)::before{ content:"ML "; color:var(--parchment-dim); }
+  }
   .ml-badge{
     font-family:'IBM Plex Mono', monospace;
     font-size: 11px;
@@ -6494,7 +6567,7 @@
         ${changesHtml}
         ${weatherHtml}
         <div class="log-table-wrap">
-          <table class="log-table entries-horse-table">
+          <table class="log-table entries-horse-table entries-horse-table-6col">
             <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>Wt</th><th>ML</th><th>Odds</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
@@ -7197,7 +7270,7 @@
         ${recapHtml}
         ${resultsCardHtml}
         <div class="log-table-wrap">
-          <table class="log-table entries-horse-table">
+          <table class="log-table entries-horse-table entries-horse-table-4col">
             <thead><tr><th>PP</th><th>Horse</th><th>Jockey / Trainer</th><th>ML</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
