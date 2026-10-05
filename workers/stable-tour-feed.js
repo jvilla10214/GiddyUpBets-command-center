@@ -9024,7 +9024,14 @@ async function runSmartPonyImport(env) {
       checked++;
       const matchedTrainer = resolveTrackedTrainer(q.trainerName, state.trainers);
       if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next full pass
-      if (smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
+      // Real bug fixed 2026-10-05: fetchSmartPonyQuotes()'s own race-entries
+      // cross-reference already verifies+rewrites a misattributed quote
+      // (see its own comment) — that rewrite is BY CONSTRUCTION the same
+      // "embedded name differs from credited trainer" shape this guard
+      // looks for, so every one of those legitimate, already-correct
+      // rewrites was being caught here and silently discarded. Skip the
+      // guard entirely for anything already verified that way.
+      if (!q.reattributedFromRaceEntries && smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
         skippedMisattributed++;
         await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
         continue; // embedded speaker doesn't match the credited trainer — see smartPonyQuoteMisattributed()'s own comment
@@ -9040,6 +9047,7 @@ async function runSmartPonyImport(env) {
         autoImported: true,
         sentiment: q.sentiment || null,
         importedVia: "SmartPony",
+        reattributedFromRaceEntries: q.reattributedFromRaceEntries || false,
         capturedAt: new Date().toISOString(),
       });
       written++;
@@ -9282,6 +9290,17 @@ async function fetchSmartPonyQuotes(env) {
     let trainerName = (row.trainer_name_raw || row.trainer_name || "").trim();
     if (!trainerName) continue;
     let noteText = text;
+    // Set when the block below rewrites noteText/trainerName — lets
+    // runSmartPonyImport() tell this deliberate, race-data-verified rewrite
+    // apart from a genuinely misattributed quote. Both produce the exact
+    // same "EmbeddedName: text" + credited-trainer-differs shape, which is
+    // real-confirmed to matter: without this flag, smartPonyQuoteMisattributed()
+    // (added 2026-10-01, after this reattribution logic already existed)
+    // flagged EVERY quote rewritten here as misattributed and silently
+    // discarded it — the embedded name is BY CONSTRUCTION different from
+    // the real trainer this block just resolved to, so that check always
+    // fired. Every legitimate reattribution done here was being thrown away.
+    let reattributedFromRaceEntries = false;
 
     const horseId = row.matched_horse_id || nameToHorseId[horseName];
     const entry = horseId ? entryByHorseId[horseId] : null;
@@ -9296,6 +9315,7 @@ async function fetchSmartPonyQuotes(env) {
         // the trainer's own, worth knowing it wasn't the trainer talking.
         noteText = `${trainerName}: ${text}`;
         trainerName = realTrainer;
+        reattributedFromRaceEntries = true;
       }
     }
     // Snap to an already-tracked trainer's exact spelling whenever one
@@ -9317,6 +9337,7 @@ async function fetchSmartPonyQuotes(env) {
       trainerName,
       horseName,
       text: noteText,
+      reattributedFromRaceEntries,
       sentiment: row.sentiment || null,
       date: article.published_at ? article.published_at.slice(0, 10) : (row.created_at ? row.created_at.slice(0, 10) : null),
       source: article.title || article.source || "SmartPony",
