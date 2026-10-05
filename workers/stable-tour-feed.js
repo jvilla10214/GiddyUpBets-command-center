@@ -1834,7 +1834,7 @@ async function handleRequest(request, env) {
     }
 
     // Read-only, no auth (same as /raceday GET) — serves the cached blob
-    // computeTrainerAngleStats() builds once a day on the scheduled() cron
+    // computeTrainerAngleStats() builds once a day on SIDE_JOBS_CRON
     // (see that function's own comment). Lazily computes it on a cold miss
     // (first deploy, or a fresh KV) so this never just 404s with nothing to
     // show — a real request that happens to land on the empty-cache moment
@@ -1881,8 +1881,8 @@ async function handleRequest(request, env) {
     }
 
     // Manual trigger for job #24's runBloodHorseImport() — same reasoning
-    // as /debug-run-scheduled above (also piggybacks the real Cron Trigger
-    // already; this is the on-demand equivalent for testing without waiting
+    // as /debug-run-scheduled above (also runs on the real SIDE_JOBS_CRON
+    // trigger; this is the on-demand equivalent for testing without waiting
     // for the next firing).
     if (url.pathname === "/debug-run-bloodhorse" && request.method === "GET") {
       if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
@@ -2951,8 +2951,8 @@ function racedayKvKey(track, date) {
 // ever writes when someone actually has that track/date's card open while
 // results are posting (see /raceday POST's own comment), so a day nobody
 // was watching keeps an entries-only snapshot forever with no way to
-// self-correct. Runs on every scheduled() firing (piggybacks the existing
-// entry-alerts Cron Trigger — no new trigger needed) and via
+// self-correct. Runs once a day on SIDE_JOBS_CRON's 13:30 UTC fire (see
+// runSideJobs()) and via
 // /debug-backfill-raceday-results for on-demand/manual use. Bounded to a
 // trailing window so a caught-up backlog doesn't re-check the same old,
 // permanently-resultless dates (rained out, canceled, etc.) every run.
@@ -2970,9 +2970,8 @@ function racedayKvKey(track, date) {
 // not a duplicate. Auto-merging on that signal would have deleted real,
 // distinct content. Exact-text matching has no such risk — the two notes
 // say the literal same thing, so keeping only the earlier one loses
-// nothing. Runs on every scheduled() firing (piggybacks the existing
-// entry-alerts Cron Trigger, same as backfillRaceDayResults() above — no
-// new trigger needed) and via /debug-dedupe-notes for on-demand/manual use.
+// nothing. Runs once a day on SIDE_JOBS_CRON's 13:30 UTC fire, same as
+// backfillRaceDayResults() above, and via /debug-dedupe-notes for on-demand/manual use.
 function dedupeNoteKey(n) {
   const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
   return `${norm(n.trainer)}|${norm(n.horse)}|${norm(n.note)}`;
@@ -4017,9 +4016,18 @@ function parseNyraRaceFragment(html, date) {
     }
   }
 
-  const purseMatch = html.match(/<section class="flex items-baseline gap-5">[\s\S]*?<div>\s*([\s\S]*?)\s*<\/div>\s*<\/section>/);
+  // Scoped to the one info <section> (never past its own </section>).
+  // Confirmed real bug (2026-10-01): a cancelled race renders a red
+  // "Racing Cancelled" <div class=...> there instead of the plain purse
+  // <div>, and the old unscoped lazy match ran on down the page into the
+  // Owners/Breeders block, archiving that raw HTML as purse/raceType for
+  // Belmont 9/26 + 9/27 and Saratoga 7/29 + 7/30 R8.
+  const infoSection = (html.match(/<section class="flex items-baseline gap-5">((?:(?!<\/section>)[\s\S])*)<\/section>/) || [])[1] || "";
+  const purseMatch = infoSection.match(/<div>\s*([\s\S]*?)\s*<\/div>/);
   let purse = null, raceType = null;
-  if (purseMatch) {
+  if (/Racing Cancelled/i.test(infoSection)) {
+    raceType = "Racing Cancelled";
+  } else if (purseMatch) {
     const lines = purseMatch[1].split("\n").map((s) => decodeEntities(s).trim()).filter(Boolean);
     purse = lines[0] || null;
     raceType = lines.slice(1).join(" ") || null;
