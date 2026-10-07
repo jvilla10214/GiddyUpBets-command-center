@@ -12807,13 +12807,18 @@
   // predicted-total-today forecast both live on Rain Nowcast (see its own
   // section below), since this tile is about what's already fallen, not
   // what's happening right now or what's still to come.
+  // Fixed, not relative-to-this-week's-max — a bar's length means the same
+  // thing every week (e.g. a 0.3in day always reads as "10% of a genuinely
+  // tough-to-hit day"), rather than a trace amount looking huge just because
+  // nothing else that particular week happened to be wet. 3in/day is rare
+  // even in a real storm, so a maxed-out bar stays a meaningful outlier.
+  const RAIN_WEEK_BAR_MAX_IN = 3.0;
   function renderRainTile(){
     $("rainRaceDay").textContent = rainWindowTotals.today != null ? rainWindowTotals.today.toFixed(2) : "—";
     $("rainYesterday").textContent = rainYesterdayTotal != null ? rainYesterdayTotal.toFixed(2) : "—";
     $("rainTile").classList.toggle("alert", rainWindowTotals.today != null && rainWindowTotals.today > RAIN_WINDOW_ALERT_THRESHOLD.today);
 
     const validDays = rainWeekBreakdown.filter(d => d.total != null);
-    const maxVal = Math.max(0.01, ...validDays.map(d => d.total));
     $("rainWeekSum").textContent = validDays.length
       ? validDays.reduce((s, d) => s + d.total, 0).toFixed(2)
       : "—";
@@ -12823,12 +12828,16 @@
         return `<div class="rain-week-row"><span class="rain-week-day">—</span><span class="rain-week-bar-track"></span><span class="rain-week-amt">—</span></div>`;
       }
       const dayLabel = new Date(`${d.date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }).toUpperCase();
-      const pct = Math.max(3, Math.round((d.total / maxVal) * 100));
+      // Rounds first, then decides the bar off the ROUNDED value — so a
+      // trace amount that displays as "0.00" (e.g. 0.003in) never shows a
+      // bar the printed number doesn't back up.
+      const displayAmt = d.total.toFixed(2);
+      const pct = Number(displayAmt) > 0 ? Math.min(100, Math.max(2, Math.round((d.total / RAIN_WEEK_BAR_MAX_IN) * 100))) : 0;
       return `
         <div class="rain-week-row">
           <span class="rain-week-day">${dayLabel}</span>
-          <span class="rain-week-bar-track"><span class="rain-week-bar" style="width:${pct}%"></span></span>
-          <span class="rain-week-amt">${d.total.toFixed(2)}</span>
+          <span class="rain-week-bar-track">${pct > 0 ? `<span class="rain-week-bar" style="width:${pct}%"></span>` : ""}</span>
+          <span class="rain-week-amt">${displayAmt}</span>
         </div>`;
     }).join("");
   }
