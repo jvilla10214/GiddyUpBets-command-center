@@ -562,6 +562,14 @@
 // as NYRA News — see SMARTPONY_CRON's own comment for the "Too many
 // subrequests" failure this fixes. Same deploy-order caution as the fourth
 // trigger above: paste and deploy this file first, then add the trigger.
+// A SIXTH ("10 13,21 * * *", LIGHT_NEWS_CRON) and SEVENTH ("15 13,21 * * *",
+// DRF_CRON) Cron Trigger were added the same day, same reasoning again —
+// BloodHorse started hitting the identical "Too many subrequests" error
+// still sharing SIDE_JOBS_CRON's slot with DRF/Stable Tour feed/TDN
+// notebook/HRN even after SmartPony's own removal. See LIGHT_NEWS_CRON's
+// own comment for the full breakdown and why DRF specifically got isolated
+// on its own rather than folded in with the other three. Same deploy-order
+// caution: paste and deploy this file first, then add both triggers.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -713,6 +721,30 @@ export default {
       );
       return;
     }
+    // The three cheapest remaining news jobs — see LIGHT_NEWS_CRON's own
+    // comment for why these got split out from the rest.
+    if (event.cron === LIGHT_NEWS_CRON) {
+      ctx.waitUntil(
+        trackedRun(env, "stabletourfeed", () => runStableTourFeedImport(env), "Stable Tour feed import")
+      );
+      ctx.waitUntil(
+        trackedRun(env, "tdnnotebook", () => runTdnNotebookImport(env), "TDN Saratoga Notebook import")
+      );
+      ctx.waitUntil(
+        trackedRun(env, "hrnnews", () => runHrnNewsImport(env), "Horse Racing Nation import")
+      );
+      return;
+    }
+    // DRF alone — see DRF_CRON's own comment for why it needs its own slot
+    // (its fetch count can swing from ~6 to ~42 depending on whether it's
+    // still blocked, which makes it the single riskiest job to bundle with
+    // anything else that also needs headroom).
+    if (event.cron === DRF_CRON) {
+      ctx.waitUntil(
+        trackedRun(env, "drf", () => runDrfImport(env), "DRF import")
+      );
+      return;
+    }
     // Same isolation as NYRA News above, added 2026-10-02 — see
     // SIDE_JOBS_CRON's own comment for why: every import/maintenance job
     // that used to run alongside the entry-alert emails below now runs here
@@ -772,25 +804,18 @@ function runSideJobs(event, env, ctx) {
   const hour = fireTime.getUTCHours();
   const minute = fireTime.getUTCMinutes();
   if (minute < 30) {
-    // Jobs #24-26 and #28-31 — run on both fires (their own KV dedup makes
-    // that safe, and twice-daily freshness is worth it for a news source).
+    // Jobs #24-25 — run on both fires (their own KV dedup makes that safe,
+    // and twice-daily freshness is worth it for a news source). DRF, Stable
+    // Tour feed, TDN notebook, and HRN moved to their own Cron Triggers
+    // 2026-10-07 (see LIGHT_NEWS_CRON/DRF_CRON's own comments) after
+    // BloodHorse itself started hitting "Too many subrequests" sharing this
+    // slot with all of them — these two stay here since together they're
+    // still comfortably under budget alone.
     ctx.waitUntil(
       trackedRun(env, "bloodhorse", () => runBloodHorseImport(env), "BloodHorse import")
     );
     ctx.waitUntil(
       trackedRun(env, "tdnmain", () => runTdnMainImport(env), "TDN main feed import")
-    );
-    ctx.waitUntil(
-      trackedRun(env, "drf", () => runDrfImport(env), "DRF import")
-    );
-    ctx.waitUntil(
-      trackedRun(env, "stabletourfeed", () => runStableTourFeedImport(env), "Stable Tour feed import")
-    );
-    ctx.waitUntil(
-      trackedRun(env, "tdnnotebook", () => runTdnNotebookImport(env), "TDN Saratoga Notebook import")
-    );
-    ctx.waitUntil(
-      trackedRun(env, "hrnnews", () => runHrnNewsImport(env), "Horse Racing Nation import")
     );
     // SmartPony moved to its own Cron Trigger (SMARTPONY_CRON) 2026-10-07 —
     // see that constant's own comment for why it outgrew sharing this one.
@@ -8232,6 +8257,21 @@ const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (
 // string (required for the dispatch check below to tell them apart) and the
 // two invocations' subrequests never land in the same window.
 const SMARTPONY_CRON = "5 13,21 * * *";
+// Added 2026-10-07, same incident — confirmed via /debug-pipeline-health that
+// BLOODHORSE was ALSO hitting "Too many subrequests" in the very same
+// SIDE_JOBS_CRON batch that SmartPony just got pulled out of, so pulling
+// SmartPony out alone wasn't enough headroom. Rough per-run fetch counts:
+// BloodHorse ~18, TDN main ~16, Stable Tour feed ~9, TDN notebook ~9,
+// HRN ~9, DRF ~6 now (blocked) but designed for up to ~42 if DRF ever comes
+// back online — combined, 60-100+ in one invocation. Split the remaining
+// six into three groups instead of one: BloodHorse+TDN main stay on
+// SIDE_JOBS_CRON (~34, safe margin); the three light/cheap ones move to
+// LIGHT_NEWS_CRON (~27); DRF gets its own slot (DRF_CRON) specifically
+// because it's the one most likely to swing wildly in size if it's ever
+// unblocked, and isolating it means that swing can never again threaten
+// anyone else's budget the way it threatens this one right now.
+const LIGHT_NEWS_CRON = "10 13,21 * * *";
+const DRF_CRON = "15 13,21 * * *";
 // Confirmed real 2026-10-02: /debug-last-run showed the entry-alert emails
 // themselves sending 0, with tracks failing on "Too many subrequests by
 // single Worker invocation" -- scheduled() was starting runEntryAlerts() in
