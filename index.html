@@ -3707,9 +3707,6 @@
             <label>Shared Data Source (Worker URL)
               <input type="text" id="stableFeedUrlInput" placeholder="https://your-worker.workers.dev/">
             </label>
-            <label>Edit Passphrase
-              <input type="password" id="stableApiKeyInput" placeholder="Ask whoever set this up">
-            </label>
           </div>
           <div class="bias-form-actions">
             <button type="button" id="stableFeedSaveBtn">Save</button>
@@ -3718,9 +3715,8 @@
           </div>
           <div class="log-note" id="stableFeedStatus">
             Trainers and notes are stored centrally on this Worker — everyone using the same URL sees the same
-            data. The passphrase is required to add/edit/remove anything (ask whoever deployed the Worker for it);
-            without it you can still view everyone's notes, just not change them. This also checks
-            thisishorseracing.com's Stable Tour category automatically, one trainer/horse note per detected horse.
+            data. This also checks thisishorseracing.com's Stable Tour category automatically, one trainer/horse
+            note per detected horse.
           </div>
           <!-- One health view across every automated job (side jobs #24-26/
                #28-31, NYRA News, both entry-alert runs) — built after the
@@ -8828,12 +8824,12 @@
   // typed text — same reasoning the News Wire already uses for RSS content.
   // Trainers/notes live on the Worker (Cloudflare KV), not localStorage —
   // every visitor reading from the same Worker URL sees the same shared
-  // data instead of each device keeping its own separate copy. Reads are
-  // open; writes require STABLE_API_KEY (below) to match what the Worker
-  // was deployed with.
+  // data instead of each device keeping its own separate copy. No passphrase
+  // on reads or writes — removed 2026-10-07 (team-only tool, the gate was
+  // never real security, just friction; see the Worker's own isAuthorized()
+  // removal for the full reasoning).
   const STABLE_WORKER_URL_DEFAULT = "https://stable-tour-feed.jvilla10214.workers.dev/";
   const STABLE_FEED_URL_KEY = "giddyupbets_stable_feed_url_v1";
-  const STABLE_API_KEY_KEY = "giddyupbets_stable_api_key_v1";
   let stableTrainers = [];
   let stableNotes = [];
   let stableTrainerMeta = {}; // name -> { source, addedAt } — how each trainer was added
@@ -8863,15 +8859,6 @@
     try{ localStorage.setItem(STABLE_FEED_URL_KEY, url); }
     catch(err){ console.error("Stable feed URL failed to save", err); }
   }
-  function loadStableApiKey(){
-    try{ return localStorage.getItem(STABLE_API_KEY_KEY) || ""; }
-    catch(err){ return ""; }
-  }
-  function saveStableApiKey(key){
-    try{ localStorage.setItem(STABLE_API_KEY_KEY, key); }
-    catch(err){ console.error("Stable API key failed to save", err); }
-  }
-
   function stableApiUrl(path){
     return loadStableFeedUrl().replace(/\/$/, "") + path;
   }
@@ -8883,10 +8870,9 @@
   async function stableApiWrite(method, path, body){
     const res = await fetch(stableApiUrl(path), {
       method,
-      headers: { "Content-Type": "application/json", "X-Stable-Key": loadStableApiKey() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (res.status === 401) throw new Error("wrong or missing passphrase — set it in Setup below");
     if (!res.ok) throw new Error("HTTP " + res.status);
     return res.json();
   }
@@ -10533,16 +10519,14 @@
   // stableSmartPonySeen removed along with it; dedup now lives server-side
   // (KV).
 
-  // Worker URL/passphrase config still matters for every other shared-
-  // storage write in the app (manual notes, trainer/jockey adds, etc.) even
-  // though the 4 auto-import jobs this button used to also trigger are all
-  // server-side now (jobs #2/#7/#17/#18 — see their own retirement comments
-  // above) — saving here no longer kicks off a client-side check.
+  // Worker URL config still matters for every other shared-storage write in
+  // the app (manual notes, trainer/jockey adds, etc.) even though the 4
+  // auto-import jobs this button used to also trigger are all server-side
+  // now (jobs #2/#7/#17/#18 — see their own retirement comments above) —
+  // saving here no longer kicks off a client-side check.
   $("stableFeedSaveBtn").addEventListener("click", () => {
     const url = $("stableFeedUrlInput").value.trim();
-    const key = $("stableApiKeyInput").value;
     saveStableFeedUrl(url || STABLE_WORKER_URL_DEFAULT);
-    saveStableApiKey(key);
     $("stableFeedStatus").textContent = "Saved.";
   });
   // All four sources this used to manually re-check now run automatically
@@ -10715,18 +10699,9 @@
     $("pipelineHealthPanel").innerHTML = banner + rows;
   }
   async function checkPipelineHealth(){
-    const key = loadStableApiKey();
-    if (!key){
-      $("stableFeedStatus").textContent = "Enter the passphrase above first — Pipeline Health needs it, same as any other admin check.";
-      return;
-    }
     $("stableFeedStatus").textContent = "Checking pipeline health…";
     try{
-      const res = await fetch(stableApiUrl("/debug-pipeline-health"), { headers: { "X-Stable-Key": key }, cache: "no-store" });
-      if (res.status === 401){
-        $("stableFeedStatus").textContent = "Unauthorized — check the passphrase above.";
-        return;
-      }
+      const res = await fetch(stableApiUrl("/debug-pipeline-health"), { cache: "no-store" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       renderPipelineHealth(data.jobs || {});
@@ -13803,7 +13778,6 @@
   loadRaceDayArchive();
 
   $("stableFeedUrlInput").value = loadStableFeedUrl();
-  $("stableApiKeyInput").value = loadStableApiKey();
   (async () => {
     const data = await loadStableData();
     stableTrainers = data.trainers;

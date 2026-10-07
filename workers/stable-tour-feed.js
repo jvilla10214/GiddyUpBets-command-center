@@ -5,11 +5,14 @@
 // 1. Shared storage (GET/POST/DELETE /data, /trainers, /notes) — a KV-backed
 //    trainer/notes store so every visitor's browser reads and writes the
 //    SAME data instead of each device keeping its own separate localStorage
-//    copy. Reads are open to anyone with the URL; writes require the
-//    X-Stable-Key header to match WRITE_PASSPHRASE below — not real auth
-//    (the passphrase ships in client-side JS, so anyone motivated enough to
-//    view-source can find it), just a deterrent against someone stumbling
-//    on the URL and vandalizing the shared list.
+//    copy. Both reads and writes are fully open — no passphrase anywhere in
+//    this file as of 2026-10-07 (removed entirely; this is a small team's
+//    internal tool, and the old passphrase was never real security to begin
+//    with — it shipped in client-side JS, so it only ever added friction for
+//    legitimate teammates, never actually stopped a motivated outsider).
+//    The one real mitigating factor against abuse: this Worker's URL isn't
+//    linked from anywhere public, it just happens to be visible in
+//    index.html's source if someone goes looking.
 //
 // 2. Auto-import feed (GET /, unchanged from before) — fetches
 //    thisishorseracing.com's dedicated Stable Tour category feed, keeps
@@ -48,16 +51,14 @@
 //    computation for the non-racing days NYRA has no entry for.
 //
 // 5. Shared Bias Tracker (GET/POST/DELETE /biaslog, one KV key per track) —
-//    same shape as job #3 (weatherlog), also deliberately open with no
-//    passphrase gate. This one DOES carry free-text a visitor could
-//    vandalize with junk (unlike weatherlog, which is pure computed
-//    numbers) — that's a real, accepted tradeoff, not an oversight: gating
-//    writes behind Stable Tour's passphrase would also block every ordinary
-//    visitor from saving their own manual bias read, since that passphrase
-//    is a team-internal secret, not something a random visitor is expected
-//    to have. Manual entries have always been freely editable by anyone
-//    (previously just stuck in their own browser, unseen by others); making
-//    that shared keeps the same openness it already had rather than adding
+//    same shape as job #3 (weatherlog), also open with no gate of any kind
+//    (every route in this file is, as of 2026-10-07 — see job #1's own
+//    comment). This one DOES carry free-text a visitor could vandalize
+//    with junk (unlike weatherlog, which is pure computed numbers) — a
+//    real, accepted tradeoff for a team-internal tool, not an oversight.
+//    Manual entries have always been freely editable by anyone (previously
+//    just stuck in their own browser, unseen by others); making that shared
+//    keeps the same openness it already had rather than adding
 //    new friction. The NYRA Track Trends auto-import (job #4) also writes
 //    through this same open endpoint — see autoImportNyraTrends() client-side
 //    for how it protects manual entries from being overwritten by a re-scrape.
@@ -656,7 +657,6 @@ const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 // its own User-Agent header. That's the actual reason job #11 goes through
 // this Worker at all, not just convention.
 const NWS_USER_AGENT = "GiddyUpBetsCommandCenter/1.0 (https://jvilla10214.github.io/GiddyUpBets-command-center/; contact: jvilla10214@gmail.com)";
-const WRITE_PASSPHRASE = "giddyup";
 // Job #16 — entry-alert email recipients/sender. Not secrets (an email
 // address isn't sensitive the way an API key is), so these are plain
 // constants here rather than env bindings — edit and redeploy to change
@@ -997,7 +997,6 @@ async function handleRequest(request, env) {
     // comment) in one call instead of hundreds, but kept general since any
     // future bulk trainer cleanup needs exactly this same primitive.
     if (url.pathname === "/trainers/bulk-delete" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const names = new Set(Array.isArray(body.names) ? body.names : []);
       if (!names.size) return json({ error: "Missing names" }, 400);
@@ -1030,7 +1029,6 @@ async function handleRequest(request, env) {
     // app deliberately never makes on its own, hence its own dedicated route
     // rather than folding it into the auto-import path.
     if (url.pathname === "/trainers/merge" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const from = (body.from || "").trim();
       const to = (body.to || "").trim();
@@ -1231,14 +1229,14 @@ async function handleRequest(request, env) {
     // on POST *and* DELETE both being affected), silently losing some.
     // Built for the 2026-09-18 full-database accuracy/duplicate audit;
     // reusable for any future large cleanup pass rather than a one-off.
-    // Admin-only (same passphrase gate as every other mutating debug
-    // route) — this is a bulk data-editing tool, not something the client
-    // app calls. Body: { deleteIds: string[], patches: [{ id, source?,
+    // No passphrase gate (removed file-wide 2026-10-07, see the header
+    // comment) — this is a bulk data-editing tool, not something the client
+    // app calls, so it's reached by URL + admin knowledge, not an auth
+    // check. Body: { deleteIds: string[], patches: [{ id, source?,
     // note?, trainer?, horse?, date? }] }. deleteIds are removed FIRST,
     // then patches are applied to whatever's left — so patching an id
     // that's also in deleteIds is a no-op (already gone), never an error.
     if (url.pathname === "/notes/bulk-cleanup" && request.method === "POST") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const body = await request.json().catch(() => ({}));
       const deleteIds = new Set(Array.isArray(body.deleteIds) ? body.deleteIds : []);
       const patches = Array.isArray(body.patches) ? body.patches : [];
@@ -1314,7 +1312,6 @@ async function handleRequest(request, env) {
     // horse, exact note text) and keeps the EARLIEST-captured note in each
     // group as the one survivors merge into.
     if (url.pathname === "/debug-merge-duplicate-notes" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const allNotes = await readNotes(env);
       const groups = new Map();
       for (const n of allNotes) {
@@ -1543,7 +1540,6 @@ async function handleRequest(request, env) {
     // time via user reports — this checks the whole backlog in one pass.
     // Read-only: reports mismatches, changes nothing itself.
     if (url.pathname === "/smartpony-audit" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       try {
         const report = await auditNotesAgainstSmartPony(env);
         return json(report, 200, { "Cache-Control": "no-store" });
@@ -1919,7 +1915,6 @@ async function handleRequest(request, env) {
     // convenience afterward (same idea as the Daily Log's own "+ Log
     // Today's Snapshot Now" manual-trigger button).
     if (url.pathname === "/debug-run-scheduled" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       // ?mode=evening added 2026-09-17 to test the new day-before send
       // on-demand without waiting for the real 4pm Eastern trigger.
       const isEvening = url.searchParams.get("mode") === "evening";
@@ -1938,7 +1933,6 @@ async function handleRequest(request, env) {
     // trigger; this is the on-demand equivalent for testing without waiting
     // for the next firing).
     if (url.pathname === "/debug-run-bloodhorse" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runBloodHorseImport(env);
       await recordPipelineRun(env, "bloodhorse", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
@@ -1947,7 +1941,6 @@ async function handleRequest(request, env) {
     // Manual trigger for job #25's runTdnMainImport() — same reasoning as
     // /debug-run-bloodhorse above.
     if (url.pathname === "/debug-run-tdn-main" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runTdnMainImport(env);
       await recordPipelineRun(env, "tdnmain", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
@@ -1957,7 +1950,6 @@ async function handleRequest(request, env) {
     // /debug-run-bloodhorse above. ?force=1 re-reads articles already marked
     // imported (dedupe still stops any duplicate note).
     if (url.pathname === "/debug-run-nyra-import" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runNyraNewsImport(env, { force: url.searchParams.get("force") === "1" });
       await recordPipelineRun(env, "nyranews", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
@@ -1973,7 +1965,6 @@ async function handleRequest(request, env) {
     // Manual trigger for job #26's runDrfImport() — same reasoning as
     // /debug-run-bloodhorse above.
     if (url.pathname === "/debug-run-drf" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runDrfImport(env);
       await recordPipelineRun(env, "drf", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
@@ -1982,25 +1973,21 @@ async function handleRequest(request, env) {
     // Manual triggers for jobs #28-31's server-side migrations — same
     // reasoning as /debug-run-bloodhorse above.
     if (url.pathname === "/debug-run-stable-tour-feed" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runStableTourFeedImport(env);
       await recordPipelineRun(env, "stabletourfeed", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-tdn-notebook" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runTdnNotebookImport(env);
       await recordPipelineRun(env, "tdnnotebook", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-hrn-news" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runHrnNewsImport(env);
       await recordPipelineRun(env, "hrnnews", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-smartpony" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const result = await runSmartPonyImport(env);
       await recordPipelineRun(env, "smartpony", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
@@ -2015,7 +2002,6 @@ async function handleRequest(request, env) {
     // function's own comment on why "same source link" was rejected as a
     // signal after auditing what it would have deleted).
     if (url.pathname === "/debug-dedupe-notes" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       let result;
       try {
         result = await dedupeStableTourNotes(env);
@@ -2032,7 +2018,6 @@ async function handleRequest(request, env) {
     // already, once a day; this is the on-demand equivalent for testing a
     // fresh archive day right away instead of waiting for the next firing).
     if (url.pathname === "/debug-recompute-trainer-angles" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       let result;
       try {
         result = await computeTrainerAngleStats(env);
@@ -2049,7 +2034,6 @@ async function handleRequest(request, env) {
     // already, this is just the on-demand equivalent for testing or
     // catching up a gap right away instead of waiting for the next firing).
     if (url.pathname === "/debug-backfill-raceday-results" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       let result;
       try {
         result = await backfillRaceDayResults(env);
@@ -2074,7 +2058,6 @@ async function handleRequest(request, env) {
     // two addresses this way isn't possible yet regardless of what this
     // route sends to. An explicit ?to= overrides this once that's sorted.
     if (url.pathname === "/debug-send-test-email" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : [NOTIFY_EMAILS[0]];
       try {
         const res = await fetch("https://api.resend.com/emails", {
@@ -2107,7 +2090,6 @@ async function handleRequest(request, env) {
     // today's real content without waiting for the Cron Trigger. Never
     // touches raceNotifyKvKey() dedup state.
     if (url.pathname === "/debug-send-styled-test-email" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const track = url.searchParams.get("track") || "saratoga";
       const date = url.searchParams.get("date") || entryAlertTodayDate();
       const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : NOTIFY_EMAILS;
@@ -2137,7 +2119,6 @@ async function handleRequest(request, env) {
     // its own copy specifically so the real send logic can never accidentally
     // pick up a "include scratches" code path.
     if (url.pathname === "/debug-preview-recap-email" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const track = url.searchParams.get("track") || "saratoga";
       const date = url.searchParams.get("date") || entryAlertTodayDate();
       const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : NOTIFY_EMAILS;
@@ -2198,7 +2179,6 @@ async function handleRequest(request, env) {
     // run, but a "source": "scheduled" entry with a recent "ranAt" is real
     // proof the schedule itself is invoking the worker.
     if (url.pathname === "/debug-last-run" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const [amRaw, eveRaw] = await Promise.all([
         env.STABLE_KV.get("entryalerts:lastrun:am"),
         env.STABLE_KV.get("entryalerts:lastrun:eve"),
@@ -2219,7 +2199,6 @@ async function handleRequest(request, env) {
     // or its manual-route equivalent — this route only reads KV back, it
     // doesn't compute anything new.
     if (url.pathname === "/debug-pipeline-health" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const listed = await env.STABLE_KV.list({ prefix: "pipeline:lastrun:" });
       const jobs = {};
       await Promise.all(listed.keys.map(async (k) => {
@@ -2269,10 +2248,8 @@ async function handleRequest(request, env) {
     // "send regardless of notes" rule already have a dedup key, which would
     // otherwise block a legitimate future email once a note actually gets
     // added for them). Paginated since STABLE_KV.list() caps at 1000 keys
-    // per call. Same passphrase gate as every other route that mutates
-    // shared state.
+    // per call.
     if (url.pathname === "/debug-clear-race-notify" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       let cursor;
       let cleared = 0;
       do {
@@ -2296,10 +2273,8 @@ async function handleRequest(request, env) {
     // import itself uses) and matches on (trainer, horse, link) instead —
     // the same identity the live import's own dedup already keys on, so
     // this always agrees with "would the live import consider this the same
-    // note." Same passphrase gate as every other route that mutates shared
-    // state; safe to re-run (a no-op once nothing left qualifies).
+    // note." Safe to re-run (a no-op once nothing left qualifies).
     if (url.pathname === "/debug-backfill-importedvia" && request.method === "GET") {
-      if (!isAuthorized(request)) return json({ error: "Unauthorized" }, 401);
       const notes = await readNotes(env);
       let quotes;
       try {
@@ -2463,10 +2438,6 @@ async function handleRequest(request, env) {
       fetchedAt: new Date().toISOString(),
       articles,
     }, 200, { "Cache-Control": "public, max-age=900" }); // 15 min — this content updates infrequently
-}
-
-function isAuthorized(request) {
-  return request.headers.get("X-Stable-Key") === WRITE_PASSPHRASE;
 }
 
 // Strips combining diacritical marks and normalizes curly/smart apostrophes
@@ -3475,7 +3446,7 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Stable-Key",
+    "Access-Control-Allow-Headers": "Content-Type",
   };
 }
 
@@ -8469,8 +8440,7 @@ async function runNyraNewsImport(env, { force = false } = {}) {
 // big JSON set, which would need a read-modify-write on every single check
 // and reintroduce exactly the KV race this project has already hit more
 // than once), TTL'd so the keys don't accumulate forever. GET
-// /debug-run-bloodhorse triggers this on demand, same passphrase gate as
-// every other route that mutates shared state.
+// /debug-run-bloodhorse triggers this on demand.
 //
 // Horse identification: BloodHorse's own house style doesn't use NYRA's
 // "[post N, Jockey]" bracket convention, so this doesn't attempt NYRA's
