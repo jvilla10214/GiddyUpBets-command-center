@@ -714,25 +714,61 @@
   .tile.alert{ border-color: var(--silk-red); }
   .tile.alert .tvalue{ color: var(--silk-red); }
 
-  .rain-tab-toggle{
+  .tile-rain-expanded{
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .rain-tile-top{
     display:flex;
-    gap: 4px;
-    margin: 5px 0 3px;
+    gap: 24px;
   }
-  .rain-tab-btn{
-    background: var(--panel-2);
-    border: 1px solid var(--panel-border);
-    color: var(--parchment-dim);
+  .rain-stat{ flex:1; }
+  .rain-week-head{
+    display:flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .rain-week-sum{
     font-family:'IBM Plex Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.3px;
-    padding: 3px 7px;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: border-color .15s, color .15s, background .15s;
+    font-size: 11px;
+    font-weight:600;
+    color: var(--tote-amber);
   }
-  .rain-tab-btn:hover{ border-color: var(--tote-amber); }
-  .rain-tab-btn.active{ background: var(--tote-amber); border-color: var(--tote-amber); color: var(--ink); }
+  .rain-week-rows{ display:flex; flex-direction:column; gap: 5px; }
+  .rain-week-row{
+    display:grid;
+    grid-template-columns: 34px 1fr 38px;
+    align-items:center;
+    gap: 8px;
+  }
+  .rain-week-day{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    font-weight:600;
+    letter-spacing: 0.5px;
+    color: var(--parchment-dim);
+  }
+  .rain-week-bar-track{
+    background: var(--panel-2);
+    border-radius: 3px;
+    height: 7px;
+    overflow: hidden;
+  }
+  .rain-week-bar{
+    display:block;
+    height: 100%;
+    background: var(--tote-amber);
+    border-radius: 3px;
+  }
+  .rain-week-amt{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight:600;
+    color: var(--parchment);
+    text-align: right;
+  }
 
   /* ---------- Radar & storm forecast (Windy.com embed, two modes) ---------- */
   .radar-panel{ display: block; }
@@ -3191,18 +3227,24 @@
       </div>
     </div>
 
-    <div class="tile tile-rain" id="rainTile">
-      <div>
-        <div class="tlabel">Past Rainfall</div>
-        <div class="rain-tab-toggle">
-          <button type="button" class="rain-tab-btn active" data-window="today">Midnight</button>
-          <button type="button" class="rain-tab-btn" data-window="24h">24h</button>
-          <button type="button" class="rain-tab-btn" data-window="48h">48h</button>
-          <button type="button" class="rain-tab-btn" data-window="7d">7d</button>
+    <div class="tile tile-rain tile-rain-expanded" id="rainTile">
+      <div class="rain-tile-top">
+        <div class="rain-stat">
+          <div class="tlabel">Race Day</div>
+          <div class="tvalue"><span id="rainRaceDay" class="skel">—</span><span class="tunit">in</span></div>
         </div>
-        <div class="tsub" id="rainWindowLabel">Since midnight, track-local</div>
+        <div class="rain-stat">
+          <div class="tlabel">Yesterday</div>
+          <div class="tvalue"><span id="rainYesterday" class="skel">—</span><span class="tunit">in</span></div>
+        </div>
       </div>
-      <div class="tvalue"><span id="rainTotal" class="skel">—</span><span class="tunit">in</span></div>
+      <div class="rain-week">
+        <div class="rain-week-head">
+          <span class="tlabel">7-Day Rainfall</span>
+          <span class="rain-week-sum">Sum: <span id="rainWeekSum">—</span> in</span>
+        </div>
+        <div class="rain-week-rows" id="rainWeekRows"></div>
+      </div>
     </div>
 
     <div class="ticker-panel">
@@ -4661,18 +4703,23 @@
   let lastAiSummaryCtx = null; // last non-AQI/tide context used, so an AQI/tide update alone can re-render the summary
   let lastNewsItems = []; // cached so switchTrack() can re-flag matches without a network refetch
 
-  // Past Rainfall tile totals for all four windows, computed once per
-  // render() so switching tabs is instant (no refetch) — keyed to match
-  // .rain-tab-btn's data-window values. "today" means "since midnight in
-  // the track's own local timezone" (see nowInTrackTZ()) — kept as the
-  // internal key name since it already threads through
-  // computeTodayRainOutlook()/todayStartIdx/todayEndIdx elsewhere; only the
-  // tab's visible label says "Midnight".
+  // Rolling-window rain totals, computed once per render(). "today" feeds
+  // the Past Rainfall tile's "Race Day" stat and also threads through
+  // computeTodayRainOutlook()/todayStartIdx/todayEndIdx elsewhere; 24h/48h/
+  // 7d aren't shown directly in that tile anymore (see rainYesterdayTotal/
+  // rainWeekBreakdown below for its other two stats) but still feed track
+  // condition classification and trackTrend()'s Wetting/Drying read.
   let rainWindowTotals = { today: null, "24h": null, "48h": null, "7d": null };
   // 7d's threshold is this file's own judgment call, same as the other
   // three — no external "this many inches in a week is alert-worthy"
   // standard being cited here, just scaled up from 48h's own threshold.
   const RAIN_WINDOW_ALERT_THRESHOLD = { today: 0.5, "24h": 0.5, "48h": 1.0, "7d": 3.0 };
+  // Race Day/Yesterday/7-Day tile — calendar-day totals, distinct from
+  // rainWindowTotals' rolling windows above (e.g. the 7-day list's sum
+  // covers the 7 full days BEFORE today, never a partial today, whereas
+  // rainWindowTotals["7d"] is a rolling 168h window ending right now).
+  let rainYesterdayTotal = null;
+  let rainWeekBreakdown = []; // [{date, total}], yesterday first, 7 days back
   // Full-day predicted total + rain start time — now surfaced on the Rain
   // Nowcast panel (see renderRainNowcastPanel()) rather than this tile,
   // which is purely historical/backward-looking. See computeTodayRainOutlook().
@@ -12755,32 +12802,35 @@
     }
   }
 
-  // ---------- Past Rainfall tile (Midnight / 24h / 48h / 7d tabs) ----------
-  // Purely historical/backward-looking now — current rate and the
-  // predicted-total-today forecast both moved to Rain Nowcast (see its own
+  // ---------- Past Rainfall tile (Race Day / Yesterday / 7-Day bars) ----------
+  // Purely historical/backward-looking — current rate and the
+  // predicted-total-today forecast both live on Rain Nowcast (see its own
   // section below), since this tile is about what's already fallen, not
   // what's happening right now or what's still to come.
-  function activeRainWindowKey(){
-    return document.querySelector(".rain-tab-btn.active")?.dataset.window || "today";
-  }
-  const RAIN_WINDOW_LABEL = {
-    today: "Since midnight, track-local",
-    "24h": "Rolling last 24 hours",
-    "48h": "Rolling last 48 hours",
-    "7d": "Rolling last 7 days",
-  };
   function renderRainTile(){
-    const key = activeRainWindowKey();
-    const total = rainWindowTotals[key];
-    $("rainTotal").textContent = total != null ? total.toFixed(2) : "—";
-    $("rainTile").classList.toggle("alert", total != null && total > RAIN_WINDOW_ALERT_THRESHOLD[key]);
-    $("rainWindowLabel").textContent = RAIN_WINDOW_LABEL[key] || "";
-  }
-  function setRainWindow(key){
-    document.querySelectorAll(".rain-tab-btn").forEach(btn => {
-      btn.classList.toggle("active", btn.dataset.window === key);
-    });
-    renderRainTile();
+    $("rainRaceDay").textContent = rainWindowTotals.today != null ? rainWindowTotals.today.toFixed(2) : "—";
+    $("rainYesterday").textContent = rainYesterdayTotal != null ? rainYesterdayTotal.toFixed(2) : "—";
+    $("rainTile").classList.toggle("alert", rainWindowTotals.today != null && rainWindowTotals.today > RAIN_WINDOW_ALERT_THRESHOLD.today);
+
+    const validDays = rainWeekBreakdown.filter(d => d.total != null);
+    const maxVal = Math.max(0.01, ...validDays.map(d => d.total));
+    $("rainWeekSum").textContent = validDays.length
+      ? validDays.reduce((s, d) => s + d.total, 0).toFixed(2)
+      : "—";
+
+    $("rainWeekRows").innerHTML = rainWeekBreakdown.map(d => {
+      if (d.total == null || !d.date){
+        return `<div class="rain-week-row"><span class="rain-week-day">—</span><span class="rain-week-bar-track"></span><span class="rain-week-amt">—</span></div>`;
+      }
+      const dayLabel = new Date(`${d.date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }).toUpperCase();
+      const pct = Math.max(3, Math.round((d.total / maxVal) * 100));
+      return `
+        <div class="rain-week-row">
+          <span class="rain-week-day">${dayLabel}</span>
+          <span class="rain-week-bar-track"><span class="rain-week-bar" style="width:${pct}%"></span></span>
+          <span class="rain-week-amt">${d.total.toFixed(2)}</span>
+        </div>`;
+    }).join("");
   }
 
   // ---------- Radar & storm forecast (Windy.com embed, two modes) ----------
@@ -12853,7 +12903,7 @@
       // fails on the very first load (before render() ever runs once) left
       // these tiles stuck on skeleton placeholders indefinitely, even while
       // status correctly showed "Connection issue."
-      clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainTotal",
+      clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainRaceDay", "rainYesterday",
         "humidity", "cloudCover", "pressure", "weatherDesc", "sunTimes",
         "soilMoistureSurface", "soilMoistureDeep");
     } finally {
@@ -12908,7 +12958,7 @@
     // First real weather payload for this page load/track — every element
     // below is about to get its actual value, so drop their skeleton state
     // together, once, rather than one-by-one at each individual assignment.
-    clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainTotal",
+    clearSkeleton("temp", "feelsLike", "gust", "windAt10", "rainRaceDay", "rainYesterday",
       "humidity", "cloudCover", "pressure", "weatherDesc", "sunTimes",
       "soilMoistureSurface", "soilMoistureDeep");
 
@@ -13024,6 +13074,26 @@
       "48h": nowHourIdx >= 0 ? rain48h : null,
       "7d": nowHourIdx >= 0 ? rain7d : null,
     };
+
+    // Yesterday = the full prior calendar day (midnight-to-midnight,
+    // track-local), not a rolling 24h window — distinct from rain24h above.
+    rainYesterdayTotal = (nowHourIdx >= 0 && todayStartIdx >= 24)
+      ? sumPrecip(todayStartIdx - 24, todayStartIdx - 1)
+      : null;
+
+    // 7-Day Rainfall list: the 7 full calendar days before today, newest
+    // (yesterday) first — each its own bar, so a user can see which day(s)
+    // actually got wet instead of just one blended total. startIdx going
+    // negative means we don't have that far back in the archive yet (early
+    // in a new track's history) — null rather than a wrong partial sum.
+    rainWeekBreakdown = [];
+    for (let d = 1; d <= 7; d++){
+      const startIdx = todayStartIdx - 24 * d;
+      const endIdx = todayStartIdx - 24 * (d - 1) - 1;
+      const dateStr = data.hourly?.time?.[startIdx]?.slice(0, 10) ?? null;
+      const total = (nowHourIdx >= 0 && startIdx >= 0) ? sumPrecip(startIdx, endIdx) : null;
+      rainWeekBreakdown.push({ date: dateStr, total });
+    }
 
     let todayEndIdx = todayStartIdx;
     if (todayStartIdx >= 0){
@@ -13303,6 +13373,8 @@
     rainHistoryByTime = null;
     rainHistoryTrackId = null;
     rainWindowTotals = { today: null, "24h": null, "48h": null, "7d": null };
+    rainYesterdayTotal = null;
+    rainWeekBreakdown = [];
     todayRainOutlookData = null;
     renderRainTile();
     // Rain Nowcast is genuinely loading again for the new track too — same
@@ -13311,7 +13383,7 @@
     // premature "clear" default.
     radarObservedLoaded = false;
     lastRadarObserved = null;
-    addSkeleton("rainTotal");
+    addSkeleton("rainRaceDay", "rainYesterday");
     $("rainNowcastBody").innerHTML = `
       <div class="skel-block skel-line wide" style="height:14px;"></div>
       <div class="skel-block skel-line narrow"></div>
@@ -13787,10 +13859,6 @@
 
   document.querySelectorAll(".radar-mode-btn").forEach(btn => {
     btn.addEventListener("click", () => setRadarMode(btn.dataset.mode));
-  });
-
-  document.querySelectorAll(".rain-tab-btn").forEach(btn => {
-    btn.addEventListener("click", () => setRainWindow(btn.dataset.window));
   });
 
   document.querySelectorAll(".pp-stats-tab-btn").forEach(btn => {
