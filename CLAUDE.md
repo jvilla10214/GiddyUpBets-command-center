@@ -34,11 +34,18 @@ comment documents one feature/route.
 - **Requires a KV namespace** bound as `STABLE_KV` (Worker settings → Bindings).
 - **Secrets** (set in the Cloudflare dashboard, never committed to the repo):
   `RESEND_API_KEY`, `PIRATE_WEATHER_API_KEY`, `SMARTPONY_EMAIL`, `SMARTPONY_PASSWORD`.
-- Cron Triggers fire `scheduled()` for the entry-alert emails and Stable Tour dedupe; there's
-  a `/debug-run-scheduled` GET route to trigger that logic on demand without waiting for cron.
-  A third trigger, `0 11,12,19,20 * * *`, runs only the NYRA News import (7am/3pm Eastern;
-  on demand: `/debug-run-nyra-import`). `scheduled()` dispatches on that exact expression, so
-  it has to match in the dashboard.
+- Cron Triggers fire `scheduled()` for the entry-alert emails. There's a `/debug-run-scheduled`
+  GET route to trigger that logic on demand without waiting for cron. A third trigger,
+  `0 11,12,19,20 * * *`, runs only the NYRA News import (7am/3pm Eastern; on demand:
+  `/debug-run-nyra-import`). A fourth, `0,30 13,21 * * *` (`SIDE_JOBS_CRON`), carries most other
+  import/maintenance jobs (BloodHorse, TDN, DRF, Stable Tour feed, HRN, results backfill, note
+  dedupe, trainer angle stats) — split off the entry-alert trigger in 2026-10-02 after their
+  combined subrequests started silently zeroing out the alert emails. A fifth, `5 13,21 * * *`
+  (`SMARTPONY_CRON`), isolates the SmartPony quote import on its own — split off the fourth
+  trigger in 2026-10-07 for the same reason, once SmartPony's own quote volume grew enough to
+  risk starving the others. Each `scheduled()` dispatches on the exact cron string, so every
+  expression has to match verbatim in the dashboard — see the Worker's own header comment
+  (search `Cron Trigger`) for the full, current list before adding or changing one.
 - `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
   (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
 

@@ -557,6 +557,11 @@
 // FIRST, then add this fourth trigger — adding the trigger before the code
 // that recognizes it is live would make the OLD scheduled() handler treat
 // it as an entry-alert fire and send extra digests.
+// A FIFTH Cron Trigger, "5 13,21 * * *" (SMARTPONY_CRON — expression must
+// match exactly), was added 2026-10-07 to give job #18 the same isolation
+// as NYRA News — see SMARTPONY_CRON's own comment for the "Too many
+// subrequests" failure this fixes. Same deploy-order caution as the fourth
+// trigger above: paste and deploy this file first, then add the trigger.
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -699,6 +704,15 @@ export default {
       }
       return;
     }
+    // SmartPony (job #18) — own Cron Trigger as of 2026-10-07, same
+    // isolation reasoning as NYRA News above. See SMARTPONY_CRON's own
+    // comment for the "Too many subrequests" failure this fixes.
+    if (event.cron === SMARTPONY_CRON) {
+      ctx.waitUntil(
+        trackedRun(env, "smartpony", () => runSmartPonyImport(env), "SmartPony import")
+      );
+      return;
+    }
     // Same isolation as NYRA News above, added 2026-10-02 — see
     // SIDE_JOBS_CRON's own comment for why: every import/maintenance job
     // that used to run alongside the entry-alert emails below now runs here
@@ -778,9 +792,8 @@ function runSideJobs(event, env, ctx) {
     ctx.waitUntil(
       trackedRun(env, "hrnnews", () => runHrnNewsImport(env), "Horse Racing Nation import")
     );
-    ctx.waitUntil(
-      trackedRun(env, "smartpony", () => runSmartPonyImport(env), "SmartPony import")
-    );
+    // SmartPony moved to its own Cron Trigger (SMARTPONY_CRON) 2026-10-07 —
+    // see that constant's own comment for why it outgrew sharing this one.
     return;
   }
   if (hour === 13) {
@@ -8205,6 +8218,20 @@ async function fetchNyraNews(track, options = {}) {
 // (trainer, jockey, horse, link-without-fragment), same as /notes/bulk.
 // The notes key is written once per run, only if something was added.
 const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (11/19 UTC) and EST (12/20 UTC)
+// Added 2026-10-07 — SAME "Too many subrequests by single Worker invocation"
+// failure as the entry-alerts fix below, now hitting SmartPony instead:
+// confirmed via /debug-pipeline-health (checked:0, written:0, that exact
+// error) on the real cron, while a standalone /debug-run-smartpony call
+// (own invocation, own budget) succeeded cleanly against the same data.
+// SmartPony's own footprint (paginating its now-4800+ row quote table, plus
+// two chunked lookupHorseIdsByName()/lookupRaceEntriesByHorseId() calls)
+// has simply grown past the point where it can keep sharing SIDE_JOBS_CRON's
+// invocation with the other six jobs there — same growth-outpaces-a-shared-
+// budget shape as the entry-alerts incident, just one job over. +5 min
+// offset from SIDE_JOBS_CRON's own :00/:30 so event.cron is a distinct
+// string (required for the dispatch check below to tell them apart) and the
+// two invocations' subrequests never land in the same window.
+const SMARTPONY_CRON = "5 13,21 * * *";
 // Confirmed real 2026-10-02: /debug-last-run showed the entry-alert emails
 // themselves sending 0, with tracks failing on "Too many subrequests by
 // single Worker invocation" -- scheduled() was starting runEntryAlerts() in
