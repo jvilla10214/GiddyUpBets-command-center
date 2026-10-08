@@ -9204,7 +9204,19 @@ function smartPonyQuoteMisattributed(text, trainerName) {
 // roughly (total quotes / 300 / fires-per-day) days, after which an
 // untracked-trainer quote DOES get reconsidered (unlike before, forever),
 // just once per pass instead of every single run.
+//
+// Confirmed real gap 2026-10-08: with the cursor alone, a brand-new quote at
+// the newest end waits for the drain to finish its whole pass and wrap —
+// ~4,860 quotes / 300 per run / 2 runs a day ≈ 8 days. Fixed by giving every
+// run a fixed "head" window (the newest SMARTPONY_HEAD_PER_RUN quotes,
+// checked every time, no cursor) ahead of the drain slice, so fresh quotes
+// land same-day while the drain keeps sweeping the backlog. The drain slice
+// shrinks by the same amount so total loop iterations — and so KV ops per
+// invocation, the actual limit above — stay at 300 per run. A quote that
+// falls in both windows is only processed once.
 const SMARTPONY_MAX_PER_RUN = 300;
+const SMARTPONY_HEAD_PER_RUN = 50;
+const SMARTPONY_DRAIN_PER_RUN = SMARTPONY_MAX_PER_RUN - SMARTPONY_HEAD_PER_RUN;
 const SMARTPONY_DRAIN_CURSOR_KV_KEY = "smartpony:drain:cursor";
 async function runSmartPonyImport(env) {
   let checked = 0;
@@ -9222,16 +9234,19 @@ async function runSmartPonyImport(env) {
       const idx = quotes.findIndex((q) => q.quoteId === cursorId);
       startIdx = idx === -1 ? 0 : idx + 1; // -1 means the cursor quote aged out of the 120-day window — restart from the top
     }
-    let slice = quotes.slice(startIdx, startIdx + SMARTPONY_MAX_PER_RUN);
+    let slice = quotes.slice(startIdx, startIdx + SMARTPONY_DRAIN_PER_RUN);
     if (!slice.length && quotes.length) {
-      // Reached the end of a full pass — wrap around so quotes that have
-      // arrived since are picked up, and previously-untracked ones get a
-      // fresh look.
+      // Reached the end of a full pass — wrap around so previously-untracked
+      // quotes get a fresh look. (Brand-new quotes no longer depend on this
+      // wrap — the head window below picks those up every run.)
       startIdx = 0;
-      slice = quotes.slice(0, SMARTPONY_MAX_PER_RUN);
+      slice = quotes.slice(0, SMARTPONY_DRAIN_PER_RUN);
     }
+    const head = quotes.slice(0, SMARTPONY_HEAD_PER_RUN);
+    const sliceIds = new Set(slice.map((q) => q.quoteId));
+    const toProcess = [...head.filter((q) => !sliceIds.has(q.quoteId)), ...slice];
 
-    for (const q of slice) {
+    for (const q of toProcess) {
       const seenKey = `smartpony:seen:${q.quoteId}`;
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
@@ -9274,7 +9289,7 @@ async function runSmartPonyImport(env) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
       await bumpDataVersion(env);
     }
-    return { checked, written, skippedMisattributed, scanned: slice.length, startIdx, totalQuotes: quotes.length };
+    return { checked, written, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
   } catch (err) {
     console.error("SmartPony import failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
