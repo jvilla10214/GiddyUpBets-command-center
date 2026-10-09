@@ -2595,6 +2595,29 @@ function resolveTrackedTrainer(sourceName, trackedList) {
   return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
 }
 
+// Same result as resolveTrackedTrainer(name, trackedList), for hot loops that
+// resolve thousands of names against one list. resolveTrackedTrainer() re-
+// normalizes every tracked name on every call; with the roster at 559 names
+// (2026-10-09, after a bulk add from SmartPony's untracked list) that made
+// fetchSmartPonyQuotes() + runSmartPonyImport() ~2.7M normalizations per run
+// and pushed the Worker over the free plan's CPU limit (error 1102) on most
+// runs. Indexing by lastNameKey() once means each lookup only touches the
+// trainers sharing that surname, which is exactly the candidate set
+// resolveTrackedTrainer() filters down to first anyway, so results are
+// unchanged. Build it once per run from a list that isn't mutated after.
+function makeTrackedTrainerResolver(trackedList) {
+  const byLast = new Map();
+  for (const t of trackedList) {
+    const k = lastNameKey(t);
+    if (!byLast.has(k)) byLast.set(k, []);
+    byLast.get(k).push(t);
+  }
+  return (sourceName) => {
+    if (!sourceName) return null;
+    return resolveTrackedTrainer(sourceName, byLast.get(lastNameKey(sourceName)) || []);
+  };
+}
+
 // Track IDs come straight from the client's fixed TRACKS registry (7 known
 // values today) but this strips anything unexpected anyway before it ever
 // touches a KV key, just in case that registry grows in an unexpected way.
@@ -9245,12 +9268,22 @@ async function runSmartPonyImport(env) {
     const head = quotes.slice(0, SMARTPONY_HEAD_PER_RUN);
     const sliceIds = new Set(slice.map((q) => q.quoteId));
     const toProcess = [...head.filter((q) => !sliceIds.has(q.quoteId)), ...slice];
+    const resolveTracked = makeTrackedTrainerResolver(state.trainers);
+    // Seen flags are written only AFTER the notes blob is saved (end of
+    // run). Confirmed real 2026-10-09: when a run died mid-loop (CPU limit,
+    // error 1102), quotes already flagged seen were never saved, and every
+    // later run skipped them as done; 23 quotes were lost that way and had to
+    // be re-added by hand. Saving notes first means a crash can only cause a
+    // re-check, never a loss, and the existingNoteKeys check below turns
+    // that re-check into a no-op instead of a duplicate note.
+    const seenKeysToWrite = [];
+    const existingNoteKeys = new Set(notes.map((n) => `${n.trainer}|${n.horse}|${n.note}`));
 
     for (const q of toProcess) {
       const seenKey = `smartpony:seen:${q.quoteId}`;
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
-      const matchedTrainer = resolveTrackedTrainer(q.trainerName, state.trainers);
+      const matchedTrainer = resolveTracked(q.trainerName);
       if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next full pass
       // Real bug fixed 2026-10-05: fetchSmartPonyQuotes()'s own race-entries
       // cross-reference already verifies+rewrites a misattributed quote
@@ -9261,9 +9294,15 @@ async function runSmartPonyImport(env) {
       // guard entirely for anything already verified that way.
       if (!q.reattributedFromRaceEntries && smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
         skippedMisattributed++;
-        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+        seenKeysToWrite.push(seenKey);
         continue; // embedded speaker doesn't match the credited trainer — see smartPonyQuoteMisattributed()'s own comment
       }
+      const noteKey = `${matchedTrainer}|${q.horseName}|${q.text}`;
+      if (existingNoteKeys.has(noteKey)) {
+        seenKeysToWrite.push(seenKey); // already saved (by a crashed earlier run, or added by hand), just flag it
+        continue;
+      }
+      existingNoteKeys.add(noteKey);
       notes.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         trainer: matchedTrainer,
@@ -9280,14 +9319,17 @@ async function runSmartPonyImport(env) {
       });
       written++;
       addedAny = true;
-      await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
-    }
-    if (slice.length) {
-      await env.STABLE_KV.put(SMARTPONY_DRAIN_CURSOR_KV_KEY, slice[slice.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 180 });
+      seenKeysToWrite.push(seenKey);
     }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
       await bumpDataVersion(env);
+    }
+    for (const seenKey of seenKeysToWrite) {
+      await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+    }
+    if (slice.length) {
+      await env.STABLE_KV.put(SMARTPONY_DRAIN_CURSOR_KV_KEY, slice[slice.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 180 });
     }
     return { checked, written, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
   } catch (err) {
@@ -9511,6 +9553,7 @@ async function fetchSmartPonyQuotes(env) {
   const entryByHorseId = horseIds.length ? await lookupRaceEntriesByHorseId(accessToken, horseIds) : {};
 
   const quotes = [];
+  const resolveTracked = makeTrackedTrainerResolver(trainers);
   for (const row of rows) {
     const horseName = (row.mentioned_horse_name || "").trim();
     const text = (row.quote_text || "").trim();
@@ -9556,7 +9599,7 @@ async function fetchSmartPonyQuotes(env) {
     // the already-tracked "Phil D'Amato"). The tracked roster itself is the
     // more stable source of truth once a trainer's already been added
     // correctly, so it wins over both of SmartPony's own fields here.
-    const tracked = resolveTrackedTrainer(trainerName, trainers);
+    const tracked = resolveTracked(trainerName);
     if (tracked) trainerName = tracked;
 
     const article = row.raw_articles || {};
