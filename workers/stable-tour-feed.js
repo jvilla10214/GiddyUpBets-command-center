@@ -2845,20 +2845,42 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRe
   if (!raw) return { available: false, error: "No archived race day for this track/date yet" };
   const record = JSON.parse(raw);
   record.raceRecaps = record.raceRecaps || {};
+
+  let fullCardRecapSet = false;
   if (fullCardRecap !== undefined) {
     const trimmed = typeof fullCardRecap === "string" ? fullCardRecap.trim() : "";
-    if (trimmed) record.fullCardRecap = trimmed;
+    if (trimmed) { record.fullCardRecap = trimmed; fullCardRecapSet = true; }
     else delete record.fullCardRecap;
   }
 
-  const index = await readRecapIndex(env, track);
-  const indexedHorsesByRace = {};
-
+  // Step 1: write/clear each EXPLICITLY passed race's own recap text —
+  // unchanged from before.
   for (const [raceNumberStr, recapRaw] of Object.entries(recapsByRace)) {
     const raceNumber = Number(raceNumberStr);
     const recap = typeof recapRaw === "string" ? recapRaw.trim() : "";
     if (recap) record.raceRecaps[raceNumber] = recap;
     else delete record.raceRecaps[raceNumber]; // empty text clears it
+  }
+
+  // Step 2: (re)index races. Confirmed real (2026-10-09): a full-card
+  // recap sometimes gets written with no per-race recap for some/any of
+  // that day's races — before this, those horses were invisible to the
+  // entry-alert matching logic entirely, since the index only ever derived
+  // from recapsByRace's own keys. When a full-card recap is being SET this
+  // call, every race this day's entries actually has gets indexed, not
+  // just the ones recapsByRace happened to mention — with an empty
+  // `recap` string for a race that has no specific text of its own, so the
+  // email template (see its own comment) shows just the full-card box for
+  // those, not an empty "RACE RECAP" one.
+  const index = await readRecapIndex(env, track);
+  const indexedHorsesByRace = {};
+  const raceNumbersToIndex = new Set(Object.keys(recapsByRace).map(Number));
+  if (fullCardRecapSet) {
+    for (const r of record.entries || []) raceNumbersToIndex.add(r.raceNumber);
+  }
+
+  for (const raceNumber of raceNumbersToIndex) {
+    const recap = (record.raceRecaps[raceNumber] || "").trim();
 
     // Prefer the full entries list (every non-scratched horse that actually
     // ran); fall back to finishOrder only if entries has nothing for this
@@ -2874,8 +2896,8 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRe
     // having a recap written for that race, so their recap never followed
     // them to a later entry anywhere. Entries already excludes scratches,
     // so there's no accuracy reason to prefer the partial list over it.
-    const resultRace = (record.results || []).find((r) => r.raceNumber === raceNumber);
     const entryRace = (record.entries || []).find((r) => r.raceNumber === raceNumber);
+    const resultRace = (record.results || []).find((r) => r.raceNumber === raceNumber);
     let horseNames = [];
     if (entryRace?.horses?.length) {
       horseNames = entryRace.horses.filter((h) => !h.scratched).map((h) => h.name).filter(Boolean);
@@ -2884,15 +2906,14 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRe
     }
     indexedHorsesByRace[raceNumber] = horseNames;
 
-    // Drop any stale entry for this exact date+race first (covers both a
-    // recap being edited and a recap being cleared) before adding it back —
-    // otherwise re-saving the same race's recap would pile up duplicates
-    // every time it's edited.
+    // Drop any stale entry for this exact date+race first (covers a recap
+    // being edited or cleared) before adding it back — otherwise re-saving
+    // the same race's recap would pile up duplicates every time it's edited.
     for (const horseKey of Object.keys(index)) {
       index[horseKey] = (index[horseKey] || []).filter((r) => !(r.date === date && r.raceNumber === raceNumber));
       if (!index[horseKey].length) delete index[horseKey];
     }
-    if (recap) {
+    if (recap || fullCardRecapSet) {
       for (const name of horseNames) {
         const horseKey = normalizeHorseNameForRecap(name);
         if (!horseKey) continue;
@@ -2909,21 +2930,21 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRe
 }
 
 // One-time repair for every recap index already built under the OLD
-// (wrong) prefer-finishOrder priority (see upsertRaceRecapsBulk's own
-// comment on the fix) — rebuilds each track's index from scratch, straight
-// off the raceRecaps text already sitting in each raceday record, using
-// the corrected entries-preferred logic. Doesn't touch the Google Doc or
-// raceRecaps text itself at all, just re-derives which horses each
-// already-written recap should be indexed against. Paginated KV list
-// (STABLE_KV.list caps at 1000 keys per call, same reason
-// /debug-clear-race-notify loops on cursor) since a full season can mean
-// many dates per track.
+// (wrong) prefer-finishOrder priority, AND the old full-card-recap gap
+// (see upsertRaceRecapsBulk's own comments on both fixes) — rebuilds each
+// track's index from scratch, straight off the raceRecaps/fullCardRecap
+// text already sitting in each raceday record, using the corrected logic.
+// Doesn't touch the Google Doc or any recap text itself at all, just
+// re-derives which horses each already-written recap should be indexed
+// against. Paginated KV list (STABLE_KV.list caps at 1000 keys per call,
+// same reason /debug-clear-race-notify loops on cursor) since a full
+// season can mean many dates per track.
 async function reindexAllRaceRecaps(env) {
   const tracks = Object.keys(ENTRIES_SOURCE_BY_TRACK);
   const perTrack = {};
   for (const track of tracks) {
     const index = {};
-    let datesWithRecaps = 0, racesIndexed = 0;
+    let datesProcessed = 0, racesIndexed = 0;
     let cursor;
     do {
       const listed = await env.STABLE_KV.list({ prefix: `raceday:${track}:`, cursor });
@@ -2931,13 +2952,25 @@ async function reindexAllRaceRecaps(env) {
         const raw = await env.STABLE_KV.get(k.name);
         if (!raw) continue;
         const record = JSON.parse(raw);
-        if (!record.raceRecaps || !Object.keys(record.raceRecaps).length) continue;
+        const raceRecaps = record.raceRecaps || {};
+        const hasFullCard = !!(record.fullCardRecap && record.fullCardRecap.trim());
+        if (!Object.keys(raceRecaps).length && !hasFullCard) continue;
         const date = k.name.slice(`raceday:${track}:`.length);
-        datesWithRecaps++;
-        for (const [raceNumberStr, recapRaw] of Object.entries(record.raceRecaps)) {
+        datesProcessed++;
+
+        // Every race with its own recap text, PLUS — when this date has a
+        // full-card recap — every other race the day's entries actually
+        // has, so a horse whose own race has no specific recap text still
+        // gets indexed off the full-card recap alone.
+        const raceNumbersToIndex = new Set(Object.keys(raceRecaps).map(Number));
+        if (hasFullCard) {
+          for (const r of record.entries || []) raceNumbersToIndex.add(r.raceNumber);
+        }
+
+        for (const raceNumber of raceNumbersToIndex) {
+          const recapRaw = raceRecaps[raceNumber];
           const recap = typeof recapRaw === "string" ? recapRaw.trim() : "";
-          if (!recap) continue;
-          const raceNumber = Number(raceNumberStr);
+          if (!recap && !hasFullCard) continue;
           const entryRace = (record.entries || []).find((r) => r.raceNumber === raceNumber);
           const resultRace = (record.results || []).find((r) => r.raceNumber === raceNumber);
           let horseNames = [];
@@ -2958,7 +2991,7 @@ async function reindexAllRaceRecaps(env) {
       cursor = listed.list_complete ? undefined : listed.cursor;
     } while (cursor);
     await env.STABLE_KV.put(raceRecapIndexKvKey(track), JSON.stringify(index));
-    perTrack[track] = { datesWithRecaps, racesIndexed, horsesIndexed: Object.keys(index).length };
+    perTrack[track] = { datesProcessed, racesIndexed, horsesIndexed: Object.keys(index).length };
   }
   return { available: true, tracks: perTrack };
 }
@@ -6141,12 +6174,20 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
             <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.fullCardRecap)}</div>
           </div>
         ` : "";
-        return `
-        ${fullCardHtml}
+        // r.recap can now be empty — a horse indexed ONLY because that
+        // day's full-card recap was written with no specific per-race
+        // recap for them (see upsertRaceRecapsBulk's own comment) — so the
+        // solid RACE RECAP box only renders when there's real per-race
+        // text to put in it, not an empty box under a real recap's heading.
+        const raceRecapHtml = r.recap ? `
         <div style="background:rgba(0,0,0,0.05); border:1px solid ${theme.accent}; border-radius:6px; padding:10px 12px; margin:4px 0 10px;">
           <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}${originTrackTag}</span>
           <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.recap)}</div>
         </div>
+        ` : "";
+        return `
+        ${fullCardHtml}
+        ${raceRecapHtml}
       `;
       }).join("");
       return `
