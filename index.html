@@ -10344,6 +10344,7 @@
     charlie: "charles", // Charlie Appleby — confirmed real: SmartPony spelled his formal first name out ("Charles Appleby") and spawned a duplicate alongside the already-tracked "Charlie Appleby"
     gus: "gustavo", // Gus Rodriguez — confirmed real (user's own ID): same person as the already-tracked "Gustavo Rodriguez," separate from "Rudy Rodriguez"
     phillip: "philip", // General double-L/single-L spelling variant — confirmed real for Capuano ("Phillip" vs the already-tracked "Phil"), same category of gap "phil" above already covers for the single-L spelling
+    howie: "howard", // Howie Gibson — confirmed real (user's own ID): SmartPony's race entries spell him "Howard F Gibson"
     charlton: "charles", // Charlton Baker — confirmed real: DRF's own prose uses his formal first name while the already-tracked entry is "Charlie Baker"; mapped to the SAME target "charles" the existing charlie->charles entry already resolves to, so both spellings converge instead of needing a second, disagreeing alias
   };
   // Normalizes ONE name token (not a full name) — strips a trailing
@@ -10379,8 +10380,19 @@
   // under tracked US trainer "Brad Cox" purely because "Cox" was otherwise
   // unambiguous. No qualifying candidate, or more than one -> no guess,
   // same as this file's other "don't assert what isn't confirmed" matching.
+  // A trainer whose horses all moved to someone else, keyed "first|last".
+  // Christophe Clement has died (user's own ID, 2026-10-09) and his son
+  // Miguel Clement now trains every horse in the barn, so anything still
+  // credited to Christophe or "C. Clement" files under Miguel. Keep in sync
+  // with the Worker's TRAINER_SUCCESSORS.
+  const TRAINER_SUCCESSORS = {
+    "christophe|clement": "Miguel Clement",
+    "c|clement": "Miguel Clement",
+  };
   function resolveTrackedTrainer(sourceName, trackedList){
     if (!sourceName) return null;
+    const successor = TRAINER_SUCCESSORS[`${trainerFirstNameKey(sourceName)}|${trainerLastName(sourceName)}`];
+    if (successor) sourceName = successor;
     const wantLast = trainerLastName(sourceName);
     const candidates = trackedList.filter(t => trainerLastName(t) === wantLast);
     if (!candidates.length) return null;

@@ -2533,6 +2533,7 @@ const TRAINER_FIRST_NAME_ALIASES = {
   gus: "gustavo", // Gus Rodriguez — confirmed real (user's own ID): same person as the already-tracked "Gustavo Rodriguez," separate from "Rudy Rodriguez"
   phillip: "philip", // General double-L/single-L spelling variant — confirmed real for Capuano ("Phillip" vs the already-tracked "Phil"), same category of gap "phil" above already covers for the single-L spelling
   manny: "manuel", // Manny Franco — confirmed real (user's own ID, 2026-09-25): NYRA's standings list him as "Manuel Franco" while the tracked jockey entry is "Manny Franco"
+  howie: "howard", // Howie Gibson — confirmed real (user's own ID): SmartPony's race entries spell him "Howard F Gibson"
   charlton: "charles", // Charlton Baker — confirmed real: DRF's own prose uses his formal first name while the already-tracked entry is "Charlie Baker"; mapped to the SAME target "charles" the existing charlie->charles entry already resolves to, so both spellings converge instead of needing a second, disagreeing alias
 };
 // Normalizes ONE name token — see index.html's normalizeNameToken() for why
@@ -2563,7 +2564,7 @@ function firstNameKey(fullName) {
 // with (confirmed real: the reintroduced batches all had literal "Bill
 // Mott"/"The Little Guys" in already-live notes despite neither being
 // tracked at the time).
-const TRAINER_DENYLIST = new Set(["the little guys", "bill mott"]);
+const TRAINER_DENYLIST = new Set(["the little guys", "bill mott", "christophe clement"]);
 // "Bill Mott" specifically has one unambiguous real name to rewrite to;
 // "The Little Guys" doesn't (see above) — a note using it gets dropped
 // instead, same "no guess beats a wrong guess" rule as everywhere else in
@@ -2573,6 +2574,8 @@ const TRAINER_DENYLIST = new Set(["the little guys", "bill mott"]);
 function sanitizeDenylistedTrainer(trainer) {
   const key = (trainer || "").trim().toLowerCase();
   if (key === "bill mott") return "William Mott";
+  if (key === "christophe clement") return "Miguel Clement"; // see TRAINER_SUCCESSORS
+
   if (key === "the little guys") return null;
   return trainer;
 }
@@ -2582,8 +2585,21 @@ function sanitizeDenylistedTrainer(trainer) {
 // silently matched to tracked US trainer "Brad Cox") that motivated
 // checking first-name compatibility even when only one tracked trainer
 // shares the surname, not just when there's more than one to pick between.
+// A trainer whose horses all moved to someone else, keyed "first|last" as
+// firstNameKey()|lastNameKey() see them. Confirmed real (user's own ID,
+// 2026-10-09): Christophe Clement has died and every horse in the barn is
+// now trained by his son Miguel Clement, so a quote, entry or result still
+// credited to Christophe (or "C. Clement") belongs under Miguel. Checked
+// before normal matching, so it applies everywhere resolveTrackedTrainer()
+// is used. Keep in sync with index.html's TRAINER_SUCCESSORS.
+const TRAINER_SUCCESSORS = {
+  "christophe|clement": "Miguel Clement",
+  "c|clement": "Miguel Clement",
+};
 function resolveTrackedTrainer(sourceName, trackedList) {
   if (!sourceName) return null;
+  const successor = TRAINER_SUCCESSORS[`${firstNameKey(sourceName)}|${lastNameKey(sourceName)}`];
+  if (successor) sourceName = successor;
   const wantLast = lastNameKey(sourceName);
   const candidates = trackedList.filter((t) => lastNameKey(t) === wantLast);
   if (!candidates.length) return null;
