@@ -5166,6 +5166,11 @@ function sportingLifeMapRace(raceEntry, date, surface){
       scratched: !isRunner,
       currentOdds: isRunner ? (ride.betting?.current_odds || null) : null,
       mlOdds: null,
+      // Filled in by fetchSportingLifeEntriesDay() afterward, if at all —
+      // the fast-cards page this function reads doesn't carry silk_filename
+      // itself, only the separate per-race racecard page does (see that
+      // function's own comment).
+      silksUrl: null,
     };
   });
   // Sporting Life's own `rides` array isn't necessarily in cloth-number
@@ -5185,6 +5190,32 @@ function sportingLifeMapRace(raceEntry, date, surface){
     surface,
     horses,
   };
+}
+
+// Silks aren't on the fast-cards page fetchSportingLifeEntriesDay() itself
+// reads (confirmed directly: zero "silk_filename" occurrences in that
+// page's embedded data) — only the separate per-race racecard page
+// (/racing/racecards/<date>/<course>/racecard/<raceId>/<slug>) carries it,
+// one ride at a time, keyed by the same cloth_number already used for
+// postPosition. Both the course-slug and trailing name-slug in that URL
+// are decorative (verified directly: a deliberately wrong value for either
+// still 200s), so only date+raceId are load-bearing. Best-effort — a
+// failed or missing silks fetch degrades to no silk image for that race,
+// never fails the whole entries response.
+async function fetchSportingLifeRaceSilks(courseSlug, date, raceId) {
+  try {
+    const page = await sportingLifeFetchJson(`/racing/racecards/${date}/${courseSlug}/racecard/${raceId}/x`);
+    const rides = page?.props?.pageProps?.race?.rides || [];
+    const silkByCloth = {};
+    for (const ride of rides) {
+      if (ride.cloth_number != null && ride.silk_filename) {
+        silkByCloth[ride.cloth_number] = `https://www.sportinglife.com/images/silks/${ride.silk_filename}`;
+      }
+    }
+    return silkByCloth;
+  } catch (err) {
+    return {};
+  }
 }
 
 async function fetchSportingLifeEntriesDay(track, date) {
@@ -5207,8 +5238,24 @@ async function fetchSportingLifeEntriesDay(track, date) {
 
   const card = await sportingLifeFetchJson(`/racing/fast-cards/${meetingId}/${date}/${courseSlug}`);
   const races = card?.props?.pageProps?.meeting?.races || [];
+  // One extra fetch per race for silks (see fetchSportingLifeRaceSilks's
+  // own comment) — run in parallel, same index order as `races` itself, so
+  // each result can be merged into its own race before the final sort below
+  // reorders everything by post time.
+  const silksByRace = await Promise.all(races.map((r) => {
+    const raceId = r.race_summary?.race_summary_reference?.id;
+    return raceId ? fetchSportingLifeRaceSilks(courseSlug, date, raceId) : Promise.resolve({});
+  }));
   const mapped = races
-    .map((r) => sportingLifeMapRace(r, date, surface))
+    .map((r, i) => {
+      const race = sportingLifeMapRace(r, date, surface);
+      const silkByCloth = silksByRace[i];
+      race.horses.forEach((h) => {
+        const url = h.postPosition != null ? silkByCloth[Number(h.postPosition)] : null;
+        if (url) h.silksUrl = url;
+      });
+      return race;
+    })
     .sort((a, b) => (a.postTimeIso || "").localeCompare(b.postTimeIso || ""))
     .map((r, i) => ({ raceNumber: i + 1, ...r }));
 

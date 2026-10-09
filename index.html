@@ -1908,6 +1908,14 @@
     font-size: 12px;
     line-height: 1;
   }
+  .entries-silk{
+    height: 22px;
+    width: auto;
+    margin-left: 5px;
+    border-radius: 2px;
+    vertical-align: middle;
+    background: #fff;
+  }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
   .entries-owner{ display: block; margin-top: 2px; font-size: 11.5px; color: var(--parchment-dim); }
   /* When rendered as a button (owner has other runners today), reset the
@@ -6241,6 +6249,17 @@
     return `<span class="pp-badge" style="background:${colors.bg}; color:${colors.fg};">${n}</span>`;
   }
 
+  // UK/International (Sporting Life) tracks only — silksUrl comes from a
+  // real per-race fetch the Worker does alongside entries (see
+  // fetchSportingLifeRaceSilks() there); US tracks have no equivalent
+  // source, so this renders nothing for them (h.silksUrl stays undefined).
+  // onerror hides a silk that 404s by the time the browser loads it rather
+  // than showing a broken-image icon in the table.
+  function entriesSilkHtml(silksUrl, horseName){
+    if (!silksUrl) return "";
+    return `<img class="entries-silk" src="${escapeHtml(silksUrl)}" alt="${escapeHtml(horseName || "")} silks" loading="lazy" onerror="this.remove()">`;
+  }
+
   function oddsMoveArrow(mlOdds, currentOdds){
     const ml = parseOddsToDecimal(mlOdds);
     const cur = parseOddsToDecimal(currentOdds);
@@ -6662,7 +6681,7 @@
         : escapeHtml(h.jockey || "—");
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
-        <td>${ppBadgeHtml(h.postPosition)}</td>
+        <td>${ppBadgeHtml(h.postPosition)}${entriesSilkHtml(h.silksUrl, h.name)}</td>
         <td>${escapeHtml(h.name || "—")}${entriesLayoffBadgeHtml(h.name)}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${entriesOwnerHtml(h.owner, race.raceNumber, h.name)}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
