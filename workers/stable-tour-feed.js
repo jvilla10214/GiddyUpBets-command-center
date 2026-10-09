@@ -1568,6 +1568,21 @@ async function handleRequest(request, env) {
       }
     }
 
+    // One-time manual catch-up — see runSmartPonyFullSweep()'s own comment.
+    // WRITES notes (not read-only) — processes the whole current quote list
+    // in one go instead of waiting on the regular twice-daily 300-per-run
+    // drain. Safe to re-run (dedup by key), but deliberately manual-only,
+    // not on any Cron Trigger.
+    if (url.pathname === "/debug-smartpony-full-sweep" && request.method === "GET") {
+      try {
+        const result = await runSmartPonyFullSweep(env);
+        await recordPipelineRun(env, "smartponyfullsweep", { ok: true, summary: result });
+        return json(result, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `SmartPony full sweep failed: ${err.message}` }, 502);
+      }
+    }
+
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
       const lat = url.searchParams.get("lat");
       const lon = url.searchParams.get("lon");
@@ -9787,6 +9802,129 @@ async function runSmartPonyImport(env) {
     return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
   } catch (err) {
     console.error("SmartPony import failed", err.message);
+    return { checked, written, skippedMisattributed, error: err.message };
+  }
+}
+
+// One-time manual catch-up — same exact per-quote logic as
+// runSmartPonyImport() above (jockey/trainer resolution, misattribution
+// guard, dedup-by-key), but over the WHOLE current quote list in one
+// invocation instead of the usual 300-per-run head+drain slice, and with no
+// smartpony:seen: gating at all. Built 2026-10-09 after auditSmartPonyQuote
+// Backlog() found 1,309 of 4,652 quotes genuinely not yet written as notes
+// — far more than the twice-daily drain could have left outstanding on its
+// own, which points at some of them having been seen-flagged (and
+// permanently skipped) by now-fixed bugs (the misattribution
+// false-positive fixed 2026-10-05, in particular) before the fix landed.
+// Clearing that backlog by waiting for the drain to wrap naturally would
+// take another cycle; this does it in one pass instead. Safe to re-run —
+// existingNoteKeys dedup means anything already written is a no-op, and
+// Workers Paid's 10,000-subrequest cap comfortably covers one KV op per
+// quote (~4,700) plus the final notes/seen writes. After this runs, every
+// quote gets its seen flag set (so the regular twice-daily job doesn't
+// redo this work) EXCEPT untracked-trainer ones, matching
+// runSmartPonyImport()'s own deliberate choice to keep reconsidering those
+// in case the trainer gets tracked later.
+async function runSmartPonyFullSweep(env) {
+  let checked = 0;
+  let written = 0;
+  let skippedMisattributed = 0;
+  try {
+    const state = await readNotesAndTrainers(env);
+    const notes = state.notes;
+    let addedAny = false;
+    const quotes = await fetchSmartPonyQuotes(env);
+    const resolveTracked = makeTrackedTrainerResolver(state.trainers);
+    const seenKeysToWrite = [];
+    const noteKey = (trainer, jockey, horse, text) => `${trainer || ""}|${jockey || ""}|${horse}|${text}`;
+    const existingNoteKeys = new Set(notes.map((n) => noteKey(n.trainer, n.jockey, n.horse, n.note)));
+    const jockeyState = await readJockeysAndMeta(env);
+    let resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+    let jockeysAdded = 0;
+    let jockeyNotes = 0;
+
+    for (const q of quotes) {
+      const seenKey = `smartpony:seen:${q.quoteId}`;
+      checked++;
+      if (q.jockeyName) {
+        let jockey = resolveJockey(q.jockeyName);
+        if (!jockey) {
+          if (!q.jockeyFromRaceEntries) continue;
+          jockey = q.jockeyName;
+          jockeyState.jockeys.push(jockey);
+          jockeyState.jockeyMeta[jockey] = { source: "smartpony", addedAt: new Date().toISOString() };
+          resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+          jockeysAdded++;
+        }
+        const key = noteKey("", jockey, q.horseName, q.text);
+        seenKeysToWrite.push(seenKey);
+        if (existingNoteKeys.has(key)) continue;
+        existingNoteKeys.add(key);
+        notes.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          trainer: "",
+          jockey,
+          horse: q.horseName,
+          note: q.text,
+          date: q.date || "",
+          source: q.source || "SmartPony",
+          link: q.link || "",
+          autoImported: true,
+          sentiment: q.sentiment || null,
+          importedVia: "SmartPony",
+          capturedAt: new Date().toISOString(),
+        });
+        written++;
+        jockeyNotes++;
+        addedAny = true;
+        continue;
+      }
+      const matchedTrainer = resolveTracked(q.trainerName);
+      if (!matchedTrainer) continue; // untracked trainer — left unmarked, same as runSmartPonyImport()
+      if (!q.reattributedFromRaceEntries && smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
+        skippedMisattributed++;
+        seenKeysToWrite.push(seenKey);
+        continue;
+      }
+      const key = noteKey(matchedTrainer, "", q.horseName, q.text);
+      if (existingNoteKeys.has(key)) {
+        seenKeysToWrite.push(seenKey);
+        continue;
+      }
+      existingNoteKeys.add(key);
+      notes.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        trainer: matchedTrainer,
+        horse: q.horseName,
+        note: q.text,
+        date: q.date || "",
+        source: q.source || "SmartPony",
+        link: q.link || "",
+        autoImported: true,
+        sentiment: q.sentiment || null,
+        importedVia: "SmartPony",
+        reattributedFromRaceEntries: q.reattributedFromRaceEntries || false,
+        capturedAt: new Date().toISOString(),
+      });
+      written++;
+      addedAny = true;
+      seenKeysToWrite.push(seenKey);
+    }
+    if (jockeysAdded) {
+      jockeyState.jockeys.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(jockeyState.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(jockeyState.jockeyMeta));
+    }
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+    }
+    if (addedAny || jockeysAdded) await bumpDataVersion(env);
+    for (const seenKey of seenKeysToWrite) {
+      await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+    }
+    return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, totalQuotes: quotes.length };
+  } catch (err) {
+    console.error("SmartPony full sweep failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
   }
 }
