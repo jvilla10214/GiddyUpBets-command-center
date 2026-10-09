@@ -2613,9 +2613,11 @@ const TRAINER_SUCCESSORS = {
   "mertkan|kantarmaci": "Ilkay Kantarmaci",
   "edward|davis": "Robbie Davis",
 };
-function resolveTrackedTrainer(sourceName, trackedList) {
+// useSuccessors=false when matching people who aren't trainers (jockeys):
+// TRAINER_SUCCESSORS only ever points at a trainer.
+function resolveTrackedTrainer(sourceName, trackedList, useSuccessors = true) {
   if (!sourceName) return null;
-  const successor = TRAINER_SUCCESSORS[`${firstNameKey(sourceName)}|${lastNameKey(sourceName)}`];
+  const successor = useSuccessors && TRAINER_SUCCESSORS[`${firstNameKey(sourceName)}|${lastNameKey(sourceName)}`];
   if (successor) sourceName = successor;
   const wantLast = lastNameKey(sourceName);
   const candidates = trackedList.filter((t) => lastNameKey(t) === wantLast);
@@ -2662,7 +2664,7 @@ function resolveByInitial(parts, initial, wantLast, candidates) {
 // trainers sharing that surname, which is exactly the candidate set
 // resolveTrackedTrainer() filters down to first anyway, so results are
 // unchanged. Build it once per run from a list that isn't mutated after.
-function makeTrackedTrainerResolver(trackedList) {
+function makeTrackedTrainerResolver(trackedList, useSuccessors = true) {
   const byLast = new Map();
   for (const t of trackedList) {
     const k = lastNameKey(t);
@@ -2671,7 +2673,9 @@ function makeTrackedTrainerResolver(trackedList) {
   }
   return (sourceName) => {
     if (!sourceName) return null;
-    return resolveTrackedTrainer(sourceName, byLast.get(lastNameKey(sourceName)) || []);
+    const successor = useSuccessors && TRAINER_SUCCESSORS[`${firstNameKey(sourceName)}|${lastNameKey(sourceName)}`];
+    const name = successor || sourceName;
+    return resolveTrackedTrainer(name, byLast.get(lastNameKey(name)) || [], useSuccessors);
   };
 }
 
@@ -9334,12 +9338,53 @@ async function runSmartPonyImport(env) {
     // re-check, never a loss, and the existingNoteKeys check below turns
     // that re-check into a no-op instead of a duplicate note.
     const seenKeysToWrite = [];
-    const existingNoteKeys = new Set(notes.map((n) => `${n.trainer}|${n.horse}|${n.note}`));
+    const noteKey = (trainer, jockey, horse, text) => `${trainer || ""}|${jockey || ""}|${horse}|${text}`;
+    const existingNoteKeys = new Set(notes.map((n) => noteKey(n.trainer, n.jockey, n.horse, n.note)));
+    // Jockey quotes (see fetchSmartPonyQuotes()): filed under the jockey,
+    // and a jockey not on the roster yet is added — but only when SmartPony's
+    // race_entries confirm they rode this horse (jockeyFromRaceEntries).
+    const jockeyState = await readJockeysAndMeta(env);
+    let resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+    let jockeysAdded = 0;
+    let jockeyNotes = 0;
 
     for (const q of toProcess) {
       const seenKey = `smartpony:seen:${q.quoteId}`;
       if (await env.STABLE_KV.get(seenKey)) continue;
       checked++;
+      if (q.jockeyName) {
+        let jockey = resolveJockey(q.jockeyName);
+        if (!jockey) {
+          if (!q.jockeyFromRaceEntries) continue; // can't happen today (roster-only matches are already tracked), kept as the guard
+          jockey = q.jockeyName;
+          jockeyState.jockeys.push(jockey);
+          jockeyState.jockeyMeta[jockey] = { source: "smartpony", addedAt: new Date().toISOString() };
+          resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+          jockeysAdded++;
+        }
+        const key = noteKey("", jockey, q.horseName, q.text);
+        seenKeysToWrite.push(seenKey);
+        if (existingNoteKeys.has(key)) continue;
+        existingNoteKeys.add(key);
+        notes.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          trainer: "",
+          jockey,
+          horse: q.horseName,
+          note: q.text,
+          date: q.date || "",
+          source: q.source || "SmartPony",
+          link: q.link || "",
+          autoImported: true,
+          sentiment: q.sentiment || null,
+          importedVia: "SmartPony",
+          capturedAt: new Date().toISOString(),
+        });
+        written++;
+        jockeyNotes++;
+        addedAny = true;
+        continue;
+      }
       const matchedTrainer = resolveTracked(q.trainerName);
       if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next full pass
       // Real bug fixed 2026-10-05: fetchSmartPonyQuotes()'s own race-entries
@@ -9354,12 +9399,12 @@ async function runSmartPonyImport(env) {
         seenKeysToWrite.push(seenKey);
         continue; // embedded speaker doesn't match the credited trainer — see smartPonyQuoteMisattributed()'s own comment
       }
-      const noteKey = `${matchedTrainer}|${q.horseName}|${q.text}`;
-      if (existingNoteKeys.has(noteKey)) {
+      const key = noteKey(matchedTrainer, "", q.horseName, q.text);
+      if (existingNoteKeys.has(key)) {
         seenKeysToWrite.push(seenKey); // already saved (by a crashed earlier run, or added by hand), just flag it
         continue;
       }
-      existingNoteKeys.add(noteKey);
+      existingNoteKeys.add(key);
       notes.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         trainer: matchedTrainer,
@@ -9378,17 +9423,22 @@ async function runSmartPonyImport(env) {
       addedAny = true;
       seenKeysToWrite.push(seenKey);
     }
+    if (jockeysAdded) {
+      jockeyState.jockeys.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(jockeyState.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(jockeyState.jockeyMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
-      await bumpDataVersion(env);
     }
+    if (addedAny || jockeysAdded) await bumpDataVersion(env);
     for (const seenKey of seenKeysToWrite) {
       await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
     }
     if (slice.length) {
       await env.STABLE_KV.put(SMARTPONY_DRAIN_CURSOR_KV_KEY, slice[slice.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 180 });
     }
-    return { checked, written, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
+    return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
   } catch (err) {
     console.error("SmartPony import failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
@@ -9521,7 +9571,11 @@ async function lookupRaceEntriesByHorseId(accessToken, horseIds) {
     if (!res.ok) continue;
     const rows = await res.json();
     for (const e of rows) {
-      if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = e; // newest first — first hit per horse wins
+      if (!entryByHorseId[e.horse_id]) entryByHorseId[e.horse_id] = { ...e, jockeys: [] }; // newest first — first hit per horse wins
+      // Every distinct rider on record, not just the latest — a jockey's
+      // quote about last month's ride still has to be recognized as theirs.
+      const j = (e.jockey || "").trim();
+      if (j && !entryByHorseId[e.horse_id].jockeys.includes(j)) entryByHorseId[e.horse_id].jockeys.push(j);
     }
   }
   return entryByHorseId;
@@ -9530,6 +9584,7 @@ async function lookupRaceEntriesByHorseId(accessToken, horseIds) {
 async function fetchSmartPonyQuotes(env) {
   const accessToken = await smartponyLogin(env);
   const trainers = await readTrainers(env); // see the tracked-spelling snap below — this is all fetchSmartPonyQuotes() ever needs, no reason to also pull+parse the (much larger) notes blob
+  const { jockeys } = await readJockeysAndMeta(env);
   // All three of SmartPony's own review states (needs_review, auto_matched,
   // verified) — originally scoped to verified-only, but that missed most
   // of what's actually on their site (confirmed real: several Chad Brown
@@ -9611,6 +9666,7 @@ async function fetchSmartPonyQuotes(env) {
 
   const quotes = [];
   const resolveTracked = makeTrackedTrainerResolver(trainers);
+  const resolveJockey = makeTrackedTrainerResolver(jockeys, false);
   for (const row of rows) {
     const horseName = (row.mentioned_horse_name || "").trim();
     const text = (row.quote_text || "").trim();
@@ -9632,6 +9688,53 @@ async function fetchSmartPonyQuotes(env) {
 
     const horseId = row.matched_horse_id || nameToHorseId[horseName];
     const entry = horseId ? entryByHorseId[horseId] : null;
+    const article = row.raw_articles || {};
+    const date = article.published_at ? article.published_at.slice(0, 10) : (row.created_at ? row.created_at.slice(0, 10) : null);
+
+    // Jockey quotes (added 2026-10-09, user request): SmartPony files every
+    // quote under a "trainer" field, but a real share of them are the
+    // jockey talking. Two ways a quote counts as the jockey's:
+    //   1. SmartPony's own race_entries list the credited person as having
+    //      ridden this horse (any ride on record, not only the latest), or
+    //   2. the credited person is already on the tracked jockey roster (no
+    //      race data needed for someone the user already confirmed is a
+    //      jockey). A full name on the jockey roster wins even if the same
+    //      name is also on the trainer roster (34 jockeys were added there
+    //      by mistake on 2026-10-09); a bare surname only counts when it
+    //      isn't also a tracked trainer's, since "Rosario" alone could be
+    //      either.
+    // Only (1) may add a brand-new jockey to the roster in
+    // runSmartPonyImport() — that race-entry match is what keeps owners and
+    // reporters off it. Before this, case (1) was filed under the trainer
+    // with the jockey's name prefixed to the text ("Kendrick Carmouche: …").
+    const riders = (entry?.jockeys || []).map(reformatLastFirstName);
+    const rodeIt = riders.length ? resolveTrackedTrainer(trainerName, riders, false) : null;
+    let jockeyName = null;
+    if (rodeIt) {
+      // Prefer the roster's spelling, then SmartPony's quote credit (natural
+      // "First Last" order) when it's a full name, then race_entries'.
+      jockeyName = resolveJockey(trainerName) || resolveJockey(rodeIt) || (trainerName.split(/\s+/).length > 1 ? trainerName : rodeIt);
+    } else if (trainerName.split(/\s+/).length > 1 || !resolveTracked(trainerName)) {
+      jockeyName = resolveJockey(trainerName);
+    }
+    if (jockeyName) {
+      const realTrainer = entry?.trainer ? reformatLastFirstName(entry.trainer) : "";
+      quotes.push({
+        quoteId: row.id,
+        trainerName: realTrainer ? (resolveTracked(realTrainer) || realTrainer) : "",
+        jockeyName,
+        jockeyFromRaceEntries: !!rodeIt,
+        horseName,
+        text,
+        reattributedFromRaceEntries: false,
+        sentiment: row.sentiment || null,
+        date,
+        source: article.title || article.source || "SmartPony",
+        link: article.url || null,
+      });
+      continue;
+    }
+
     if (entry?.trainer) {
       const realTrainer = reformatLastFirstName(entry.trainer);
       if (lastNameKey(trainerName) !== lastNameKey(realTrainer)) {
@@ -9659,15 +9762,16 @@ async function fetchSmartPonyQuotes(env) {
     const tracked = resolveTracked(trainerName);
     if (tracked) trainerName = tracked;
 
-    const article = row.raw_articles || {};
     quotes.push({
       quoteId: row.id,
       trainerName,
+      jockeyName: null,
+      jockeyFromRaceEntries: false,
       horseName,
       text: noteText,
       reattributedFromRaceEntries,
       sentiment: row.sentiment || null,
-      date: article.published_at ? article.published_at.slice(0, 10) : (row.created_at ? row.created_at.slice(0, 10) : null),
+      date,
       source: article.title || article.source || "SmartPony",
       link: article.url || null,
     });
