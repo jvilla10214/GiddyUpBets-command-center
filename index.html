@@ -10380,7 +10380,7 @@
   // under tracked US trainer "Brad Cox" purely because "Cox" was otherwise
   // unambiguous. No qualifying candidate, or more than one -> no guess,
   // same as this file's other "don't assert what isn't confirmed" matching.
-  // A trainer whose horses all moved to someone else, keyed "first|last".
+  // Names that always file under a different tracked trainer, keyed "first|last".
   // Christophe Clement has died (user's own ID, 2026-10-09) and his son
   // Miguel Clement now trains every horse in the barn, so anything still
   // credited to Christophe or "C. Clement" files under Miguel. Keep in sync
@@ -10388,6 +10388,23 @@
   const TRAINER_SUCCESSORS = {
     "christophe|clement": "Miguel Clement",
     "c|clement": "Miguel Clement",
+    // Same barn, filed under the head trainer (user's own ID, 2026-10-09
+    // same-surname audit): Cal = Cathal Lynch, Mel = Melanie Giddings; joint
+    // licences S & E Crisford and J & T Gosden; family/assistants quoted
+    // about the head trainer's horses.
+    "cal|lynch": "Cathal Lynch",
+    "mel|giddings": "Melanie Giddings",
+    "edward|crisford": "Simon Crisford",
+    "e|crisford": "Simon Crisford",
+    "thady|gosden": "John Gosden",
+    "t|gosden": "John Gosden",
+    "blake|cox": "Brad Cox",
+    "blake|dutrow": "Richard Dutrow",
+    "tessa|walden": "William Walden",
+    "joshua|attard": "Kevin Attard",
+    "justin|casse": "Mark Casse",
+    "mertkan|kantarmaci": "Ilkay Kantarmaci",
+    "edward|davis": "Robbie Davis",
   };
   function resolveTrackedTrainer(sourceName, trackedList){
     if (!sourceName) return null;

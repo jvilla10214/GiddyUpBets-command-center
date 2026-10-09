@@ -2585,7 +2585,7 @@ function sanitizeDenylistedTrainer(trainer) {
 // silently matched to tracked US trainer "Brad Cox") that motivated
 // checking first-name compatibility even when only one tracked trainer
 // shares the surname, not just when there's more than one to pick between.
-// A trainer whose horses all moved to someone else, keyed "first|last" as
+// Names that always file under a different tracked trainer, keyed "first|last" as
 // firstNameKey()|lastNameKey() see them. Confirmed real (user's own ID,
 // 2026-10-09): Christophe Clement has died and every horse in the barn is
 // now trained by his son Miguel Clement, so a quote, entry or result still
@@ -2595,6 +2595,23 @@ function sanitizeDenylistedTrainer(trainer) {
 const TRAINER_SUCCESSORS = {
   "christophe|clement": "Miguel Clement",
   "c|clement": "Miguel Clement",
+  // Same barn, filed under the head trainer (user's own ID, 2026-10-09
+  // same-surname audit): Cal = Cathal Lynch, Mel = Melanie Giddings; joint
+  // licences S & E Crisford and J & T Gosden; family/assistants quoted
+  // about the head trainer's horses.
+  "cal|lynch": "Cathal Lynch",
+  "mel|giddings": "Melanie Giddings",
+  "edward|crisford": "Simon Crisford",
+  "e|crisford": "Simon Crisford",
+  "thady|gosden": "John Gosden",
+  "t|gosden": "John Gosden",
+  "blake|cox": "Brad Cox",
+  "blake|dutrow": "Richard Dutrow",
+  "tessa|walden": "William Walden",
+  "joshua|attard": "Kevin Attard",
+  "justin|casse": "Mark Casse",
+  "mertkan|kantarmaci": "Ilkay Kantarmaci",
+  "edward|davis": "Robbie Davis",
 };
 function resolveTrackedTrainer(sourceName, trackedList) {
   if (!sourceName) return null;
