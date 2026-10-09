@@ -558,20 +558,15 @@
 // FIRST, then add this fourth trigger — adding the trigger before the code
 // that recognizes it is live would make the OLD scheduled() handler treat
 // it as an entry-alert fire and send extra digests.
-// A FIFTH Cron Trigger, "5 13,21 * * *" (SMARTPONY_CRON — expression must
-// match exactly), was added 2026-10-07 to give job #18 the same isolation
-// as NYRA News — see SMARTPONY_CRON's own comment for the "Too many
-// subrequests" failure this fixes. Same deploy-order caution as the fourth
-// trigger above: paste and deploy this file first, then add the trigger.
-// BloodHorse started hitting the identical "Too many subrequests" error
-// the same day, still sharing SIDE_JOBS_CRON's slot with DRF/Stable Tour
-// feed/TDN notebook/HRN even after SmartPony's own removal — but this
-// Worker was already AT Cloudflare's free-plan cap of 5 Cron Triggers
-// total, so a SIXTH/SEVENTH trigger (briefly added to the code, then
-// reverted) wasn't actually addable in the dashboard. Fixed instead by
-// reusing unused capacity already inside SIDE_JOBS_CRON's own 4 daily
-// fires — see runSideJobs()'s own comment for the full redistribution.
-// No new Cron Trigger needed for this round.
+// 2026-10-07: SmartPony, then BloodHorse, both briefly hit "Too many
+// subrequests" sharing this trigger's batch (free-plan subrequest cap, now
+// moot — see SIDE_JOBS_CRON's own comment for the full story). Several
+// temporary Cron Trigger splits were tried and reverted that day; none of
+// them stuck. As of 2026-10-09 (Workers Paid) this Worker is back to just
+// FOUR Cron Triggers total: entry-alerts AM, entry-alerts PM, NYRA News,
+// and this one (SIDE_JOBS_CRON) — a 5th exists as spare capacity if a
+// genuinely new job needs its own isolation later (the 5-per-Worker cap
+// is unchanged by the plan upgrade — see SIDE_JOBS_CRON's own comment).
 // -----------------------------------------------------------------------
 
 const FEED_URL = "https://thisishorseracing.com/category/fasig-tipton-stable-tour/feed/";
@@ -713,15 +708,6 @@ export default {
       }
       return;
     }
-    // SmartPony (job #18) — own Cron Trigger as of 2026-10-07, same
-    // isolation reasoning as NYRA News above. See SMARTPONY_CRON's own
-    // comment for the "Too many subrequests" failure this fixes.
-    if (event.cron === SMARTPONY_CRON) {
-      ctx.waitUntil(
-        trackedRun(env, "smartpony", () => runSmartPonyImport(env), "SmartPony import")
-      );
-      return;
-    }
     // Same isolation as NYRA News above, added 2026-10-02 — see
     // SIDE_JOBS_CRON's own comment for why: every import/maintenance job
     // that used to run alongside the entry-alert emails below now runs here
@@ -771,46 +757,45 @@ export default {
 // cron string, same DST-safety reasoning as the NYRA News check above) so a
 // missed twice-a-year DST edit can't misroute a run.
 //
-// Redesigned 2026-10-07 around a hard platform limit discovered the hard
-// way: Cloudflare caps a Worker on the free plan at 5 Cron Triggers total,
-// and this Worker was already AT that cap (entry-alerts AM/PM, NYRA News,
-// this one, SmartPony) before BloodHorse started hitting "Too many
-// subrequests" sharing the 13:00/21:00 slot with DRF/Stable Tour feed/TDN
-// notebook/HRN (see git history for the full per-job fetch-count breakdown
-// that drove this). Two brand-new triggers were briefly added to the code
-// to fix it, then reverted once the 5-trigger ceiling turned out to block
-// adding them in the dashboard at all. Fix instead reuses capacity already
-// sitting unused inside THIS one trigger's 4 daily fires, no new trigger
-// needed:
-//   - 13:00 & 21:00 (minute<30): BloodHorse + TDN main — unchanged, twice
-//     daily, already proven safe together (~34 subrequests).
-//   - 13:30 (hour===13, minute>=30): the three cheapest remaining news jobs
-//     (Stable Tour feed/TDN notebook/HRN, ~27) now run HERE too, alongside
-//     the once-daily maintenance jobs that were already here — those are
-//     KV-read/compute work, not fetch-heavy, so there's real headroom.
-//     Down from twice-daily to once-daily for these three; an acceptable
-//     trade given there's no trigger budget left for keeping them twice-daily
-//     in their own slot.
-//   - 21:30: previously did nothing at all — now runs DRF alone. Its fetch
-//     count is the most volatile of any job here (~6 while blocked, up to
-//     ~42 if the block ever lifts), so giving it the one truly empty slot
-//     means its worst case can never again compete with anything else's
-//     budget, without costing a 6th trigger we don't have.
+// Account upgraded to Workers Paid 2026-10-09, which raises the per-
+// invocation subrequest cap from 50 to 10,000 (confirmed via Cloudflare's
+// own changelog) — the combined ~60-100 subrequests across every job below
+// is trivial against that now, so the whole split-across-multiple-slots
+// redesign from 2026-10-07 (see git history) is no longer needed and has
+// been undone: everything's back in one twice-daily batch. IMPORTANT: the
+// 5-Cron-Trigger-per-Worker cap itself is UNCHANGED by paid — that's a
+// per-Worker platform limit, not a plan tier one (paid raises the
+// per-ACCOUNT total to 250, which only helps if you have multiple
+// Workers) — don't re-propose "just add another trigger to this Worker"
+// without checking there's a free slot first.
 function runSideJobs(event, env, ctx) {
   const fireTime = new Date(event.scheduledTime);
   const hour = fireTime.getUTCHours();
   const minute = fireTime.getUTCMinutes();
   if (minute < 30) {
-    // Jobs #24-25 — run on both fires (their own KV dedup makes that safe,
-    // and twice-daily freshness is worth it for a news source).
+    // Twice daily (13:00 & 21:00) — their own KV dedup makes that safe, and
+    // twice-daily freshness is worth it for a news source.
     ctx.waitUntil(
       trackedRun(env, "bloodhorse", () => runBloodHorseImport(env), "BloodHorse import")
     );
     ctx.waitUntil(
       trackedRun(env, "tdnmain", () => runTdnMainImport(env), "TDN main feed import")
     );
-    // SmartPony moved to its own Cron Trigger (SMARTPONY_CRON) 2026-10-07 —
-    // see that constant's own comment for why it outgrew sharing this one.
+    ctx.waitUntil(
+      trackedRun(env, "drf", () => runDrfImport(env), "DRF import")
+    );
+    ctx.waitUntil(
+      trackedRun(env, "stabletourfeed", () => runStableTourFeedImport(env), "Stable Tour feed import")
+    );
+    ctx.waitUntil(
+      trackedRun(env, "tdnnotebook", () => runTdnNotebookImport(env), "TDN Saratoga Notebook import")
+    );
+    ctx.waitUntil(
+      trackedRun(env, "hrnnews", () => runHrnNewsImport(env), "Horse Racing Nation import")
+    );
+    ctx.waitUntil(
+      trackedRun(env, "smartpony", () => runSmartPonyImport(env), "SmartPony import")
+    );
     return;
   }
   if (hour === 13) {
@@ -827,24 +812,9 @@ function runSideJobs(event, env, ctx) {
     ctx.waitUntil(
       trackedRun(env, "trainerangle", () => computeTrainerAngleStats(env), "Trainer angle stats computation")
     );
-    // Moved here 2026-10-07 from the twice-daily slot (see this function's
-    // own header comment) — now once-daily instead of twice.
-    ctx.waitUntil(
-      trackedRun(env, "stabletourfeed", () => runStableTourFeedImport(env), "Stable Tour feed import")
-    );
-    ctx.waitUntil(
-      trackedRun(env, "tdnnotebook", () => runTdnNotebookImport(env), "TDN Saratoga Notebook import")
-    );
-    ctx.waitUntil(
-      trackedRun(env, "hrnnews", () => runHrnNewsImport(env), "Horse Racing Nation import")
-    );
     return;
   }
-  // 21:30 UTC — previously unused; DRF now runs here alone (see this
-  // function's own header comment for why it gets the one empty slot).
-  ctx.waitUntil(
-    trackedRun(env, "drf", () => runDrfImport(env), "DRF import")
-  );
+  // 21:30 UTC — no work.
 }
 
 async function handleRequest(request, env) {
@@ -8390,34 +8360,18 @@ async function fetchNyraNews(track, options = {}) {
 // (trainer, jockey, horse, link-without-fragment), same as /notes/bulk.
 // The notes key is written once per run, only if something was added.
 const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (11/19 UTC) and EST (12/20 UTC)
-// Added 2026-10-07 — SAME "Too many subrequests by single Worker invocation"
-// failure as the entry-alerts fix below, now hitting SmartPony instead:
-// confirmed via /debug-pipeline-health (checked:0, written:0, that exact
-// error) on the real cron, while a standalone /debug-run-smartpony call
-// (own invocation, own budget) succeeded cleanly against the same data.
-// SmartPony's own footprint (paginating its now-4800+ row quote table, plus
-// two chunked lookupHorseIdsByName()/lookupRaceEntriesByHorseId() calls)
-// has simply grown past the point where it can keep sharing SIDE_JOBS_CRON's
-// invocation with the other six jobs there — same growth-outpaces-a-shared-
-// budget shape as the entry-alerts incident, just one job over. +5 min
-// offset from SIDE_JOBS_CRON's own :00/:30 so event.cron is a distinct
-// string (required for the dispatch check below to tell them apart) and the
-// two invocations' subrequests never land in the same window.
-const SMARTPONY_CRON = "5 13,21 * * *";
-// Added 2026-10-07, same incident — confirmed via /debug-pipeline-health
-// that BLOODHORSE was ALSO hitting "Too many subrequests" in the very same
-// SIDE_JOBS_CRON batch that SmartPony just got pulled out of, so pulling
-// SmartPony out alone wasn't enough headroom. Rough per-run fetch counts:
-// BloodHorse ~18, TDN main ~16, Stable Tour feed ~9, TDN notebook ~9,
-// HRN ~9, DRF ~6 now (blocked) but designed for up to ~42 if DRF ever comes
-// back online — combined, 60-100+ in one invocation. First attempt split
-// the remaining six across two brand-new Cron Triggers, then discovered
-// this Worker was already AT Cloudflare's free-plan cap of 5 triggers
-// total (entry-alerts AM/PM, NYRA News, SIDE_JOBS_CRON, this one) — a 6th
-// or 7th trigger simply can't be added in the dashboard. Reverted that and
-// instead redistributed the remaining six across capacity already sitting
-// unused inside SIDE_JOBS_CRON's own 4 daily fires — see runSideJobs()'s
-// own comment for exactly where each one landed. No new trigger needed.
+// 2026-10-07: SmartPony, then BloodHorse, both hit "Too many subrequests by
+// single Worker invocation" sharing SIDE_JOBS_CRON's batch with the other
+// news-import jobs — this Worker was on the free plan then, capped at 50
+// subrequests/invocation, and the combined batch had grown past it. Tried
+// splitting the batch across multiple Cron Triggers, then discovered this
+// Worker was already AT the (separate, plan-independent) 5-trigger-per-
+// Worker cap, so that approach didn't fit either. Resolved for good
+// 2026-10-09 by upgrading to Workers Paid, which raises the subrequest cap
+// to 10,000/invocation — the original single-batch design (below) is safe
+// again and no longer needs splitting. Full incident detail in git history
+// if this ever needs revisiting (e.g. a future job growing enormous enough
+// to matter again even at 10,000).
 // Confirmed real 2026-10-02: /debug-last-run showed the entry-alert emails
 // themselves sending 0, with tracks failing on "Too many subrequests by
 // single Worker invocation" -- scheduled() was starting runEntryAlerts() in

@@ -34,22 +34,23 @@ comment documents one feature/route.
 - **Requires a KV namespace** bound as `STABLE_KV` (Worker settings → Bindings).
 - **Secrets** (set in the Cloudflare dashboard, never committed to the repo):
   `RESEND_API_KEY`, `PIRATE_WEATHER_API_KEY`, `SMARTPONY_EMAIL`, `SMARTPONY_PASSWORD`.
+- **Account is on Workers Paid** (upgraded 2026-10-09) — 10,000 subrequests/invocation (up from
+  50 on free), so the subrequest-budget juggling below is mostly historical now. **The
+  5-Cron-Trigger-per-Worker cap is unchanged by the plan upgrade** (paid raises the limit to 250
+  per *account* across multiple Workers, not per Worker) — don't assume paid means unlimited
+  triggers on this one Worker.
 - Cron Triggers fire `scheduled()` for the entry-alert emails. There's a `/debug-run-scheduled`
   GET route to trigger that logic on demand without waiting for cron. A third trigger,
   `0 11,12,19,20 * * *`, runs only the NYRA News import (7am/3pm Eastern; on demand:
   `/debug-run-nyra-import`). A fourth, `0,30 13,21 * * *` (`SIDE_JOBS_CRON`), carries most other
-  import/maintenance jobs across its 4 daily fires: BloodHorse + TDN main twice daily (13:00 &
-  21:00); results backfill + note dedupe + trainer angle stats + Stable Tour feed + TDN notebook
-  + HRN once daily (13:30); DRF once daily, alone (21:30, previously unused). A fifth,
-  `5 13,21 * * *` (`SMARTPONY_CRON`), isolates the SmartPony quote import on its own.
-  **This Worker is maxed out at Cloudflare's free-plan cap of 5 Cron Triggers total** — confirmed
-  2026-10-07 when a 6th/7th trigger couldn't be added in the dashboard, which is why the jobs
-  above are packed into SIDE_JOBS_CRON's existing 4 fires rather than each getting its own
-  trigger. If another job ever needs isolating again, it has to come from redistributing within
-  these 5, not by adding a 6th — see `SMARTPONY_CRON`'s own comment in the Worker for the full
-  incident history. Each `scheduled()` dispatches on the exact cron string, so every expression
-  has to match verbatim in the dashboard — see the Worker's own header comment (search
-  `Cron Trigger`) for the full, current list before changing one.
+  import/maintenance jobs: BloodHorse, TDN main, DRF, Stable Tour feed, TDN notebook, HRN, and
+  SmartPony all run together twice daily (13:00 & 21:00); results backfill + note dedupe +
+  trainer angle stats run once daily (13:30, the only other slot with work — 21:30 is currently
+  unused). That's 4 Cron Triggers in active use, leaving one of the 5-per-Worker slots free for
+  a genuinely new job later. Each `scheduled()` dispatches on the exact cron string, so every
+  expression has to match verbatim in the dashboard — see the Worker's own header comment
+  (search `Cron Trigger`) for the full, current list and the 2026-10-07 incident history before
+  touching this again.
 - `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
   (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
 
