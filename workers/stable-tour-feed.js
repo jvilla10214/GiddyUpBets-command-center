@@ -1859,6 +1859,19 @@ async function handleRequest(request, env) {
       }
     }
 
+    // One-time repair — see reindexAllRaceRecaps()'s own comment. Safe to
+    // re-run any time (always rebuilds from scratch off the recap text
+    // already stored, never touches the Google Doc or the recap text
+    // itself), but only ever needs running once after this deploy.
+    if (url.pathname === "/debug-reindex-recaps" && request.method === "GET") {
+      try {
+        const result = await reindexAllRaceRecaps(env);
+        return json(result, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Recap reindex failed: ${err.message}` }, 500);
+      }
+    }
+
     // Lists which dates actually have a saved snapshot for this track, newest
     // first, without fetching every day's full entries+results payload just
     // to build a date picker. list() returns keys in lexicographic order,
@@ -2847,17 +2860,27 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRe
     if (recap) record.raceRecaps[raceNumber] = recap;
     else delete record.raceRecaps[raceNumber]; // empty text clears it
 
-    // Prefer the real finish order (who actually ran); fall back to the
-    // morning entries list (non-scratched) only when results haven't been
-    // archived yet for this race, so the recap still gets indexed against
-    // *someone* rather than silently indexing nobody.
+    // Prefer the full entries list (every non-scratched horse that actually
+    // ran); fall back to finishOrder only if entries has nothing for this
+    // race at all. REVERSED 2026-10-09 from the original "prefer
+    // finishOrder" priority — confirmed real bug: a results source's
+    // finishOrder is NOT "who actually ran," it's "who finished well
+    // enough to be listed" (e.g. NYRA/DMTC-style results commonly only
+    // record the top 4), so preferring it silently excluded every horse
+    // outside the top finishers from ever getting a recap indexed against
+    // them. Real case that surfaced this: Saratoga 8/28 R4 had 8 real
+    // runners, but finishOrder only listed the top 4 — Tizmarkus (and 3
+    // others) finished off the board and were never indexed at all despite
+    // having a recap written for that race, so their recap never followed
+    // them to a later entry anywhere. Entries already excludes scratches,
+    // so there's no accuracy reason to prefer the partial list over it.
     const resultRace = (record.results || []).find((r) => r.raceNumber === raceNumber);
     const entryRace = (record.entries || []).find((r) => r.raceNumber === raceNumber);
     let horseNames = [];
-    if (resultRace?.finishOrder?.length) {
-      horseNames = resultRace.finishOrder.map((f) => f.horseName).filter(Boolean);
-    } else if (entryRace?.horses?.length) {
+    if (entryRace?.horses?.length) {
       horseNames = entryRace.horses.filter((h) => !h.scratched).map((h) => h.name).filter(Boolean);
+    } else if (resultRace?.finishOrder?.length) {
+      horseNames = resultRace.finishOrder.map((f) => f.horseName).filter(Boolean);
     }
     indexedHorsesByRace[raceNumber] = horseNames;
 
@@ -2883,6 +2906,61 @@ async function upsertRaceRecapsBulk(env, track, date, recapsByRace, { fullCardRe
   await env.STABLE_KV.put(raceRecapIndexKvKey(track), JSON.stringify(index));
 
   return { available: true, track, date, indexedHorsesByRace, fullCardRecap: record.fullCardRecap || null };
+}
+
+// One-time repair for every recap index already built under the OLD
+// (wrong) prefer-finishOrder priority (see upsertRaceRecapsBulk's own
+// comment on the fix) — rebuilds each track's index from scratch, straight
+// off the raceRecaps text already sitting in each raceday record, using
+// the corrected entries-preferred logic. Doesn't touch the Google Doc or
+// raceRecaps text itself at all, just re-derives which horses each
+// already-written recap should be indexed against. Paginated KV list
+// (STABLE_KV.list caps at 1000 keys per call, same reason
+// /debug-clear-race-notify loops on cursor) since a full season can mean
+// many dates per track.
+async function reindexAllRaceRecaps(env) {
+  const tracks = Object.keys(ENTRIES_SOURCE_BY_TRACK);
+  const perTrack = {};
+  for (const track of tracks) {
+    const index = {};
+    let datesWithRecaps = 0, racesIndexed = 0;
+    let cursor;
+    do {
+      const listed = await env.STABLE_KV.list({ prefix: `raceday:${track}:`, cursor });
+      for (const k of listed.keys) {
+        const raw = await env.STABLE_KV.get(k.name);
+        if (!raw) continue;
+        const record = JSON.parse(raw);
+        if (!record.raceRecaps || !Object.keys(record.raceRecaps).length) continue;
+        const date = k.name.slice(`raceday:${track}:`.length);
+        datesWithRecaps++;
+        for (const [raceNumberStr, recapRaw] of Object.entries(record.raceRecaps)) {
+          const recap = typeof recapRaw === "string" ? recapRaw.trim() : "";
+          if (!recap) continue;
+          const raceNumber = Number(raceNumberStr);
+          const entryRace = (record.entries || []).find((r) => r.raceNumber === raceNumber);
+          const resultRace = (record.results || []).find((r) => r.raceNumber === raceNumber);
+          let horseNames = [];
+          if (entryRace?.horses?.length) {
+            horseNames = entryRace.horses.filter((h) => !h.scratched).map((h) => h.name).filter(Boolean);
+          } else if (resultRace?.finishOrder?.length) {
+            horseNames = resultRace.finishOrder.map((f) => f.horseName).filter(Boolean);
+          }
+          for (const name of horseNames) {
+            const horseKey = normalizeHorseNameForRecap(name);
+            if (!horseKey) continue;
+            if (!index[horseKey]) index[horseKey] = [];
+            index[horseKey].push({ date, raceNumber, recap });
+          }
+          racesIndexed++;
+        }
+      }
+      cursor = listed.list_complete ? undefined : listed.cursor;
+    } while (cursor);
+    await env.STABLE_KV.put(raceRecapIndexKvKey(track), JSON.stringify(index));
+    perTrack[track] = { datesWithRecaps, racesIndexed, horsesIndexed: Object.keys(index).length };
+  }
+  return { available: true, tracks: perTrack };
 }
 
 async function upsertRaceRecap(env, track, date, raceNumber, recap) {
