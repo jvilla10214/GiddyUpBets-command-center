@@ -5058,6 +5058,13 @@ function sportingLifeMapRace(raceEntry, date, surface){
     const pb = b.postPosition != null ? Number(b.postPosition) : Infinity;
     return pa - pb;
   });
+  // Confirmed real complaint (2026-10-09): the real UK draw/stall number
+  // isn't always a contiguous 1..N (gaps are normal for large fields or
+  // non-standard stall counts), so showing it directly in the PP column
+  // read as "wrong" next to every other track's sequential 1,2,3... — the
+  // sort above already puts them in the right order, this just relabels
+  // each row 1..N by that order instead of printing the real draw number.
+  horses.forEach((h, i) => { h.postPosition = String(i + 1); });
   return {
     postTimeIso: rs.time ? `${date}T${rs.time}` : null,
     mtpLabel: null,
@@ -5141,6 +5148,20 @@ function sportingLifePoundAmount(raw) {
 // US split has no real UK equivalent.
 function sportingLifeMapResultRace(raceDetail, raceNumber){
   const placeValues = (raceDetail.place_win || "").split(",").map((s) => s.trim()).filter(Boolean);
+  // Same draw-ascending -> sequential 1..N relabeling as sportingLifeMapRace()
+  // (entries) uses, built from the SAME ride objects finishOrder below maps
+  // over, so a horse shows the identical PP number pre- and post-race
+  // instead of entries' sequential label disagreeing with a raw draw number
+  // here.
+  const ppByRide = new Map();
+  (raceDetail.rides || [])
+    .slice()
+    .sort((a, b) => {
+      const da = a.draw_number != null ? Number(a.draw_number) : Infinity;
+      const db = b.draw_number != null ? Number(b.draw_number) : Infinity;
+      return da - db;
+    })
+    .forEach((r, i) => ppByRide.set(r, i + 1));
   const finishOrder = (raceDetail.rides || [])
     // A non-runner carries finish_position: 0, not null — checking
     // ride_status (same "RUNNER" check fetchSportingLifeEntriesDay's own
@@ -5150,7 +5171,7 @@ function sportingLifeMapResultRace(raceDetail, raceNumber){
     .sort((a, b) => a.finish_position - b.finish_position)
     .map((r) => ({
       finishPosition: r.finish_position,
-      postPosition: r.draw_number != null ? String(r.draw_number) : null,
+      postPosition: ppByRide.has(r) ? String(ppByRide.get(r)) : null,
       horseName: r.horse?.name || null,
       winPayout: r.finish_position === 1 ? sportingLifePoundAmount(raceDetail.tote_win) : null,
       placePayout: sportingLifePoundAmount(placeValues[r.finish_position - 1]),
