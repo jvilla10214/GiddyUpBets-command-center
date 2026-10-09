@@ -977,6 +977,32 @@ async function handleRequest(request, env) {
       return json({ jockeys: state.jockeys, jockeyMeta: state.jockeyMeta }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Bulk version of POST /jockeys above, added 2026-10-09 for moving
+    // jockeys off the trainer roster in one go — same one-write-per-batch
+    // reasoning as /trainers/bulk (KV's free-tier 1,000 writes/day cap; the
+    // single-name route costs 3 writes per jockey). Body: { names, source }.
+    if (url.pathname === "/jockeys/bulk" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const names = Array.isArray(body.names) ? body.names.map((n) => (n || "").trim()).filter(Boolean) : [];
+      if (!names.length) return json({ error: "Missing names" }, 400);
+      const source = (body.source || "manual").trim();
+      const state = await readJockeysAndMeta(env);
+      let added = 0;
+      for (const name of names) {
+        if (state.jockeys.some((j) => j.toLowerCase() === name.toLowerCase())) continue;
+        state.jockeys.push(name);
+        state.jockeyMeta[name] = { source, addedAt: new Date().toISOString() };
+        added++;
+      }
+      if (added) {
+        state.jockeys.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+        await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+        await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+        await bumpDataVersion(env);
+      }
+      return json({ added, jockeys: state.jockeys, jockeyMeta: state.jockeyMeta }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/jockeys" && request.method === "DELETE") {
       const body = await request.json().catch(() => ({}));
       const name = body.name;
