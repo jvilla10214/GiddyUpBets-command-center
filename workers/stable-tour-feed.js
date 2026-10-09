@@ -1568,24 +1568,20 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // One-time manual catch-up — see runSmartPonyFullSweep()'s own comment.
-    // WRITES notes (not read-only) — processes the whole current quote list
-    // in one go instead of waiting on the regular twice-daily 300-per-run
-    // drain. Safe to re-run (dedup by key), but deliberately manual-only,
-    // not on any Cron Trigger.
-    // Confirmed real 2026-10-09: awaited inline (like every other debug
-    // route), a real run against ~4,700 quotes with 1,000+ sequential KV
-    // puts never returned a response at all within 300s — the edge
-    // connection just hangs rather than erroring cleanly, unlike the
-    // documented CPU/subrequest caps elsewhere in this file. Dispatched via
-    // ctx.waitUntil() instead (the same pattern scheduled() already uses
-    // for every cron job), so the HTTP response returns immediately and the
-    // actual sweep keeps running after — check its outcome at
-    // /debug-pipeline-health (job name "smartponyfullsweep") once it's had
-    // a few minutes, not in this response.
+    // One-time manual catch-up — see runSmartPonyFullSweep()'s own comment
+    // for why this is chunked (a batch per call, own cursor) rather than
+    // the whole backlog in one shot. WRITES notes (not read-only). Call
+    // repeatedly (`?reset=1` on the first call to restart the pass) until
+    // the response's `remaining` is 0. Manual-only, not on any Cron
+    // Trigger.
     if (url.pathname === "/debug-smartpony-full-sweep" && request.method === "GET") {
-      ctx.waitUntil(trackedRun(env, "smartponyfullsweep", () => runSmartPonyFullSweep(env), "SmartPony full sweep"));
-      return json({ started: true, note: "Running in the background — check /debug-pipeline-health (job \"smartponyfullsweep\") in a few minutes for the result." }, 202);
+      try {
+        const result = await runSmartPonyFullSweep(env, { reset: url.searchParams.get("reset") === "1" });
+        await recordPipelineRun(env, "smartponyfullsweep", { ok: true, summary: result });
+        return json(result, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `SmartPony full sweep failed: ${err.message}` }, 502);
+      }
     }
 
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
@@ -9813,24 +9809,35 @@ async function runSmartPonyImport(env) {
 
 // One-time manual catch-up — same exact per-quote logic as
 // runSmartPonyImport() above (jockey/trainer resolution, misattribution
-// guard, dedup-by-key), but over the WHOLE current quote list in one
-// invocation instead of the usual 300-per-run head+drain slice, and with no
-// smartpony:seen: gating at all. Built 2026-10-09 after auditSmartPonyQuote
-// Backlog() found 1,309 of 4,652 quotes genuinely not yet written as notes
-// — far more than the twice-daily drain could have left outstanding on its
-// own, which points at some of them having been seen-flagged (and
-// permanently skipped) by now-fixed bugs (the misattribution
-// false-positive fixed 2026-10-05, in particular) before the fix landed.
-// Clearing that backlog by waiting for the drain to wrap naturally would
-// take another cycle; this does it in one pass instead. Safe to re-run —
-// existingNoteKeys dedup means anything already written is a no-op, and
-// Workers Paid's 10,000-subrequest cap comfortably covers one KV op per
-// quote (~4,700) plus the final notes/seen writes. After this runs, every
-// quote gets its seen flag set (so the regular twice-daily job doesn't
-// redo this work) EXCEPT untracked-trainer ones, matching
-// runSmartPonyImport()'s own deliberate choice to keep reconsidering those
-// in case the trainer gets tracked later.
-async function runSmartPonyFullSweep(env) {
+// guard, dedup-by-key), over the whole current quote list, but in BOUNDED,
+// RESUMABLE batches via its own cursor — built 2026-10-09 after
+// auditSmartPonyQuoteBacklog() found 1,309 of 4,652 quotes genuinely not
+// yet written as notes (far more than the twice-daily drain could have
+// left outstanding on its own; most likely some got smartpony:seen-flagged
+// and permanently skipped by the misattribution false-positive bug fixed
+// 2026-10-05, before that fix landed).
+//
+// Confirmed real 2026-10-09: a first version tried the WHOLE list in one
+// invocation (even dispatched via ctx.waitUntil, same as scheduled() uses
+// for cron jobs) and never completed at all within 300s+ — nearly every
+// quote gets at least one KV put here (almost all of the 4,652, not just
+// the 1,309 missing ones — the "already added" and "misattributed" paths
+// both still write a seen flag), several thousand sequential round trips
+// in one invocation, which hit some real platform ceiling on background
+// task duration with no error, just silence. Chunked into
+// SMARTPONY_FULLSWEEP_BATCH_SIZE-sized batches via their own cursor (not
+// the regular drain's) fixes that — each call is a normal, fast, inline
+// (awaited, not backgrounded) request, and repeated calls walk the whole
+// list. Call it (or `?reset=1` first to restart the pass) repeatedly until
+// the response's `remaining` is 0. Safe to re-run — existingNoteKeys dedup
+// means anything already written is a no-op. After a quote is swept, it
+// gets its seen flag set (so the regular twice-daily job doesn't redo this
+// work) EXCEPT untracked-trainer ones, matching runSmartPonyImport()'s own
+// deliberate choice to keep reconsidering those in case the trainer gets
+// tracked later.
+const SMARTPONY_FULLSWEEP_BATCH_SIZE = 500;
+const SMARTPONY_FULLSWEEP_CURSOR_KV_KEY = "smartpony:fullsweep:cursor";
+async function runSmartPonyFullSweep(env, { reset = false } = {}) {
   let checked = 0;
   let written = 0;
   let skippedMisattributed = 0;
@@ -9848,7 +9855,16 @@ async function runSmartPonyFullSweep(env) {
     let jockeysAdded = 0;
     let jockeyNotes = 0;
 
-    for (const q of quotes) {
+    const cursorId = reset ? null : await env.STABLE_KV.get(SMARTPONY_FULLSWEEP_CURSOR_KV_KEY);
+    let startIdx = 0;
+    if (cursorId) {
+      const idx = quotes.findIndex((q) => q.quoteId === cursorId);
+      startIdx = idx === -1 ? 0 : idx + 1;
+    }
+    const batch = quotes.slice(startIdx, startIdx + SMARTPONY_FULLSWEEP_BATCH_SIZE);
+    const remaining = Math.max(0, quotes.length - (startIdx + batch.length));
+
+    for (const q of batch) {
       const seenKey = `smartpony:seen:${q.quoteId}`;
       checked++;
       if (q.jockeyName) {
@@ -9927,7 +9943,10 @@ async function runSmartPonyFullSweep(env) {
     for (const seenKey of seenKeysToWrite) {
       await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
     }
-    return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, totalQuotes: quotes.length };
+    if (batch.length) {
+      await env.STABLE_KV.put(SMARTPONY_FULLSWEEP_CURSOR_KV_KEY, batch[batch.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 30 });
+    }
+    return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, batchSize: batch.length, startIdx, totalQuotes: quotes.length, remaining, done: remaining === 0 };
   } catch (err) {
     console.error("SmartPony full sweep failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
