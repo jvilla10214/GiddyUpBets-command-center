@@ -2218,6 +2218,54 @@ async function handleRequest(request, env) {
       return json({ track, horseCount: Object.keys(index).length, index }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Read-only dry run of the EXACT entry-alert matching logic (same
+    // trainerTracked/hasUntrackedNote/recaps/notes computation
+    // runEntryAlerts() uses) for one track+date, returned as JSON per
+    // horse instead of building/sending an email — no dedup keys written,
+    // nothing sent. Exists specifically so "why didn't horse X's quotes
+    // show up" can be checked against the real live deploy without
+    // triggering another real send to find out.
+    if (url.pathname === "/debug-match-dry-run" && request.method === "GET") {
+      const track = url.searchParams.get("track");
+      const date = url.searchParams.get("date");
+      if (!track || !date) return json({ error: "Missing track or date" }, 400);
+      try {
+        const state = await readNotesAndTrainers(env);
+        const trackedLastNames = new Set(state.trainers.map(lastNameKey));
+        const untrackedHorseNames = new Set(
+          state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
+        );
+        const recapIndex = await readAllRecapIndexes(env);
+        const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
+        let result;
+        if (sourceType === "nyra") result = await fetchNyraEntriesDay(track, date);
+        else if (sourceType === "dmtc") result = await fetchDmtcEntriesDay(date);
+        else if (sourceType === "sportinglife") result = await fetchSportingLifeEntriesDay(track, date);
+        else if (sourceType === "smartpony") result = await fetchSmartPonyEntriesDay(track, date);
+        else result = await fetchMonmouthEntriesDay(date);
+
+        const horses = [];
+        for (const race of result.races || []) {
+          for (const horse of race.horses || []) {
+            if (horse.scratched) continue;
+            const trainerTracked = !!(horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer)));
+            const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
+            const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
+            const notes = notesForHorse(state.notes, horse.trainer, horse.name);
+            if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
+            if (!notes.length && !recaps.length) continue;
+            horses.push({
+              race: race.raceNumber, name: horse.name, trainer: horse.trainer,
+              trainerTracked, hasUntrackedNote, notesCount: notes.length, recapsCount: recaps.length,
+            });
+          }
+        }
+        return json({ track, date, matchedCount: horses.length, horses }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Dry run failed: ${err.message}` }, 500);
+      }
+    }
+
     // Read-only — reports the last runEntryAlerts() run (real cron or
     // manual, see recordEntryAlertsRun()) without triggering a new one.
     // The actual way to confirm the Cron Trigger is firing on its own: 0
