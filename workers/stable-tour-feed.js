@@ -5141,7 +5141,17 @@ function sportingLifeMapRace(raceEntry, date, surface){
   const horses = (raceEntry.rides || []).map((ride) => {
     const isRunner = ride.ride_status === "RUNNER";
     return {
-      postPosition: ride.draw_number != null ? String(ride.draw_number) : null,
+      // cloth_number, NOT draw_number — confirmed real bug 2026-10-09:
+      // Sporting Life carries both as separate fields. draw_number is the
+      // physical starting-stall position (only separately meaningful for
+      // straight-course/sprint stall bias); cloth_number is the number
+      // actually printed on the racecard/saddlecloth — what "post
+      // position" means in ordinary use, and what a user cross-checking
+      // against a real racecard expects to see (verified directly: a
+      // real Newmarket Fillies' Mile race had Dancing Destiny at
+      // cloth_number 1 but draw_number 5 — draw_number alone put the
+      // right LABELS 1..N on the wrong horses entirely).
+      postPosition: ride.cloth_number != null ? String(ride.cloth_number) : null,
       name: ride.horse?.name || null,
       // A withdrawn ride's jockey.name is literally the string "Non Runner"
       // in Sporting Life's own data (verified directly against real
@@ -5158,23 +5168,14 @@ function sportingLifeMapRace(raceEntry, date, surface){
       mlOdds: null,
     };
   });
-  // Sporting Life's own `rides` array isn't in post-position order (nor
-  // odds order, nor anything obviously meaningful — verified directly:
-  // draws came back as 1,2,7,6,3,9,8,4,5 for a real race) — every other
-  // source's own entries page already lists horses by post position, so
-  // this sorts to match instead of showing Sporting Life's raw order.
+  // Sporting Life's own `rides` array isn't necessarily in cloth-number
+  // order as returned — every other source's own entries page already
+  // lists horses by post position, so this sorts to match.
   horses.sort((a, b) => {
     const pa = a.postPosition != null ? Number(a.postPosition) : Infinity;
     const pb = b.postPosition != null ? Number(b.postPosition) : Infinity;
     return pa - pb;
   });
-  // Confirmed real complaint (2026-10-09): the real UK draw/stall number
-  // isn't always a contiguous 1..N (gaps are normal for large fields or
-  // non-standard stall counts), so showing it directly in the PP column
-  // read as "wrong" next to every other track's sequential 1,2,3... — the
-  // sort above already puts them in the right order, this just relabels
-  // each row 1..N by that order instead of printing the real draw number.
-  horses.forEach((h, i) => { h.postPosition = String(i + 1); });
   return {
     postTimeIso: rs.time ? `${date}T${rs.time}` : null,
     mtpLabel: null,
@@ -5258,20 +5259,6 @@ function sportingLifePoundAmount(raw) {
 // US split has no real UK equivalent.
 function sportingLifeMapResultRace(raceDetail, raceNumber){
   const placeValues = (raceDetail.place_win || "").split(",").map((s) => s.trim()).filter(Boolean);
-  // Same draw-ascending -> sequential 1..N relabeling as sportingLifeMapRace()
-  // (entries) uses, built from the SAME ride objects finishOrder below maps
-  // over, so a horse shows the identical PP number pre- and post-race
-  // instead of entries' sequential label disagreeing with a raw draw number
-  // here.
-  const ppByRide = new Map();
-  (raceDetail.rides || [])
-    .slice()
-    .sort((a, b) => {
-      const da = a.draw_number != null ? Number(a.draw_number) : Infinity;
-      const db = b.draw_number != null ? Number(b.draw_number) : Infinity;
-      return da - db;
-    })
-    .forEach((r, i) => ppByRide.set(r, i + 1));
   const finishOrder = (raceDetail.rides || [])
     // A non-runner carries finish_position: 0, not null — checking
     // ride_status (same "RUNNER" check fetchSportingLifeEntriesDay's own
@@ -5281,7 +5268,10 @@ function sportingLifeMapResultRace(raceDetail, raceNumber){
     .sort((a, b) => a.finish_position - b.finish_position)
     .map((r) => ({
       finishPosition: r.finish_position,
-      postPosition: ppByRide.has(r) ? String(ppByRide.get(r)) : null,
+      // cloth_number, not draw_number — see sportingLifeMapRace()'s own
+      // comment (entries) for why; this keeps the same number a horse
+      // showed pre-race, since both read the identical field now.
+      postPosition: r.cloth_number != null ? String(r.cloth_number) : null,
       horseName: r.horse?.name || null,
       winPayout: r.finish_position === 1 ? sportingLifePoundAmount(raceDetail.tote_win) : null,
       placePayout: sportingLifePoundAmount(placeValues[r.finish_position - 1]),
