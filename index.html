@@ -10344,6 +10344,7 @@
     charlie: "charles", // Charlie Appleby — confirmed real: SmartPony spelled his formal first name out ("Charles Appleby") and spawned a duplicate alongside the already-tracked "Charlie Appleby"
     gus: "gustavo", // Gus Rodriguez — confirmed real (user's own ID): same person as the already-tracked "Gustavo Rodriguez," separate from "Rudy Rodriguez"
     phillip: "philip", // General double-L/single-L spelling variant — confirmed real for Capuano ("Phillip" vs the already-tracked "Phil"), same category of gap "phil" above already covers for the single-L spelling
+    howie: "howard", // Howie Gibson — confirmed real (user's own ID): SmartPony's race entries spell him "Howard F Gibson"
     charlton: "charles", // Charlton Baker — confirmed real: DRF's own prose uses his formal first name while the already-tracked entry is "Charlie Baker"; mapped to the SAME target "charles" the existing charlie->charles entry already resolves to, so both spellings converge instead of needing a second, disagreeing alias
   };
   // Normalizes ONE name token (not a full name) — strips a trailing
@@ -10379,8 +10380,36 @@
   // under tracked US trainer "Brad Cox" purely because "Cox" was otherwise
   // unambiguous. No qualifying candidate, or more than one -> no guess,
   // same as this file's other "don't assert what isn't confirmed" matching.
+  // Names that always file under a different tracked trainer, keyed "first|last".
+  // Christophe Clement has died (user's own ID, 2026-10-09) and his son
+  // Miguel Clement now trains every horse in the barn, so anything still
+  // credited to Christophe or "C. Clement" files under Miguel. Keep in sync
+  // with the Worker's TRAINER_SUCCESSORS.
+  const TRAINER_SUCCESSORS = {
+    "christophe|clement": "Miguel Clement",
+    "c|clement": "Miguel Clement",
+    // Same barn, filed under the head trainer (user's own ID, 2026-10-09
+    // same-surname audit): Cal = Cathal Lynch, Mel = Melanie Giddings; joint
+    // licences S & E Crisford and J & T Gosden; family/assistants quoted
+    // about the head trainer's horses.
+    "cal|lynch": "Cathal Lynch",
+    "mel|giddings": "Melanie Giddings",
+    "edward|crisford": "Simon Crisford",
+    "e|crisford": "Simon Crisford",
+    "thady|gosden": "John Gosden",
+    "t|gosden": "John Gosden",
+    "blake|cox": "Brad Cox",
+    "blake|dutrow": "Richard Dutrow",
+    "tessa|walden": "William Walden",
+    "joshua|attard": "Kevin Attard",
+    "justin|casse": "Mark Casse",
+    "mertkan|kantarmaci": "Ilkay Kantarmaci",
+    "edward|davis": "Robbie Davis",
+  };
   function resolveTrackedTrainer(sourceName, trackedList){
     if (!sourceName) return null;
+    const successor = TRAINER_SUCCESSORS[`${trainerFirstNameKey(sourceName)}|${trainerLastName(sourceName)}`];
+    if (successor) sourceName = successor;
     const wantLast = trainerLastName(sourceName);
     const candidates = trackedList.filter(t => trainerLastName(t) === wantLast);
     if (!candidates.length) return null;
@@ -10389,7 +10418,27 @@
     const wantFirst = trainerFirstNameKey(sourceName);
     const firstNameMatches = candidates.filter(t =>
       stripDiacritics(t).trim().split(/\s+/).some(tok => normalizeNameToken(tok) === wantFirst));
+    if (firstNameMatches.length === 0 && wantFirst.length === 1) return resolveTrainerByInitial(parts, wantFirst, wantLast, candidates);
     return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
+  }
+
+  // Second pass for a source whose first name is only an initial ("R.
+  // Mandella", "P. D'Amato", "D Whitworth Beckman"), added 2026-10-09 —
+  // same rule as the Worker's resolveByInitial(), see its comment. A full
+  // middle name wins if present; otherwise the initial must match the first
+  // letter of some name token, and only an unambiguous match counts.
+  const NAME_SUFFIX_TOKENS = new Set(["jr", "sr", "ii", "iii", "iv"]);
+  function resolveTrainerByInitial(parts, initial, wantLast, candidates){
+    const middle = parts.slice(1)
+      .map(p => normalizeNameToken(p).replace(/[^a-z-]/g, ""))
+      .find(t => t.length > 1 && t !== wantLast && !NAME_SUFFIX_TOKENS.has(t));
+    const matches = candidates.filter(t => {
+      const raw = stripDiacritics(t).trim().split(/\s+/).map(tok => tok.toLowerCase().replace(/[^a-z-]/g, ""));
+      if (middle) return raw.some(tok => normalizeNameToken(tok) === middle);
+      return raw.some(tok => tok && tok !== "and" && tok !== wantLast && !NAME_SUFFIX_TOKENS.has(tok) &&
+        (tok[0] === initial || normalizeNameToken(tok)[0] === initial));
+    });
+    return matches.length === 1 ? matches[0] : null;
   }
 
   // Cross-links a specific Entries horse to its own Stable Tour notes (see
