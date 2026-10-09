@@ -2190,6 +2190,21 @@ async function handleRequest(request, env) {
       }
     }
 
+    // Read-only — dumps one track's recap index (or just one horse's entry
+    // in it, via ?horse=) exactly as readRecapIndex() sees it. No side
+    // effects, nothing sent — purely for diagnosing "why didn't this horse's
+    // recap show up" without needing to trigger a real email send to find out.
+    if (url.pathname === "/debug-recap-index" && request.method === "GET") {
+      const track = url.searchParams.get("track") || "saratoga";
+      const horse = url.searchParams.get("horse");
+      const index = await readRecapIndex(env, track);
+      if (horse) {
+        const key = normalizeHorseNameForRecap(horse);
+        return json({ track, horseKey: key, entries: index[key] || [] }, 200, { "Cache-Control": "no-store" });
+      }
+      return json({ track, horseCount: Object.keys(index).length, index }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Read-only — reports the last runEntryAlerts() run (real cron or
     // manual, see recordEntryAlertsRun()) without triggering a new one.
     // The actual way to confirm the Cron Trigger is firing on its own: 0
