@@ -31,6 +31,7 @@ USER_AGENT = (
 
 STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 PROCESSED_GUIDS_PATH = os.path.join(STATE_DIR, "processed_guids.json")
+DROPPED_QUOTES_PATH = os.path.join(STATE_DIR, "dropped_quotes.json")
 NICKNAME_ALIASES_PATH = os.path.join(os.path.dirname(__file__), "nickname_aliases.json")
 
 TMP_DIR = os.path.join(os.path.dirname(__file__), "tmp")

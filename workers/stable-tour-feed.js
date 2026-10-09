@@ -1554,6 +1554,20 @@ async function handleRequest(request, env) {
       }
     }
 
+    // Read-only: every SmartPony quote in the current 120-day window,
+    // classified as already-added / still-pending / stuck-on-an-untracked-
+    // trainer-or-jockey / filtered-as-misattributed — see
+    // auditSmartPonyQuoteBacklog()'s own comment for why the per-run
+    // checked/written counts alone can't answer "what's actually waiting."
+    if (url.pathname === "/debug-smartpony-backlog" && request.method === "GET") {
+      try {
+        const report = await auditSmartPonyQuoteBacklog(env);
+        return json(report, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `SmartPony backlog audit failed: ${err.message}` }, 502);
+      }
+    }
+
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
       const lat = url.searchParams.get("lat");
       const lon = url.searchParams.get("lon");
@@ -9775,6 +9789,82 @@ async function runSmartPonyImport(env) {
     console.error("SmartPony import failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
   }
+}
+
+// Read-only, whole-backlog version of runSmartPonyImport()'s own
+// classification logic — answers "of every SmartPony quote in the current
+// 120-day window, which ones are actually missing as a note, and why" in
+// one pass, instead of inferring it from scattered per-run `checked`/
+// `written` counts. Changes nothing (no KV writes, no notes/jockeys
+// mutated) — safe to call any time. Built because the per-run numbers
+// alone can't tell "still waiting for the drain cursor to reach it" apart
+// from "permanently stuck on an untracked trainer" apart from "genuinely
+// already added" — this does the full compare directly.
+async function auditSmartPonyQuoteBacklog(env) {
+  const quotes = await fetchSmartPonyQuotes(env);
+  const state = await readNotesAndTrainers(env);
+  const notes = state.notes;
+  const resolveTracked = makeTrackedTrainerResolver(state.trainers);
+  const jockeyState = await readJockeysAndMeta(env);
+  const resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+  const noteKey = (trainer, jockey, horse, text) => `${trainer || ""}|${jockey || ""}|${horse}|${text}`;
+  const existingNoteKeys = new Set(notes.map((n) => noteKey(n.trainer, n.jockey, n.horse, n.note)));
+
+  let alreadyAdded = 0;
+  const pending = []; // resolvable against a tracked trainer/jockey, not yet a note — just waiting on the next scheduled run to reach it
+  const untrackedTrainerCounts = {}; // trainer name -> {count, horses:Set, newestDate}
+  const untrackedJockeyCounts = {};
+  let misattributedSkipped = 0;
+
+  for (const q of quotes) {
+    if (q.jockeyName) {
+      const jockey = resolveJockey(q.jockeyName) || (q.jockeyFromRaceEntries ? q.jockeyName : null);
+      if (!jockey) {
+        const bucket = untrackedJockeyCounts[q.jockeyName] || { count: 0, horses: new Set(), newestDate: null };
+        bucket.count++;
+        bucket.horses.add(q.horseName);
+        if (!bucket.newestDate || (q.date || "") > bucket.newestDate) bucket.newestDate = q.date;
+        untrackedJockeyCounts[q.jockeyName] = bucket;
+        continue;
+      }
+      const key = noteKey("", jockey, q.horseName, q.text);
+      if (existingNoteKeys.has(key)) { alreadyAdded++; continue; }
+      pending.push({ kind: "jockey", jockey, horse: q.horseName, date: q.date, text: q.text.slice(0, 160), source: q.source });
+      continue;
+    }
+    const matchedTrainer = resolveTracked(q.trainerName);
+    if (!matchedTrainer) {
+      const bucket = untrackedTrainerCounts[q.trainerName] || { count: 0, horses: new Set(), newestDate: null };
+      bucket.count++;
+      bucket.horses.add(q.horseName);
+      if (!bucket.newestDate || (q.date || "") > bucket.newestDate) bucket.newestDate = q.date;
+      untrackedTrainerCounts[q.trainerName] = bucket;
+      continue;
+    }
+    if (!q.reattributedFromRaceEntries && smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
+      misattributedSkipped++;
+      continue;
+    }
+    const key = noteKey(matchedTrainer, "", q.horseName, q.text);
+    if (existingNoteKeys.has(key)) { alreadyAdded++; continue; }
+    pending.push({ kind: "trainer", trainer: matchedTrainer, horse: q.horseName, date: q.date, text: q.text.slice(0, 160), source: q.source });
+  }
+
+  const toSortedList = (counts) => Object.entries(counts)
+    .map(([name, b]) => ({ name, count: b.count, distinctHorses: b.horses.size, newestDate: b.newestDate }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalQuotes: quotes.length,
+    alreadyAdded,
+    pendingNotYetWritten: pending.length,
+    pendingSample: pending
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+      .slice(0, 50),
+    misattributedSkipped,
+    untrackedTrainers: toSortedList(untrackedTrainerCounts),
+    untrackedJockeys: toSortedList(untrackedJockeyCounts),
+  };
 }
 
 // ---------- SmartPony partner quotes (job #18) ----------
