@@ -2592,7 +2592,31 @@ function resolveTrackedTrainer(sourceName, trackedList) {
   const wantFirst = firstNameKey(sourceName);
   const firstNameMatches = candidates.filter((t) =>
     stripDiacritics(t).trim().split(/\s+/).some((tok) => normalizeNameToken(tok) === wantFirst));
+  if (firstNameMatches.length === 0 && wantFirst.length === 1) return resolveByInitial(parts, wantFirst, wantLast, candidates);
   return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
+}
+
+// Second pass for a source whose first name is only an initial ("R.
+// Mandella", "P. D'Amato", "D Whitworth Beckman", "C. McGaughey"), added
+// 2026-10-09: none of those matched their tracked trainer, because "r"
+// isn't a token of "Richard Mandella". A full middle name in the source
+// wins if there is one ("Whitworth" -> tracked "Whit Beckman" via the
+// whit->whitworth alias); otherwise the initial has to match the first
+// letter of some name token (nickname or formal, so "W. Mott" still finds
+// "William Mott"). Same "exactly one or no guess" rule as above, so an
+// initial that fits two same-surname trainers still resolves to nothing.
+const NAME_SUFFIX_TOKENS = new Set(["jr", "sr", "ii", "iii", "iv"]);
+function resolveByInitial(parts, initial, wantLast, candidates) {
+  const middle = parts.slice(1)
+    .map((p) => normalizeNameToken(p).replace(/[^a-z-]/g, ""))
+    .find((t) => t.length > 1 && t !== wantLast && !NAME_SUFFIX_TOKENS.has(t));
+  const matches = candidates.filter((t) => {
+    const raw = stripDiacritics(t).trim().split(/\s+/).map((tok) => tok.toLowerCase().replace(/[^a-z-]/g, ""));
+    if (middle) return raw.some((tok) => normalizeNameToken(tok) === middle);
+    return raw.some((tok) => tok && tok !== "and" && tok !== wantLast && !NAME_SUFFIX_TOKENS.has(tok) &&
+      (tok[0] === initial || normalizeNameToken(tok)[0] === initial));
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 
 // Same result as resolveTrackedTrainer(name, trackedList), for hot loops that
