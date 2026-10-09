@@ -681,9 +681,9 @@ const TURFTRAX_STREAM_URL = "https://its.turftrax.co.uk/visualiser/stream/ascot.
 const TURFTRAX_REFERER = "https://its.turftrax.co.uk/visualiser/ascot/";
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handleRequest(request, env);
+      return await handleRequest(request, env, ctx);
     } catch (err) {
       // Surface the real failure as JSON instead of Cloudflare's opaque
       // "error code: 1101" page, which gives no clue what actually broke.
@@ -827,7 +827,7 @@ function runSideJobs(event, env, ctx) {
   // 21:30 UTC — no work.
 }
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx) {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -1573,14 +1573,19 @@ async function handleRequest(request, env) {
     // in one go instead of waiting on the regular twice-daily 300-per-run
     // drain. Safe to re-run (dedup by key), but deliberately manual-only,
     // not on any Cron Trigger.
+    // Confirmed real 2026-10-09: awaited inline (like every other debug
+    // route), a real run against ~4,700 quotes with 1,000+ sequential KV
+    // puts never returned a response at all within 300s — the edge
+    // connection just hangs rather than erroring cleanly, unlike the
+    // documented CPU/subrequest caps elsewhere in this file. Dispatched via
+    // ctx.waitUntil() instead (the same pattern scheduled() already uses
+    // for every cron job), so the HTTP response returns immediately and the
+    // actual sweep keeps running after — check its outcome at
+    // /debug-pipeline-health (job name "smartponyfullsweep") once it's had
+    // a few minutes, not in this response.
     if (url.pathname === "/debug-smartpony-full-sweep" && request.method === "GET") {
-      try {
-        const result = await runSmartPonyFullSweep(env);
-        await recordPipelineRun(env, "smartponyfullsweep", { ok: true, summary: result });
-        return json(result, 200, { "Cache-Control": "no-store" });
-      } catch (err) {
-        return json({ error: `SmartPony full sweep failed: ${err.message}` }, 502);
-      }
+      ctx.waitUntil(trackedRun(env, "smartponyfullsweep", () => runSmartPonyFullSweep(env), "SmartPony full sweep"));
+      return json({ started: true, note: "Running in the background — check /debug-pipeline-health (job \"smartponyfullsweep\") in a few minutes for the result." }, 202);
     }
 
     if (url.pathname === "/pirate-minutely" && request.method === "GET") {
