@@ -45,12 +45,15 @@ comment documents one feature/route.
   `/debug-run-nyra-import`). A fourth, `0,30 13,21 * * *` (`SIDE_JOBS_CRON`), carries most other
   import/maintenance jobs: BloodHorse, TDN main, DRF, Stable Tour feed, TDN notebook, HRN, and
   SmartPony all run together twice daily (13:00 & 21:00); results backfill + note dedupe +
-  trainer angle stats run once daily (13:30, the only other slot with work — 21:30 is currently
-  unused). That's 4 Cron Triggers in active use, leaving one of the 5-per-Worker slots free for
-  a genuinely new job later. Each `scheduled()` dispatches on the exact cron string, so every
-  expression has to match verbatim in the dashboard — see the Worker's own header comment
-  (search `Cron Trigger`) for the full, current list and the 2026-10-07 incident history before
-  touching this again.
+  trainer angle stats run once daily (13:30, the only other slot with work — 21:30 is unused). A
+  fifth, `*/30 * * * *` (`RECAP_SYNC_CRON`), re-pulls the Race Recap Google Doc every 30 minutes
+  so an edit shows up without clicking "Re-sync" — only explicitly-labeled sections (e.g.
+  "Belmont - 9/19") get auto-synced; an unlabeled section (the doc's common case) is deliberately
+  skipped rather than guessed, since a scheduled job has no UI context for "which track." That's
+  all 5 of this Worker's Cron Trigger slots in use. Each `scheduled()` dispatches on the exact
+  cron string, so every expression has to match verbatim in the dashboard — see the Worker's own
+  header comment (search `Cron Trigger`) for the full, current list and the 2026-10-07 incident
+  history before touching this again.
 - `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
   (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
 

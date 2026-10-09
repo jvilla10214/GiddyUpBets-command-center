@@ -717,6 +717,16 @@ export default {
       runSideJobs(event, env, ctx);
       return;
     }
+    // Race Recap auto-sync — own Cron Trigger, own cadence (every 30 min,
+    // much more frequent than anything else here). See RECAP_SYNC_CRON's
+    // own comment for why it gets a dedicated trigger instead of sharing
+    // SIDE_JOBS_CRON's slot.
+    if (event.cron === RECAP_SYNC_CRON) {
+      ctx.waitUntil(
+        trackedRun(env, "recapsync", () => autoResyncRaceRecapsFromDoc(env), "Race Recap auto-sync")
+      );
+      return;
+    }
     // Confirmed real bug (2026-08-26): this was `event.waitUntil`, which
     // doesn't exist in the module-worker syntax this file uses — waitUntil
     // lives on `ctx` (the ExecutionContext), not the ScheduledController.
@@ -1834,6 +1844,18 @@ async function handleRequest(request, env) {
         return json(result, 200, { "Cache-Control": "no-store" });
       } catch (err) {
         return json({ error: `Resync failed: ${err.message}` }, 500);
+      }
+    }
+
+    // Manual trigger for the RECAP_SYNC_CRON job — same reasoning as every
+    // other /debug-run-* route, on-demand testing without waiting for cron.
+    if (url.pathname === "/debug-run-recap-sync" && request.method === "GET") {
+      try {
+        const result = await autoResyncRaceRecapsFromDoc(env);
+        await recordPipelineRun(env, "recapsync", { ok: true, summary: result });
+        return json(result, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Recap auto-sync failed: ${err.message}` }, 500);
       }
     }
 
@@ -3073,6 +3095,88 @@ async function resyncRaceRecapsFromDoc(env, track, date) {
     updatedRaces: Object.keys(recapsByRace).map(Number).sort((a, b) => a - b),
     fullCardRecapUpdated: !!fullCardRecap,
   };
+}
+
+// Reverse of raceRecapTrackLabelMatches() above — given a doc section's
+// captured label, find which single tracked track it means. Explicit user
+// decision (2026-10-09): an UNLABELED section is never guessed here, unlike
+// the manual "Re-sync" button's own behavior (which can safely assume "the
+// track you're currently viewing" since a human already chose it) — a
+// scheduled job has no such context, and this doc's sections are mostly
+// unlabeled by default, so guessing would risk silently filing a recap
+// under the wrong track. Same caution if a label matches MORE than one
+// track (shouldn't happen with the current alias table, but a tie is
+// exactly the kind of ambiguity this function exists to refuse to resolve).
+function resolveRaceRecapTrackId(trackLabel) {
+  if (!trackLabel) return null;
+  const matches = Object.keys(ENTRIES_TRACK_LABEL).filter((trackId) => raceRecapTrackLabelMatches(trackLabel, trackId));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// The doc's own date markers are bare "M/D", no year (see
+// RACE_RECAP_DATE_MARKER's own comment) — fine for a human re-syncing a
+// specific archived date they already know the year for, but this
+// auto-sync job has no such context. A recap is always written about a
+// race that's already happened, so: assume the current year, unless that
+// would place the date in the FUTURE relative to right now, in which case
+// it must mean last year's running of that same calendar date instead
+// (handles the Dec/Jan boundary — e.g. a "12/28" recap posted in early
+// January means last December, not 11 months from now).
+function resolveRaceRecapYear(month, day, now) {
+  const thisYear = now.getUTCFullYear();
+  const candidate = Date.UTC(thisYear, month - 1, day);
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return candidate > today ? thisYear - 1 : thisYear;
+}
+
+// Scheduled counterpart to the manual "Re-sync" button — one doc fetch
+// covers every date/track section in it (parsing is already whole-doc, see
+// findRaceRecapDateSections()), so this costs barely more than a single
+// resync call despite covering everything explicitly labeled. Runs on
+// RECAP_SYNC_CRON (every 30 min) specifically so an edit to the doc shows
+// up without anyone needing to click Re-sync — see that constant's own
+// comment. Skips unlabeled sections entirely (resolveRaceRecapTrackId's own
+// comment explains why) and skips a write entirely when the freshly-parsed
+// content is byte-identical to what's already stored — upsertRaceRecapsBulk()
+// itself always writes unconditionally, and without this guard a 30-minute
+// cadence would rewrite every labeled section's raceday record (and rebuild
+// its recap-index) on every single run regardless of whether the doc
+// actually changed, burning KV write quota for nothing (this project has a
+// real prior KV write-quota incident on record).
+async function autoResyncRaceRecapsFromDoc(env) {
+  const docRes = await fetch(RACE_RECAP_DOC_EXPORT_URL);
+  if (!docRes.ok) return { available: false, error: `Doc fetch failed: ${docRes.status}` };
+  const docText = await docRes.text();
+  const sections = findRaceRecapDateSections(docText);
+  const now = new Date();
+
+  let skippedUnlabeled = 0, skippedNoContent = 0, skippedUnchanged = 0, updated = 0, noArchiveYet = 0;
+  for (const section of sections) {
+    const trackId = resolveRaceRecapTrackId(section.trackLabel);
+    if (!trackId) { skippedUnlabeled++; continue; }
+
+    const year = resolveRaceRecapYear(section.month, section.day, now);
+    const date = `${year}-${String(section.month).padStart(2, "0")}-${String(section.day).padStart(2, "0")}`;
+
+    const recapsByRace = parseRaceRecapsFromSection(section.body);
+    const fullCardRecap = parseFullCardRecapFromSection(section.body);
+    if (!Object.keys(recapsByRace).length && !fullCardRecap) { skippedNoContent++; continue; }
+
+    const key = racedayKvKey(trackId, date);
+    const existingRaw = await env.STABLE_KV.get(key);
+    if (!existingRaw) { noArchiveYet++; continue; } // same as upsertRaceRecapsBulk()'s own "nothing to attach this to yet" case
+    const existing = JSON.parse(existingRaw);
+    const existingRecaps = existing.raceRecaps || {};
+    const sameRaceRecaps = Object.keys(recapsByRace).length === Object.keys(existingRecaps).length
+      && Object.entries(recapsByRace).every(([raceNum, text]) => (existingRecaps[raceNum] || "").trim() === text.trim());
+    const sameFullCard = (fullCardRecap || "").trim() === (existing.fullCardRecap || "").trim();
+    if (sameRaceRecaps && sameFullCard) { skippedUnchanged++; continue; }
+
+    const result = await upsertRaceRecapsBulk(env, trackId, date, recapsByRace, { fullCardRecap: fullCardRecap || undefined });
+    if (result.available) updated++;
+  }
+
+  return { available: true, sectionsFound: sections.length, updated, skippedUnlabeled, skippedNoContent, skippedUnchanged, noArchiveYet };
 }
 
 function trackConditionsKvKey(track, date) {
@@ -8388,6 +8492,14 @@ const NYRA_NEWS_CRON = "0 11,12,19,20 * * *"; // 7am + 3pm Eastern in both EDT (
 // the literal cron string for the same DST-safety reason NYRA_NEWS_CRON's
 // own check above uses nyNowParts() instead of matching its cron verbatim.
 const SIDE_JOBS_CRON = "0,30 13,21 * * *";
+// Added 2026-10-09, using the Cron Trigger slot freed up by merging
+// SmartPony back into SIDE_JOBS_CRON (see that constant's own comment) —
+// see autoResyncRaceRecapsFromDoc()'s own comment for what this runs and
+// why a 30-min cadence specifically. Own trigger (not folded into
+// SIDE_JOBS_CRON) since it needs to run far more often than anything
+// else here, and the Google Doc fetch+parse this does is cheap/self-
+// contained — no reason to share an invocation with the news-import batch.
+const RECAP_SYNC_CRON = "*/30 * * * *";
 const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
 const NYRA_IMPORT_MAX_NEW_PER_RUN = 5; // ~7 ms CPU each; a backlog drains over a few runs
 const NYRA_IMPORT_MAX_AGE_DAYS = 28;
