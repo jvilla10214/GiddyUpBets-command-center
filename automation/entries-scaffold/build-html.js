@@ -76,8 +76,13 @@ function buildEntriesHtml(trackDisplay, isoDate, data) {
     // Pace column: bare chicklet per horse, joined with <br> (not separate <p> tags, to
     // keep payload size down — a big card's doubled chicklet count can otherwise approach
     // the upload's truncation ceiling), then a single blank line separating it from the
-    // entries list below (2026-09-07).
-    html += `<p>${horses.map((h) => chickletHtml(h.postPosition)).join('<br>')}</p>`;
+    // entries list below (2026-09-07). Each chicklet gets exactly ONE &nbsp; after it,
+    // OUTSIDE the colored span, as deliberate room for the user to hand-write a running-
+    // position note right next to that chicklet — fixed 2026-10-10 to match SKILL.md after
+    // the live scheduled-task doc was found with two spaces' worth of gap there instead of
+    // one. The space must stay outside chickletHtml()'s own <span> so the color never
+    // visually extends into that blank room.
+    html += `<p>${horses.map((h) => `${chickletHtml(h.postPosition)}&nbsp;`).join('<br>')}</p>`;
     html += `<p>&nbsp;</p>`;
 
     for (const horse of horses) {
