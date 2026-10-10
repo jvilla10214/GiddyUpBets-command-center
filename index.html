@@ -2581,6 +2581,30 @@
   }
   .stable-save-btn:hover, .stable-jockey-save-btn:hover{ background: #ffc94d; }
   .stable-note-list{ display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+  /* "By Track" sub-grouping — raceday date, then race number, inside each
+     track's body (see renderStableTourByTrack). Plain labels, not
+     collapsible toggles — there are only ever a handful of races/horses to
+     show, so an extra click-to-expand layer would just add friction. */
+  .stable-track-date{ padding-bottom: 10px; }
+  .stable-track-date + .stable-track-date{ border-top: 1px solid var(--panel-border); padding-top: 10px; }
+  .stable-track-date-header{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    color: var(--tote-amber);
+    padding: 6px 0;
+  }
+  .stable-track-race{ margin-left: 10px; }
+  .stable-track-race + .stable-track-race{ margin-top: 10px; }
+  .stable-track-race-header{
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size: 11px;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--parchment-dim);
+  }
   .stable-note{
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -9602,17 +9626,45 @@
     }
     list.innerHTML = keys.map(key => {
       const { display, notes: pairs } = byTrack[key];
-      // Soonest race first within a track group (date, then race number);
-      // notes with no resolved race (shouldn't happen outside "unknown",
-      // but defensive) fall back to newest-content-date first.
-      pairs.sort((a, b) => {
-        if (a.upcoming && b.upcoming){
-          return a.upcoming.date.localeCompare(b.upcoming.date) || (a.upcoming.raceNumber - b.upcoming.raceNumber);
-        }
-        return (b.note.date || "").localeCompare(a.note.date || "");
-      });
       const isOpen = query ? true : stableOpenTracks.has(key);
-      const notesHtml = pairs.map(({ note: n, upcoming }) => renderStableNoteHtml(n, { showHorse: true, showTrainer: true, upcoming })).join("");
+      let bodyHtml;
+      if (key === "unknown"){
+        // No resolved race to group by — flat list, newest content-date first.
+        const sorted = pairs.slice().sort((a, b) => (b.note.date || "").localeCompare(a.note.date || ""));
+        bodyHtml = `<div class="stable-note-list">${sorted.map(({ note: n }) => renderStableNoteHtml(n, { showHorse: true, showTrainer: true })).join("")}</div>`;
+      } else {
+        // Sub-grouped by raceday date, then by race number within that date
+        // (soonest date first, R1/R2/... in order) — the actual drill-down
+        // the user asked for, not just a flat sorted list.
+        const byDate = {};
+        for (const pair of pairs){
+          const d = pair.upcoming.date;
+          (byDate[d] ??= []).push(pair);
+        }
+        const dates = Object.keys(byDate).sort((a, b) => a.localeCompare(b));
+        bodyHtml = dates.map(date => {
+          const byRace = {};
+          for (const pair of byDate[date]){
+            (byRace[pair.upcoming.raceNumber] ??= []).push(pair);
+          }
+          const raceNumbers = Object.keys(byRace).map(Number).sort((a, b) => a - b);
+          const racesHtml = raceNumbers.map(raceNumber => {
+            const raceNotesHtml = byRace[raceNumber]
+              .map(({ note: n, upcoming }) => renderStableNoteHtml(n, { showHorse: true, showTrainer: true, upcoming }))
+              .join("");
+            return `
+              <div class="stable-track-race">
+                <div class="stable-track-race-header">Race ${raceNumber}</div>
+                <div class="stable-note-list">${raceNotesHtml}</div>
+              </div>`;
+          }).join("");
+          return `
+            <div class="stable-track-date">
+              <div class="stable-track-date-header">${escapeHtml(fmtStableDate(date))}</div>
+              ${racesHtml}
+            </div>`;
+        }).join("");
+      }
       return `
         <div class="stable-trainer ${isOpen ? "open" : ""}">
           <div class="stable-trainer-header">
@@ -9623,7 +9675,7 @@
             </button>
           </div>
           <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
-            <div class="stable-note-list">${notesHtml}</div>
+            ${bodyHtml}
           </div>
         </div>`;
     }).join("");
