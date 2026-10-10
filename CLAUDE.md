@@ -39,21 +39,26 @@ comment documents one feature/route.
   5-Cron-Trigger-per-Worker cap is unchanged by the plan upgrade** (paid raises the limit to 250
   per *account* across multiple Workers, not per Worker) — don't assume paid means unlimited
   triggers on this one Worker.
-- Cron Triggers fire `scheduled()` for the entry-alert emails. There's a `/debug-run-scheduled`
-  GET route to trigger that logic on demand without waiting for cron. A third trigger,
-  `0 11,12,19,20 * * *`, runs only the NYRA News import (7am/3pm Eastern; on demand:
-  `/debug-run-nyra-import`). A fourth, `0,30 13,21 * * *` (`SIDE_JOBS_CRON`), carries most other
-  import/maintenance jobs: BloodHorse, TDN main, DRF, Stable Tour feed, TDN notebook, HRN, and
-  SmartPony all run together twice daily (13:00 & 21:00); results backfill + note dedupe +
-  trainer angle stats run once daily (13:30, the only other slot with work — 21:30 is unused). A
-  fifth, `*/30 * * * *` (`RECAP_SYNC_CRON`), re-pulls the Race Recap Google Doc every 30 minutes
-  so an edit shows up without clicking "Re-sync" — only explicitly-labeled sections (e.g.
-  "Belmont - 9/19") get auto-synced; an unlabeled section (the doc's common case) is deliberately
-  skipped rather than guessed, since a scheduled job has no UI context for "which track." That's
-  all 5 of this Worker's Cron Trigger slots in use. Each `scheduled()` dispatches on the exact
-  cron string, so every expression has to match verbatim in the dashboard — see the Worker's own
-  header comment (search `Cron Trigger`) for the full, current list and the 2026-10-07 incident
-  history before touching this again.
+- **4 of this Worker's 5 Cron Trigger slots are in use** (redesigned 2026-10-10 — one slot was
+  freed by this change, available for future use). `scheduled()` dispatches on the exact cron
+  string, so every expression has to match verbatim in the dashboard — see the Worker's own header
+  comment (search `Cron Trigger`) before touching this again:
+  - `0 11,12 * * *` (`ENTRY_ALERTS_DAILY_CRON`) — the stable-mail (entry-alert) emails, once daily
+    at 7am Eastern (dual UTC hour covers both EDT/EST, code filters to the real current hour, no
+    DST edit needed). Runs BOTH the day-of and day-before checks together — "7am day of" and "7am
+    day before" are one fire, not two. On demand: `/debug-run-scheduled`.
+  - `0 11,12,19,20 * * *` (`NYRA_NEWS_CRON`) — NYRA News import only, 7am/3pm Eastern. On demand:
+    `/debug-run-nyra-import`.
+  - `0,30 13,21 * * *` (`SIDE_JOBS_CRON`) — most other import/maintenance jobs: BloodHorse, TDN
+    main, DRF, Stable Tour feed, TDN notebook, HRN, and SmartPony all run together twice daily
+    (13:00 & 21:00); results backfill + note dedupe + trainer angle stats run once daily (13:30,
+    the only other slot with work — 21:30 is unused).
+  - `*/30 * * * *` (`RECAP_SYNC_CRON`) — two things piggybacked on the same 30-min cadence: (1)
+    re-pulls the Race Recap Google Doc so an edit shows up without clicking "Re-sync" (only
+    explicitly-labeled sections, e.g. "Belmont - 9/19", get auto-synced — an unlabeled section is
+    deliberately skipped, not guessed); (2) the stable-mail "day of draw" check — sends a horse's
+    digest the moment its card's entries are drawn, same day, instead of waiting for the once-daily
+    7am check above (same dedup key, so whichever reaches a horse first is the real send).
 - `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
   (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
 

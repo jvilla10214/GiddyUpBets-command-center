@@ -725,6 +725,20 @@ export default {
       ctx.waitUntil(
         trackedRun(env, "recapsync", () => autoResyncRaceRecapsFromDoc(env), "Race Recap auto-sync")
       );
+      // Piggybacked here (2026-10-10, user request: "day of draw — whenever
+      // the card is drawn, send the email") rather than its own Cron
+      // Trigger — this Worker is capped at 5 total regardless of plan tier
+      // (see SIDE_JOBS_CRON's own comment), and this trigger already fires
+      // every 30 min, which is exactly the cadence "send the moment a
+      // card's entries are drawn" needs, instead of waiting for the
+      // once-daily 7am check below (ENTRY_ALERTS_DAILY_CRON). Reuses the
+      // exact same runLabel ("am") as that 7am day-of check, so the
+      // existing per-horse dedup (raceNotifyKvKey) makes whichever one
+      // reaches a given horse first the real send and the other a silent
+      // no-op — no new dedup logic needed.
+      ctx.waitUntil(
+        runEntryAlerts(env, "scheduled", { dayOffset: 0, runLabel: "am" }).catch((err) => console.error("Entry alerts: draw-watch run failed", err.message))
+      );
       return;
     }
     // Confirmed real bug (2026-08-26): this was `event.waitUntil`, which
@@ -739,26 +753,34 @@ export default {
     // Trigger itself never could have fixed this — the trigger was working,
     // the code calling it was wrong.
     //
-    // Two Cron Triggers now fire this same handler (added 2026-09-17): the
-    // original ~8am Eastern one (day-of card) and a new ~4pm Eastern one
-    // (day-before card, sent in addition to the morning one — see
-    // runEntryAlerts()'s own comment). Rather than matching event.cron
-    // against the exact configured expression — which has to be hand-edited
-    // twice a year for DST (see the Deploy note) and would silently
-    // misclassify a run for a day someone forgot that edit — this checks
-    // the ACTUAL current Eastern hour instead. 14:00 is a wide, safe cutoff
-    // roughly in the middle of the ~6 hour gap between the two triggers, so
-    // it stays correct even if a DST edit is missed (worst case that shifts
-    // a trigger by exactly 1 hour, nowhere near this boundary).
-    const { hour } = nyNowParts();
-    const isEveningRun = hour >= 14;
-    const alertOptions = isEveningRun ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
-    // This fire now runs ONLY the entry-alert emails — see SIDE_JOBS_CRON's
-    // own comment for why everything else that used to run alongside them
-    // here got moved to its own Cron Trigger.
-    ctx.waitUntil(
-      runEntryAlerts(env, "scheduled", alertOptions).catch((err) => console.error("Entry alerts: scheduled run failed", err.message))
-    );
+    // Redesigned 2026-10-10 per user request, replacing the old ~8am/~4pm
+    // pair (two separate Cron Triggers, split by checking the real Eastern
+    // hour against a 14:00 cutoff): now ONE daily trigger at 7am ET runs
+    // BOTH the day-of and day-before checks together — "7am day of" and
+    // "7am day before" are the same fire, not two. The third piece of the
+    // new request, "day of draw — whenever the card is drawn, send
+    // immediately," is handled separately up in the RECAP_SYNC_CRON branch
+    // above (piggybacked on its existing 30-min cadence, same runLabel
+    // "am", so dedup makes this 7am day-of check mostly a no-op safety net
+    // once the frequent check has already caught a same-day draw). Same
+    // dual-UTC-hour DST-safe pattern as NYRA_NEWS_CRON: the dashboard
+    // trigger covers both 11:00 and 12:00 UTC (7am EDT and 7am EST), and
+    // the ET-hour check below filters out whichever of those is the
+    // "wrong" one for the current season — no twice-yearly manual edit
+    // needed, unlike the trigger this replaces (see the
+    // dst-cron-reminder-fall-2026 scheduled task, retired along with this
+    // change).
+    if (event.cron === ENTRY_ALERTS_DAILY_CRON) {
+      if (nyNowParts().hour === ENTRY_ALERTS_DAILY_RUN_HOUR_ET) {
+        ctx.waitUntil(
+          runEntryAlerts(env, "scheduled", { dayOffset: 0, runLabel: "am" }).catch((err) => console.error("Entry alerts: scheduled 7am day-of run failed", err.message))
+        );
+        ctx.waitUntil(
+          runEntryAlerts(env, "scheduled", { dayOffset: 1, runLabel: "eve" }).catch((err) => console.error("Entry alerts: scheduled 7am day-before run failed", err.message))
+        );
+      }
+      return;
+    }
   },
 };
 
@@ -8712,6 +8734,17 @@ const SIDE_JOBS_CRON = "0,30 13,21 * * *";
 // else here, and the Google Doc fetch+parse this does is cheap/self-
 // contained — no reason to share an invocation with the news-import batch.
 const RECAP_SYNC_CRON = "*/30 * * * *";
+// Stable-mail (entry-alert) daily check — redesigned 2026-10-10 per user
+// request to replace the old separate ~8am/~4pm Cron Triggers with one
+// trigger covering both "7am day of" and "7am day before" together (see the
+// scheduled() handler's own comment for the full reasoning, including where
+// the third piece — "day of draw, send immediately" — actually lives).
+// Same dual-UTC-hour DST-safe trick as NYRA_NEWS_CRON: the dashboard
+// trigger should be configured for "0 11,12 * * *" (7am EDT and 7am EST),
+// and ENTRY_ALERTS_DAILY_RUN_HOUR_ET filters to the real current Eastern
+// hour so it never needs a twice-yearly manual flip.
+const ENTRY_ALERTS_DAILY_CRON = "0 11,12 * * *";
+const ENTRY_ALERTS_DAILY_RUN_HOUR_ET = 7;
 const NYRA_NEWS_RUN_HOURS_ET = [7, 15];
 const NYRA_IMPORT_MAX_NEW_PER_RUN = 5; // ~7 ms CPU each; a backlog drains over a few runs
 const NYRA_IMPORT_MAX_AGE_DAYS = 28;
