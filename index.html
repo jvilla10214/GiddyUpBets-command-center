@@ -3614,6 +3614,7 @@
         <button type="button" class="bias-window-btn" data-view="horse">By Horse</button>
         <button type="button" class="bias-window-btn" data-view="date">By Date</button>
         <button type="button" class="bias-window-btn" data-view="added">Newest Added</button>
+        <button type="button" class="bias-window-btn" data-view="track">By Track</button>
         <button type="button" id="stableQuickAddBtn" class="stable-save-btn">+ Add</button>
         <button type="button" id="stableImportArticleBtn" class="stable-save-btn">+ Import Article</button>
       </div>
@@ -8851,6 +8852,18 @@
   const STABLE_FEED_URL_KEY = "giddyupbets_stable_feed_url_v1";
   let stableTrainers = [];
   let stableNotes = [];
+  // normalized horse name -> {track, date, raceNumber} — the SOONEST
+  // upcoming entry known for that horse, not a history. Built server-side
+  // as a side effect of the entry-alerts job (which already fetches every
+  // tracked track's current entries on its own schedule — see
+  // HORSE_UPCOMING_INDEX_KV_KEY's own comment in the Worker), so coverage
+  // is scoped to the same US tracks entry-alerts covers, refreshed at that
+  // same cadence (as often as every 30 min for today's card). A horse with
+  // no current/upcoming entry known just isn't in this object at all —
+  // that's expected for most historical notes, not a bug. Loaded once at
+  // startup (see the init IIFE below); not refreshed on the 5-minute poll
+  // since a stale-by-a-few-minutes "runs next" read is harmless.
+  let stableHorseTrackIndex = {};
   let stableTrainerMeta = {}; // name -> { source, addedAt } — how each trainer was added
   let stableDataVersion = null; // last-seen GET /data version tag — lets refreshStableDataIfIdle() skip the full refetch when nothing changed
   let stableOpenTrainers = new Set(); // which trainer panels are expanded — UI state only, not persisted
@@ -9047,6 +9060,21 @@
     }
   }
 
+  // Loaded once at startup, not on the 5-minute poll — see
+  // stableHorseTrackIndex's own comment for why. Failure here just leaves
+  // "By Track" showing everything as Unknown rather than breaking the rest
+  // of Stable Tour, same non-fatal pattern as every other best-effort fetch
+  // in this file.
+  async function loadHorseTrackIndex(){
+    try{
+      const data = await stableApiGet("/horse-track-index");
+      stableHorseTrackIndex = (data && typeof data === "object" && !Array.isArray(data)) ? data : {};
+    } catch(err){
+      console.error("Stable Tour: load horse-track index failed", err);
+      stableHorseTrackIndex = {};
+    }
+  }
+
   async function addStableTrainer(name){
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -9172,6 +9200,7 @@
   let stableViewMode = "trainer"; // "trainer" | "horse" | "date" | "added" — which grouping is showing
   let stableOpenHorses = new Set(); // which horse groups are expanded in "By Horse" view
   let stableOpenDates = new Set(); // which date groups are expanded in "By Date" view
+  let stableOpenTracks = new Set(); // which track groups are expanded in "By Track" view
   // Which MONTH groups are expanded in "Newest Added" view — keyed "YYYY-MM"
   // (capturedAt's own calendar month, not the note's often-much-older
   // content date — separate from stableOpenDates for that reason). Changed
@@ -9236,7 +9265,7 @@
   const STABLE_NOTE_TYPE_LABEL = { trainer: "Trainer Quote", jockey: "Jockey Quote", paddock: "Paddock Read" };
 
   function renderStableNoteHtml(n, opts = {}){
-    const { showHorse = true, showTrainer = false } = opts;
+    const { showHorse = true, showTrainer = false, upcoming = null } = opts;
     if (n.id === stableEditingNoteId){
       // Same trainer/horse/quote fields the worker's PATCH /notes route
       // accepts — everything else (source, link, date, badges) stays as
@@ -9269,6 +9298,7 @@
         <div class="stable-note-meta">
           ${leadBits.join(" · ")}
           ${noteType ? `<span class="stable-notetype-badge stable-notetype-${noteType}">${STABLE_NOTE_TYPE_LABEL[noteType]}</span>` : ""}
+          ${upcoming ? `<span class="stable-site-badge" title="Next known entry for this horse">Runs R${upcoming.raceNumber} · ${fmtStableDate(upcoming.date)}</span>` : ""}
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
           ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
           ${n.importedVia && n.importedVia !== siteLabel ? `<span class="stable-site-badge">${escapeHtml(n.importedVia)}</span>` : ""}
@@ -9427,6 +9457,8 @@
       renderStableTourByDate(list);
     } else if (stableViewMode === "added"){
       renderStableTourByAdded(list);
+    } else if (stableViewMode === "track"){
+      renderStableTourByTrack(list);
     } else {
       renderStableTourByTrainer(list);
     }
@@ -9526,6 +9558,68 @@
               <span class="chevron">▸</span>
               <span class="stable-trainer-name">${date === "Undated" ? "Undated" : fmtStableDate(date)}</span>
               <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  // Groups by the track the note's horse is next entered to run at,
+  // resolved via stableHorseTrackIndex (see that variable's own comment —
+  // it's a forward-looking "runs next" lookup, not a history). A horse
+  // with no current/upcoming entry known falls into "Unknown Track" rather
+  // than guessing — expected for most historical notes, not a bug.
+  function resolveNoteTrack(n){
+    const key = stripHorseCountrySuffix((n.horse || "").trim().toLowerCase());
+    return stableHorseTrackIndex[key] || null;
+  }
+  function renderStableTourByTrack(list){
+    const query = stableSearchQuery.trim().toLowerCase();
+    const trackedSet = new Set(stableTrainers);
+    const byTrack = {};
+    for (const n of stableNotes){
+      if (n.trainer && !trackedSet.has(n.trainer)) continue;
+      if (query && !(n.trainer || "").toLowerCase().includes(query) && !(n.horse || "").toLowerCase().includes(query)) continue;
+      const upcoming = resolveNoteTrack(n);
+      const key = upcoming ? upcoming.track : "unknown";
+      if (!byTrack[key]) byTrack[key] = { display: upcoming ? (TRACKS[key]?.shortName || key) : "Unknown Track", notes: [] };
+      byTrack[key].notes.push({ note: n, upcoming });
+    }
+    // Alphabetical by display name, with "Unknown Track" always last —
+    // it's a fallback bucket, not a real grouping, so it shouldn't
+    // interleave with actual tracks just because "Unknown" sorts early.
+    const keys = Object.keys(byTrack).sort((a, b) => {
+      if (a === "unknown") return 1;
+      if (b === "unknown") return -1;
+      return byTrack[a].display.localeCompare(byTrack[b].display);
+    });
+    if (!keys.length){
+      list.innerHTML = `<div class="log-empty">${query ? `No notes match "${escapeHtml(stableSearchQuery.trim())}".` : "No notes yet."}</div>`;
+      return;
+    }
+    list.innerHTML = keys.map(key => {
+      const { display, notes: pairs } = byTrack[key];
+      // Soonest race first within a track group (date, then race number);
+      // notes with no resolved race (shouldn't happen outside "unknown",
+      // but defensive) fall back to newest-content-date first.
+      pairs.sort((a, b) => {
+        if (a.upcoming && b.upcoming){
+          return a.upcoming.date.localeCompare(b.upcoming.date) || (a.upcoming.raceNumber - b.upcoming.raceNumber);
+        }
+        return (b.note.date || "").localeCompare(a.note.date || "");
+      });
+      const isOpen = query ? true : stableOpenTracks.has(key);
+      const notesHtml = pairs.map(({ note: n, upcoming }) => renderStableNoteHtml(n, { showHorse: true, showTrainer: true, upcoming })).join("");
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-track-key="${escapeHtml(key)}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${escapeHtml(display)}</span>
+              <span class="tag">${pairs.length} note${pairs.length === 1 ? "" : "s"}</span>
             </button>
           </div>
           <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
@@ -10104,6 +10198,10 @@
         const key = toggleBtn.dataset.dateKey;
         if (stableOpenDates.has(key)) stableOpenDates.delete(key);
         else stableOpenDates.add(key);
+      } else if (toggleBtn.dataset.trackKey !== undefined){
+        const key = toggleBtn.dataset.trackKey;
+        if (stableOpenTracks.has(key)) stableOpenTracks.delete(key);
+        else stableOpenTracks.add(key);
       } else if (toggleBtn.dataset.addedKey !== undefined){
         const key = toggleBtn.dataset.addedKey;
         if (stableOpenAddedDates.has(key)) stableOpenAddedDates.delete(key);
@@ -13859,6 +13957,7 @@
     // moved server-side 2026-10-01 (jobs #2/#7/#17/#18 — see each one's own
     // retirement comment near where its function used to live) — nothing
     // left to kick off here on load.
+    loadHorseTrackIndex().then(() => { if (stableViewMode === "track") renderStableTour(); });
   })();
 
   // Refresh from the shared source periodically and whenever the tab

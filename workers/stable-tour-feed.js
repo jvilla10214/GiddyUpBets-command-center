@@ -1924,6 +1924,19 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
+    // Read by the Stable Tour frontend once at startup (see index.html's
+    // stableHorseTrackIndex) to resolve each note's upcoming track/race
+    // client-side — see HORSE_UPCOMING_INDEX_KV_KEY's own comment for the
+    // index shape, how it's kept fresh (piggybacked on runEntryAlerts, not
+    // built here), and why coverage is scoped to ALERT_TRACKS. On demand,
+    // without waiting for the next scheduled entry-alerts run:
+    // /debug-run-scheduled populates this exactly the same way a real run
+    // would.
+    if (url.pathname === "/horse-track-index" && request.method === "GET") {
+      const raw = await env.STABLE_KV.get(HORSE_UPCOMING_INDEX_KV_KEY);
+      return json(raw ? JSON.parse(raw) : {}, 200, { "Cache-Control": "public, max-age=300" });
+    }
+
     // Lists which dates actually have a saved snapshot for this track, newest
     // first, without fetching every day's full entries+results payload just
     // to build a date picker. list() returns keys in lexicographic order,
@@ -3094,6 +3107,48 @@ async function reindexAllRaceRecaps(env) {
     perTrack[track] = { datesProcessed, racesIndexed, horsesIndexed: Object.keys(index).length };
   }
   return { available: true, tracks: perTrack };
+}
+
+// ---------- Stable Tour "By Track" view (horse -> upcoming track/race) ----------
+// Built 2026-10-10 per user request — revised once mid-build: NOT the track
+// a quote originated from (historical), but the track/race/date a note's
+// horse is actually entered to run at NEXT, so notes group by where the
+// user should be paying attention going forward. Stable Tour notes carry
+// no track field at all (just trainer/horse/jockey/note/date), so this
+// needs a separate horse-name -> upcoming-entry lookup.
+//
+// Deliberately NOT a fresh live fetch of its own — piggybacked as a side
+// effect of runEntryAlerts() instead (see that function's own call to
+// mergeHorseUpcomingEntries() below), which already fetches every
+// ALERT_TRACKS track's current entries on its own schedule (7am daily for
+// both today/tomorrow, plus every 30 min for today — see
+// ENTRY_ALERTS_DAILY_CRON/RECAP_SYNC_CRON's own comments). Reusing that
+// already-fetched data costs zero extra subrequests; a dedicated fetch
+// loop here would have duplicated real, non-trivial work runEntryAlerts
+// already does every day. Coverage is therefore scoped to ALERT_TRACKS
+// (the US tracks entry-alerts covers), refreshed at that same cadence —
+// a horse not currently entered anywhere known falls into "Unknown" on
+// the frontend rather than guessing.
+const HORSE_UPCOMING_INDEX_KV_KEY = "horseupcomingindex";
+
+// Merges one track/date's fetched races into the persisted horse -> {track,
+// date, raceNumber} index, keeping only the SOONEST known upcoming entry
+// per horse (today's run already calls this once per ALERT_TRACKS track,
+// so this also has to resolve correctly across tracks within one run, not
+// just across separate runs). `today` (a YYYY-MM-DD string) lets a stale
+// stored entry from a date that's already passed be treated as absent
+// rather than wrongly blocking a fresh one from being recorded.
+function mergeHorseUpcomingEntries(index, track, date, races, today) {
+  for (const race of races || []) {
+    for (const horse of race.horses || []) {
+      if (horse.scratched) continue;
+      const key = normalizeHorseNameForRecap(horse.name);
+      if (!key) continue;
+      const existing = index[key];
+      if (existing && existing.date >= today && existing.date <= date) continue; // existing entry is sooner (or same day) and still current
+      index[key] = { track, date, raceNumber: race.raceNumber };
+    }
+  }
 }
 
 async function upsertRaceRecap(env, track, date, raceNumber, recap) {
@@ -6399,6 +6454,15 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
     // entry.
     const recapIndex = await readAllRecapIndexes(env);
     const fullCardRecapCache = {};
+    // Side effect, not this function's main purpose — see
+    // HORSE_UPCOMING_INDEX_KV_KEY's own comment for why Stable Tour's "By
+    // Track" view piggybacks on this already-fetched entries data instead
+    // of its own fetch loop. Read once here, merged per track below as
+    // each fetch succeeds, written once at the end (after the main loop)
+    // so a mid-run crash can't leave it partially written.
+    const upcomingIndexRaw = await env.STABLE_KV.get(HORSE_UPCOMING_INDEX_KV_KEY);
+    const upcomingIndex = upcomingIndexRaw ? JSON.parse(upcomingIndexRaw) : {};
+    const todayForUpcoming = entryAlertDateForOffset(0);
     // Scans ALERT_TRACKS (a deliberate subset of ENTRIES_SOURCE_BY_TRACK —
     // see that constant's own comment on why), dispatched to the same
     // per-source fetcher the /entries route uses so this never drifts out
@@ -6429,6 +6493,7 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
         trackOutcomes[track] = { status: "fetch_failed", error: err.message };
         continue;
       }
+      mergeHorseUpcomingEntries(upcomingIndex, track, date, result.races, todayForUpcoming);
       // Collect every matched horse first, grouped by race, then send ONE
       // digest email for this track covering the whole card — not one
       // Resend call per horse. Dedup keys are still per-horse-per-race
@@ -6492,6 +6557,11 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
         console.error(`Entry alerts: digest send failed for ${track} ${date}`, err.message);
         trackOutcomes[track] = { status: "send_failed", error: err.message };
       }
+    }
+    try {
+      await env.STABLE_KV.put(HORSE_UPCOMING_INDEX_KV_KEY, JSON.stringify(upcomingIndex));
+    } catch (err) {
+      console.error("Horse-upcoming index save failed", err.message);
     }
     const summary = { checked, sent, tracks: trackOutcomes };
     await recordEntryAlertsRun(env, source, summary, runLabel);
