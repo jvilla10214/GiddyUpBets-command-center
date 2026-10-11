@@ -1095,6 +1095,41 @@ async function handleRequest(request, env, ctx) {
       return json({ reassigned, trainers }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Sibling of /trainers/merge above, for the opposite case: a tracked
+    // name that ISN'T really identifiable (a bare surname shared by
+    // multiple real tracked people — "Cox" could mean Brad, Clive, or Gail
+    // Cox — or one with no other evidence at all) rather than a confirmed
+    // duplicate of one specific person. Built 2026-10-11 for the post-
+    // auto-tracking cleanup pass: user's explicit rule is "the horse is the
+    // most important" — so a note whose trainer can't be confidently
+    // pinned down gets its trainer field cleared (same shape as a manually
+    // added trainer-less note) rather than staying wrongly attributed to a
+    // generic bare-surname entry, or guessed into the wrong specific
+    // person. The bare/unconfirmed entry is then removed from the tracked
+    // list entirely — leaving it in place would let a future unrelated
+    // person who happens to share that surname wrongly auto-match it too.
+    if (url.pathname === "/trainers/unassign" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const from = (body.from || "").trim();
+      if (!from) return json({ error: "Missing from" }, 400);
+      const state = await readState(env);
+      if (!state.trainers.includes(from)) return json({ error: `Trainer not found: ${from}` }, 404);
+      let unassigned = 0;
+      for (const n of state.notes) {
+        if (n.trainer === from) {
+          n.trainer = "";
+          unassigned++;
+        }
+      }
+      const trainers = state.trainers.filter(t => t !== from);
+      delete state.trainerMeta[from];
+      await env.STABLE_KV.put("trainers", JSON.stringify(trainers));
+      await env.STABLE_KV.put("notes", JSON.stringify(state.notes));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await bumpDataVersion(env);
+      return json({ unassigned, trainers }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Stateless extraction only — no KV write, so no auth gate (matches
     // /drf-news and the other read-only news routes). See job #27's own
     // comment (near extractManualQuoteCandidates()) for why this exists.
@@ -6394,7 +6429,13 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
       // race recap itself is: an independent per-date lookup attached to
       // each recap entry in runEntryAlerts()/collectTodaysRaceGroupsForPreview(),
       // not stored on the horse/note data itself.
-      const recapsHtml = (recaps || []).map((r) => {
+      // Recaps don't come pre-sorted the way notesForHorse() already sorts
+      // notes (newest first) — the underlying index is built by whatever
+      // order raceday records get walked, often oldest-first. Sorted here,
+      // at render time, so the email is consistently newest-to-oldest top
+      // to bottom for both recaps and notes — user request 2026-10-11.
+      const sortedRecaps = (recaps || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      const recapsHtml = sortedRecaps.map((r) => {
         const dateLabel = r.date ? formatEmailDateLabel(r.date) : "—";
         // A recap can now come from a DIFFERENT track than this email's own
         // (see readAllRecapIndexes()) — a horse that ran at Saratoga and is
