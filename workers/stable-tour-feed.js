@@ -8900,7 +8900,7 @@ function nyraHorseSlug(horse) {
 }
 
 async function runNyraNewsImport(env, { force = false } = {}) {
-  const summary = { tracks: {}, fetched: 0, sections: 0, written: 0, duplicates: 0, untracked: 0 };
+  const summary = { tracks: {}, fetched: 0, sections: 0, written: 0, duplicates: 0, untracked: 0, rosterChanged: false };
   try {
     // Pass 1 — cheap: listing pages + one small KV read per recent article.
     // The multi-MB notes key isn't touched unless something is new, so the
@@ -8925,13 +8925,17 @@ async function runNyraNewsImport(env, { force = false } = {}) {
 
     // Pass 2 — only now read the notes and build the lookups extraction needs.
     const state = await readNotesAndTrainers(env);
-    const { jockeys } = await readJockeysAndMeta(env);
+    const jockeyState = await readJockeysAndMeta(env);
+    const jockeys = jockeyState.jockeys;
     const notes = state.notes;
+    const trainerMetaRaw = await env.STABLE_KV.get("trainerMeta");
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
     const knownTrainerKeyByHorse = nyraKnownTrainerKeyByHorse(notes);
     const knownHorseNames = notes.map((n) => n.horse).filter(Boolean); // repeats kept: the lexicon counts them
     const untrackedFound = [];
     const done = []; // articles to mark imported — only AFTER the notes are saved
     let addedAny = false;
+    let rosterChanged = false;
 
     for (const { track, item } of todo) {
       const t = summary.tracks[track];
@@ -8948,12 +8952,36 @@ async function runNyraNewsImport(env, { force = false } = {}) {
       for (const section of sections) {
         summary.sections++;
         const horse = section.horseNames[0];
-        const trainer = section.trainerName ? nyraResolveTracked(section.trainerName, state.trainers) : null;
-        const jockey = !section.trainerName && section.jockeyName ? nyraResolveTracked(section.jockeyName, jockeys) : null;
+        let trainer = section.trainerName ? nyraResolveTracked(section.trainerName, state.trainers) : null;
+        let jockey = !section.trainerName && section.jockeyName ? nyraResolveTracked(section.jockeyName, jockeys) : null;
         if (!trainer && !jockey) {
-          untrackedFound.push({ track, role: section.role, name: section.trainerName || section.jockeyName, speaker: section.speakerName, horse, link: item.link, title: item.title, seenAt: new Date().toISOString() });
+          // Auto-track added 2026-10-11, user request — see
+          // autoTrackUnverifiedSection()'s own comment. Unlike the other
+          // news sources, this one already knows whether the unresolved
+          // name was meant as a trainer or a jockey (section.role), set by
+          // fetchNyraArticleSections()'s own connections-parsing — no
+          // role-guessing needed here. Still logged to the existing
+          // untracked-mentions review list below for visibility, even
+          // though it's no longer blocking the note from being written.
+          const rawName = section.trainerName || section.jockeyName;
+          if (section.role === "jockey") {
+            if (!jockeys.some((j) => j.toLowerCase() === rawName.toLowerCase())) {
+              jockeys.push(rawName);
+              jockeyState.jockeyMeta = jockeyState.jockeyMeta || {};
+              jockeyState.jockeyMeta[rawName] = { source: "nyranews-auto-unverified", addedAt: new Date().toISOString() };
+              rosterChanged = true;
+            }
+            jockey = rawName;
+          } else {
+            if (!state.trainers.some((t) => t.toLowerCase() === rawName.toLowerCase())) {
+              state.trainers.push(rawName);
+              state.trainerMeta[rawName] = { source: "nyranews-auto-unverified", addedAt: new Date().toISOString() };
+              rosterChanged = true;
+            }
+            trainer = rawName;
+          }
+          untrackedFound.push({ track, role: section.role, name: rawName, speaker: section.speakerName, horse, link: item.link, title: item.title, seenAt: new Date().toISOString() });
           summary.untracked++;
-          continue;
         }
         const link = `${item.link}#${nyraHorseSlug(horse)}`;
         const dup = notes.find((n) => (n.trainer || "") === (trainer || "") && (n.jockey || "") === (jockey || "") && n.horse === horse && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(link));
@@ -8980,10 +9008,17 @@ async function runNyraNewsImport(env, { force = false } = {}) {
     // Save first, THEN mark articles imported: if this run is ever cut short
     // (e.g. a CPU limit), nothing is marked and the next run simply redoes
     // them — dedupe above keeps that from creating duplicates.
+    if (rosterChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(jockeyState.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(jockeyState.jockeyMeta || {}));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes)); // one write for the whole run
-      await bumpDataVersion(env);
     }
+    if (addedAny || rosterChanged) await bumpDataVersion(env);
+    summary.rosterChanged = rosterChanged;
     for (const link of done) await env.STABLE_KV.put(nyraSeenKvKey(link), "1", { expirationTtl: 60 * 60 * 24 * 60 });
     if (untrackedFound.length) {
       // Merge into the review list; written only if it actually changed.
@@ -9159,7 +9194,22 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
         resolved = resolveTrackedTrainer(name, trackedJockeys);
         role = "jockey";
       }
-      if (!resolved) continue; // unmatched or ambiguous surname in EITHER roster — don't guess
+      let verified = true;
+      if (!resolved) {
+        // Unmatched in EITHER roster — added 2026-10-11, user request ("we
+        // want all quotes, even for a non-tracked trainer... auto-import
+        // every quote and trainer and jockey, audit Sunday mornings"): use
+        // the raw extracted name as-is rather than discarding, defaulting
+        // to role "trainer" since nothing here can tell a new trainer apart
+        // from a new jockey — the caller auto-tracks it and tags the
+        // resulting note/roster entry unverified so the weekly audit can
+        // find it. Still skipped when `name` is ambiguous rather than
+        // simply absent (resolveTrackedTrainer returns null for both, so
+        // this can't tell them apart either — accepted, same reasoning as
+        // the rest of this function's "don't guess further" posture).
+        resolved = name;
+        verified = false;
+      }
       // Known accepted limitation, not a bug: every quote found anywhere in
       // the article gets attached to the ONE lead horse from the headline —
       // no NYRA-style bracket convention exists here to track a horse
@@ -9170,16 +9220,41 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
       // given this source's unverified-in-advance structure; revisit if it
       // turns out to happen often once this is actually running.
       const key = `${role}:${lastNameKey(resolved)}`;
-      if (!sections[key]) sections[key] = { role, name: resolved, parts: [] };
+      if (!sections[key]) sections[key] = { role, name: resolved, verified, parts: [] };
       sections[key].parts.push(quote);
     }
   }
   return Object.values(sections).map((s) => ({
     trainerName: s.role === "trainer" ? s.name : null,
     jockeyName: s.role === "jockey" ? s.name : null,
+    verified: s.verified,
     horseNames: [titleHorseGuess],
     text: s.parts.join(" "),
   }));
+}
+
+// Auto-tracks a newly-discovered, unverified trainer/jockey name surfaced
+// by extractGenericQuoteSections() (or any future caller with the same
+// {trainerName|jockeyName, verified} shape) — user request 2026-10-11:
+// "auto import every quote and trainer and jockey," with a weekly manual
+// audit taking the place of upfront verification. Mutates
+// state.trainers/trainerMeta or state.jockeys/jockeyMeta IN PLACE; the
+// caller still owns persisting the change afterward (and re-sorting/
+// rebuilding any resolver built off the old array). `sourceTag` should be
+// source-specific (e.g. "bloodhorse-auto-unverified") so the roster UI and
+// a future audit view can tell which pipeline vouched for which name.
+// Returns true only when something was actually newly added.
+function autoTrackUnverifiedSection(state, section, sourceTag) {
+  if (section.verified !== false) return false;
+  const isJockey = !!section.jockeyName;
+  const name = isJockey ? section.jockeyName : section.trainerName;
+  if (!name) return false;
+  const list = isJockey ? state.jockeys : state.trainers;
+  if (list.some((n) => n.toLowerCase() === name.toLowerCase())) return false;
+  list.push(name);
+  const meta = isJockey ? (state.jockeyMeta ??= {}) : (state.trainerMeta ??= {});
+  meta[name] = { source: sourceTag, addedAt: new Date().toISOString() };
+  return true;
 }
 
 // ---------- Manual article import (job #27) ----------
@@ -9293,7 +9368,20 @@ async function runBloodHorseImport(env) {
 
     const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
+    // readNotesTrainersAndJockeys() doesn't carry trainerMeta/jockeyMeta
+    // (most of its callers never need them) — read separately here since
+    // auto-tracking a new name (autoTrackUnverifiedSection) needs to record
+    // provenance the same way POST /trainers and /jockeys do. Initialized
+    // as real objects (not left undefined) so they're always safe to
+    // JSON.stringify even on a run that never actually adds anyone.
+    const [trainerMetaRaw, jockeyMetaRaw] = await Promise.all([
+      env.STABLE_KV.get("trainerMeta"),
+      env.STABLE_KV.get("jockeyMeta"),
+    ]);
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
+    state.jockeyMeta = jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {};
     let addedAny = false;
+    let rosterChanged = false;
 
     // Walks the FULL merged/sorted list, not just its first
     // BLOODHORSE_MAX_ARTICLES_PER_RUN entries — an already-seen item costs
@@ -9328,6 +9416,7 @@ async function runBloodHorseImport(env) {
         if (!paragraphs.length) continue;
         const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
         for (const section of sections) {
+          if (autoTrackUnverifiedSection(state, section, "bloodhorse-auto-unverified")) rosterChanged = true;
           for (const horseName of section.horseNames) {
             const dup = notes.find((n) => (section.trainerName ? n.trainer === section.trainerName : n.jockey === section.jockeyName) && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
             if (dup) continue;
@@ -9359,11 +9448,17 @@ async function runBloodHorseImport(env) {
       }
     }
 
+    if (rosterChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
-      await bumpDataVersion(env);
     }
-    return { checked, written };
+    if (addedAny || rosterChanged) await bumpDataVersion(env);
+    return { checked, written, rosterChanged };
   } catch (err) {
     console.error("BloodHorse import failed", err.message);
     return { checked, written, error: err.message };
@@ -9431,7 +9526,17 @@ async function runTdnMainImport(env) {
 
     const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
+    // See runBloodHorseImport()'s identical comment — trainerMeta/
+    // jockeyMeta aren't part of readNotesTrainersAndJockeys()'s return
+    // shape, read separately for autoTrackUnverifiedSection()'s provenance.
+    const [trainerMetaRaw, jockeyMetaRaw] = await Promise.all([
+      env.STABLE_KV.get("trainerMeta"),
+      env.STABLE_KV.get("jockeyMeta"),
+    ]);
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
+    state.jockeyMeta = jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {};
     let addedAny = false;
+    let rosterChanged = false;
 
     // Feed's own order is already newest-first (standard RSS convention,
     // confirmed against a real fetch) — no cross-feed merge/re-sort needed
@@ -9464,6 +9569,7 @@ async function runTdnMainImport(env) {
         if (!paragraphs.length) continue;
         const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
         for (const section of sections) {
+          if (autoTrackUnverifiedSection(state, section, "tdnmain-auto-unverified")) rosterChanged = true;
           for (const horseName of section.horseNames) {
             const dup = notes.find((n) => (section.trainerName ? n.trainer === section.trainerName : n.jockey === section.jockeyName) && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
             if (dup) continue;
@@ -9492,11 +9598,17 @@ async function runTdnMainImport(env) {
       }
     }
 
+    if (rosterChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
-      await bumpDataVersion(env);
     }
-    return { checked, written };
+    if (addedAny || rosterChanged) await bumpDataVersion(env);
+    return { checked, written, rosterChanged };
   } catch (err) {
     console.error("TDN main feed import failed", err.message);
     return { checked, written, error: err.message };
@@ -9632,7 +9744,14 @@ async function runTdnNotebookImport(env) {
   try {
     const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
+    const [trainerMetaRaw, jockeyMetaRaw] = await Promise.all([
+      env.STABLE_KV.get("trainerMeta"),
+      env.STABLE_KV.get("jockeyMeta"),
+    ]);
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
+    state.jockeyMeta = jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {};
     let addedAny = false;
+    let rosterChanged = false;
     const data = await fetchTdnNotebook();
     for (const article of data.articles || []) {
       for (const section of article.sections || []) {
@@ -9643,7 +9762,17 @@ async function runTdnNotebookImport(env) {
         let matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
         let matchedJockey = null;
         if (!matchedTrainer) matchedJockey = resolveTrackedTrainer(section.trainerName, state.jockeys);
-        if (!matchedTrainer && !matchedJockey) continue;
+        if (!matchedTrainer && !matchedJockey) {
+          // Auto-track added 2026-10-11, user request — see
+          // autoTrackUnverifiedSection()'s own comment. extractTdnSections()
+          // always returns the raw "trainer NAME"/"trained by NAME" text
+          // directly (never gated on the tracked list itself), so there's
+          // always a real name here to use, just unconfirmed.
+          if (autoTrackUnverifiedSection(state, { trainerName: section.trainerName, verified: false }, "tdnnotebook-auto-unverified")) {
+            rosterChanged = true;
+          }
+          matchedTrainer = section.trainerName;
+        }
         for (const horseName of section.horseNames || []) {
           const seenKey = tdnNotebookSeenKvKey(article.link, matchedTrainer || matchedJockey, horseName);
           if (await env.STABLE_KV.get(seenKey)) continue;
@@ -9668,11 +9797,17 @@ async function runTdnNotebookImport(env) {
         }
       }
     }
+    if (rosterChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
-      await bumpDataVersion(env);
     }
-    return { checked, written };
+    if (addedAny || rosterChanged) await bumpDataVersion(env);
+    return { checked, written, rosterChanged };
   } catch (err) {
     console.error("TDN Saratoga Notebook import failed", err.message);
     return { checked, written, error: err.message };
@@ -9692,7 +9827,14 @@ async function runHrnNewsImport(env) {
   try {
     const state = await readNotesTrainersAndJockeys(env);
     const notes = state.notes;
+    const [trainerMetaRaw, jockeyMetaRaw] = await Promise.all([
+      env.STABLE_KV.get("trainerMeta"),
+      env.STABLE_KV.get("jockeyMeta"),
+    ]);
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
+    state.jockeyMeta = jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {};
     let addedAny = false;
+    let rosterChanged = false;
     const data = await fetchHrnNews();
     for (const article of data.articles || []) {
       for (const section of article.sections || []) {
@@ -9703,7 +9845,21 @@ async function runHrnNewsImport(env) {
         let matchedTrainer = resolveTrackedTrainer(section.trainerName, state.trainers);
         let matchedJockey = null;
         if (!matchedTrainer) matchedJockey = resolveTrackedTrainer(section.trainerName, state.jockeys);
-        if (!matchedTrainer && !matchedJockey) continue;
+        if (!matchedTrainer && !matchedJockey) {
+          // Auto-track added 2026-10-11, user request — see
+          // autoTrackUnverifiedSection()'s own comment. section.trainerName
+          // here is either HRN's own structured Trainer/Jockey field-table
+          // value (confident) or a bare-surname prose-proximity fallback
+          // (less so, see extractHrnSections()'s own comment) — this code
+          // doesn't currently distinguish the two, so both default to
+          // trainer role same as the table's own column header would
+          // suggest. Accepted imprecision, same as every other source here;
+          // the weekly audit is the backstop, not upfront certainty.
+          if (autoTrackUnverifiedSection(state, { trainerName: section.trainerName, verified: false }, "hrn-auto-unverified")) {
+            rosterChanged = true;
+          }
+          matchedTrainer = section.trainerName;
+        }
         for (const horseName of section.horseNames || []) {
           const seenKey = hrnSeenKvKey(article.link, matchedTrainer || matchedJockey, horseName);
           if (await env.STABLE_KV.get(seenKey)) continue;
@@ -9728,11 +9884,17 @@ async function runHrnNewsImport(env) {
         }
       }
     }
+    if (rosterChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
-      await bumpDataVersion(env);
     }
-    return { checked, written };
+    if (addedAny || rosterChanged) await bumpDataVersion(env);
+    return { checked, written, rosterChanged };
   } catch (err) {
     console.error("Horse Racing Nation import failed", err.message);
     return { checked, written, error: err.message };
@@ -9812,10 +9974,18 @@ async function runSmartPonyImport(env) {
   let checked = 0;
   let written = 0;
   let skippedMisattributed = 0;
+  let trainersAdded = 0;
   try {
     const state = await readNotesAndTrainers(env);
     const notes = state.notes;
+    // readNotesAndTrainers() doesn't carry trainerMeta (most of its callers
+    // never need it) — read it separately here since auto-tracking a new
+    // trainer (below) needs to record provenance the same way POST
+    // /trainers does.
+    const trainerMetaRaw = await env.STABLE_KV.get("trainerMeta");
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
     let addedAny = false;
+    let trainersChanged = false;
     const quotes = await fetchSmartPonyQuotes(env);
 
     const cursorId = await env.STABLE_KV.get(SMARTPONY_DRAIN_CURSOR_KV_KEY);
@@ -9835,7 +10005,7 @@ async function runSmartPonyImport(env) {
     const head = quotes.slice(0, SMARTPONY_HEAD_PER_RUN);
     const sliceIds = new Set(slice.map((q) => q.quoteId));
     const toProcess = [...head.filter((q) => !sliceIds.has(q.quoteId)), ...slice];
-    const resolveTracked = makeTrackedTrainerResolver(state.trainers);
+    let resolveTracked = makeTrackedTrainerResolver(state.trainers);
     // Seen flags are written only AFTER the notes blob is saved (end of
     // run). Confirmed real 2026-10-09: when a run died mid-loop (CPU limit,
     // error 1102), quotes already flagged seen were never saved, and every
@@ -9891,8 +10061,31 @@ async function runSmartPonyImport(env) {
         addedAny = true;
         continue;
       }
-      const matchedTrainer = resolveTracked(q.trainerName);
-      if (!matchedTrainer) continue; // untracked trainer — no guess, re-checked next full pass
+      let matchedTrainer = resolveTracked(q.trainerName);
+      if (!matchedTrainer) {
+        // Auto-track added 2026-10-11, user request: "we want all quotes,
+        // even for a non-tracked trainer" — revised same day to auto-add
+        // EVERY untracked name (not gated on entries confirmation), with
+        // the user explicitly taking on a weekly manual audit to clean up
+        // mistakes instead of preventing them upfront. The real 306-trainer
+        // flood that got auto-add turned off in the first place never had
+        // that kind of review cadence — it just silently accumulated. The
+        // source tag here still distinguishes HOW confident this add is
+        // (SmartPony's own race_entries table independently confirmed this
+        // exact person trains this horse, vs. just the quote's own byline)
+        // so the Sunday audit can filter straight to the riskier ones
+        // instead of re-checking everything blind.
+        matchedTrainer = q.trainerName;
+        state.trainers.push(matchedTrainer);
+        state.trainerMeta[matchedTrainer] = {
+          source: q.entriesConfirmedTrainer ? "smartpony-auto-confirmed" : "smartpony-auto-unverified",
+          addedAt: new Date().toISOString(),
+        };
+        state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+        resolveTracked = makeTrackedTrainerResolver(state.trainers);
+        trainersAdded++;
+        trainersChanged = true;
+      }
       // Real bug fixed 2026-10-05: fetchSmartPonyQuotes()'s own race-entries
       // cross-reference already verifies+rewrites a misattributed quote
       // (see its own comment) — that rewrite is BY CONSTRUCTION the same
@@ -9934,17 +10127,21 @@ async function runSmartPonyImport(env) {
       await env.STABLE_KV.put("jockeys", JSON.stringify(jockeyState.jockeys));
       await env.STABLE_KV.put("jockeyMeta", JSON.stringify(jockeyState.jockeyMeta));
     }
+    if (trainersChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
     }
-    if (addedAny || jockeysAdded) await bumpDataVersion(env);
+    if (addedAny || jockeysAdded || trainersChanged) await bumpDataVersion(env);
     for (const seenKey of seenKeysToWrite) {
       await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
     }
     if (slice.length) {
       await env.STABLE_KV.put(SMARTPONY_DRAIN_CURSOR_KV_KEY, slice[slice.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 180 });
     }
-    return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
+    return { checked, written, jockeyNotes, jockeysAdded, trainersAdded, skippedMisattributed, scanned: toProcess.length, headScanned: head.length, startIdx, totalQuotes: quotes.length };
   } catch (err) {
     console.error("SmartPony import failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
@@ -10463,7 +10660,19 @@ async function fetchSmartPonyQuotes(env) {
       continue;
     }
 
+    // Independent confirmation signal, separate from reattributedFromRace-
+    // Entries below — true whenever SmartPony's OWN race_entries table (not
+    // just the quote's own byline) names a real trainer of record for this
+    // horse, whether or not that happens to match the credited name. Added
+    // 2026-10-11 so runSmartPonyImport() can safely auto-track a trainer
+    // it's never seen before: reattributedFromRaceEntries alone only covers
+    // the CORRECTION case (byline disagreed with entries), not the — far
+    // more common — case where entries data simply CONFIRMS the byline was
+    // already right. Without this, auto-tracking off reattributedFrom-
+    // RaceEntries alone would miss the majority of entries-confirmed names.
+    let entriesConfirmedTrainer = false;
     if (entry?.trainer) {
+      entriesConfirmedTrainer = true;
       const realTrainer = reformatLastFirstName(entry.trainer);
       if (lastNameKey(trainerName) !== lastNameKey(realTrainer)) {
         // Whoever's quoted isn't the trainer on record for this horse —
@@ -10498,6 +10707,7 @@ async function fetchSmartPonyQuotes(env) {
       horseName,
       text: noteText,
       reattributedFromRaceEntries,
+      entriesConfirmedTrainer,
       sentiment: row.sentiment || null,
       date,
       source: article.title || article.source || "SmartPony",

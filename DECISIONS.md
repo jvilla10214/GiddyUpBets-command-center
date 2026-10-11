@@ -560,3 +560,35 @@ would require a backend to keep the key secret, contradicting the single-file/no
 **Alternatives considered:** NWS/NOAA API (US-only, less convenient historical archive access);
 paid providers (rejected — would force a backend into existence just to hide a key, for data
 Open-Meteo already provides for free).
+
+## Auto-track every trainer/jockey a quote names, instead of requiring manual curation first
+**Date:** 2026-10-11
+**Decision:** Every quote-import job (SmartPony, BloodHorse, TDN main feed, TDN Notebook, HRN News,
+NYRA News) now auto-adds a new trainer/jockey to the tracked roster the first time a real quote
+names them, instead of silently discarding the quote when the person isn't already tracked. Each
+auto-added entry is tagged in `trainerMeta`/`jockeyMeta` with a source string that says both which
+pipeline added it AND how confident that pipeline was — e.g. `smartpony-auto-confirmed` (SmartPony's
+own `race_entries` table independently confirmed this exact person trains this horse) vs.
+`smartpony-auto-unverified` / `bloodhorse-auto-unverified` / `tdnmain-auto-unverified` /
+`tdnnotebook-auto-unverified` / `hrn-auto-unverified` / `nyranews-auto-unverified` (just a byline or
+prose match, no independent cross-check available for that source).
+**Why:** User's explicit call: "we want all quotes, even for a non-tracked trainer" — real quotes
+were being silently dropped just because the trainer hadn't been manually added yet, with no way to
+even see what was missed. The user's own answer to the obvious risk ("too many trainers and quotes
+falling through the cracks") was to accept imperfect auto-adds and personally run a manual audit on
+a cadence of their choosing (weekly, mentioned as "Sunday mornings"), using the source tags above to
+jump straight to the unverified entries instead of reviewing the whole roster blind.
+**History this reverses:** An earlier SmartPony auto-add attempt (before this date) flooded the
+roster with ~306 bad names in one run — owners, assistant trainers, and jockeys mis-added as
+trainers — and had to be manually cleaned up, which is why auto-add was turned off project-wide
+afterward (every import job required a name to already be tracked before it would write anything).
+That flood had no routine review process behind it; this version's tagging + the user's own
+committed audit cadence is the mitigation, not a claim that misattribution can't happen anymore.
+**Not changed:** The podcast quote pipeline (`automation/podcast-quotes/`) still requires an episode
+to mention an already-tracked trainer by name before it's even selected for transcription — its
+discovery step has no way to detect an untracked person is being discussed without transcribing
+first (expensive, real API cost per episode), so this is a known, accepted gap, not an oversight.
+**Alternatives considered:** Keep requiring independent confirmation (e.g. SmartPony's
+`race_entries` cross-reference) before ever auto-adding anyone (rejected by the user as too
+conservative — most sources, like plain news-article bylines, have no such independent signal
+available at all, so that rule alone would have left most of "all quotes" unmet).
