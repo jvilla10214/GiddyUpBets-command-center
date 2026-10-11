@@ -58,7 +58,11 @@ comment documents one feature/route.
     explicitly-labeled sections, e.g. "Belmont - 9/19", get auto-synced — an unlabeled section is
     deliberately skipped, not guessed); (2) the stable-mail "day of draw" check — sends a horse's
     digest the moment its card's entries are drawn, same day, instead of waiting for the once-daily
-    7am check above (same dedup key, so whichever reaches a horse first is the real send).
+    7am check above (same dedup key, so whichever reaches a horse first is the real send). Only
+    runs 6am-10pm ET — a real midnight send was confirmed 2026-10-11 (the date rollover itself
+    made an already-drawn card look "new" under the day-of dedup key right at 12am), fixed by
+    gating this specific piggyback to waking hours; the 7am check always catches anything from
+    the overnight gap shortly after it reopens.
 - `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
   (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
 

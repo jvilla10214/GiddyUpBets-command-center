@@ -736,9 +736,24 @@ export default {
       // existing per-horse dedup (raceNotifyKvKey) makes whichever one
       // reaches a given horse first the real send and the other a silent
       // no-op — no new dedup logic needed.
-      ctx.waitUntil(
-        runEntryAlerts(env, "scheduled", { dayOffset: 0, runLabel: "am" }).catch((err) => console.error("Entry alerts: draw-watch run failed", err.message))
-      );
+      //
+      // Confirmed real bug (2026-10-11): running this with no hour guard
+      // meant the exact moment the calendar date rolled over to a new day
+      // (12:00/12:30am ET), entryAlertDateForOffset(0) started pointing at
+      // that new day, and any horse already entered for it (drawn hours or
+      // days earlier, already previewed in an "eve" day-before digest the
+      // night before) matched as "new" under the "am" dedup namespace for
+      // the first time — triggering a real send at literally midnight, not
+      // when anything was actually freshly drawn. Guarded to the same
+      // waking-hours window NYRA_NEWS_RUN_HOURS_ET-adjacent jobs assume
+      // (6am-11pm ET) — a date-rollover match just waits for the window to
+      // reopen at 6am instead of firing overnight, and any genuine
+      // same-day draw during the day still goes out within 30 minutes.
+      if (nyNowParts().hour >= 6 && nyNowParts().hour <= 22) {
+        ctx.waitUntil(
+          runEntryAlerts(env, "scheduled", { dayOffset: 0, runLabel: "am" }).catch((err) => console.error("Entry alerts: draw-watch run failed", err.message))
+        );
+      }
       return;
     }
     // Confirmed real bug (2026-08-26): this was `event.waitUntil`, which
