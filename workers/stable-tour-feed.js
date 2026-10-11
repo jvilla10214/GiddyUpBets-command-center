@@ -2423,6 +2423,32 @@ async function handleRequest(request, env, ctx) {
     // otherwise block a legitimate future email once a note actually gets
     // added for them). Paginated since STABLE_KV.list() caps at 1000 keys
     // per call.
+    // Read-only — lists exactly which horse/race/runLabel combos for one
+    // track+date have already been dedup-marked as sent (see
+    // raceNotifyKvKey()). Built to answer "why did today's digest only
+    // include N horses" questions precisely: /debug-match-dry-run reports
+    // every CURRENTLY eligible horse but ignores dedup entirely, so it
+    // can't by itself distinguish "never matched" from "already sent
+    // earlier today" — this does. Changes nothing.
+    if (url.pathname === "/debug-race-notify-state" && request.method === "GET") {
+      const track = url.searchParams.get("track");
+      const date = url.searchParams.get("date");
+      if (!track || !date) return json({ error: "Missing track or date" }, 400);
+      const safeTrack = track.replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+      const prefix = `racenotify:${safeTrack}:${date}:`;
+      const entries = [];
+      let cursor;
+      do {
+        const listed = await env.STABLE_KV.list({ prefix, cursor });
+        for (const k of listed.keys) {
+          const notifiedAt = await env.STABLE_KV.get(k.name);
+          entries.push({ key: k.name.slice(prefix.length), notifiedAt });
+        }
+        cursor = listed.list_complete ? undefined : listed.cursor;
+      } while (cursor);
+      return json({ track, date, alreadyNotifiedCount: entries.length, entries }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/debug-clear-race-notify" && request.method === "GET") {
       let cursor;
       let cleared = 0;
