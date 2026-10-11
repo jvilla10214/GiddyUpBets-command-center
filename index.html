@@ -6098,7 +6098,7 @@
     try{ races = await entriesApiGet(trackId, date); }
     catch(err){
       console.error("Entries fetch failed", err);
-      $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load entries for ${escapeHtml(date)} — ${escapeHtml(err.message)}</div>`;
+      $("entriesBody").innerHTML = `<div class="log-empty">Couldn't load entries for ${escapeHtml(fmtStableDate(date))} — ${escapeHtml(err.message)}</div>`;
       if (entriesTag) entriesTag.textContent = "ERROR";
       return;
     }
@@ -6628,7 +6628,7 @@
     const body = $("entriesBody");
     if (!races.length){
       selectedEntriesRace = null;
-      body.innerHTML = `<div class="log-empty">No races carded for ${escapeHtml(activeTrack.shortName)} on ${escapeHtml(date)}.</div>`;
+      body.innerHTML = `<div class="log-empty">No races carded for ${escapeHtml(activeTrack.shortName)} on ${escapeHtml(fmtStableDate(date))}.</div>`;
       computeActiveTrackRaceStatus();
       return;
     }
@@ -11044,8 +11044,11 @@
     saveAlertState();
   }
 
+  // M/D/YYYY, matching fmtStableDate's format everywhere else in the app —
+  // changed 2026-10-11 from a bare "Oct 11" (no year) per the user's
+  // standing rule that every date shown anywhere reads month-date-year.
   function fmtLogDateShort(dateStr){
-    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   }
 
   // Bias alerts fire whenever the Daily Log gains or updates an entry —
