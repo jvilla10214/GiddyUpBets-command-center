@@ -1095,6 +1095,37 @@ async function handleRequest(request, env, ctx) {
       return json({ reassigned, trainers }, 200, { "Cache-Control": "no-store" });
     }
 
+    // One-time cleanup for a real data-quality bug confirmed 2026-10-11:
+    // the exact same string can end up repeated multiple times in the
+    // `trainers` array — "Wesley Ward" had 9 copies, almost certainly from
+    // several of that day's rapid-fire auto-track/cleanup KV writes each
+    // reading a slightly-stale array before another one's write landed
+    // (the same read-modify-write race already seen elsewhere today).
+    // Harmless for matching (resolveTracked still works fine against any
+    // one copy), just redundant bytes — this is pure hygiene, safe to
+    // re-run any time. Exact-string dedupe only (case/spelling variants
+    // are a /trainers/merge decision, not an automatic one).
+    if (url.pathname === "/debug-dedupe-trainers" && request.method === "GET") {
+      const state = await readTrainersAndMeta(env);
+      const seen = new Set();
+      const deduped = [];
+      const removedCounts = {};
+      for (const t of state.trainers) {
+        if (seen.has(t)) {
+          removedCounts[t] = (removedCounts[t] || 0) + 1;
+          continue;
+        }
+        seen.add(t);
+        deduped.push(t);
+      }
+      const removedTotal = state.trainers.length - deduped.length;
+      if (removedTotal) {
+        await env.STABLE_KV.put("trainers", JSON.stringify(deduped));
+        await bumpDataVersion(env);
+      }
+      return json({ before: state.trainers.length, after: deduped.length, removedTotal, removedCounts }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Sibling of /trainers/merge above, for the opposite case: a tracked
     // name that ISN'T really identifiable (a bare surname shared by
     // multiple real tracked people — "Cox" could mean Brad, Clive, or Gail
