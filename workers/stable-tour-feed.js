@@ -2461,6 +2461,45 @@ async function handleRequest(request, env, ctx) {
       return json({ cleared }, 200, { "Cache-Control": "no-store" });
     }
 
+    // Generic version of the same idea, for any "{source}:seen:*" prefix —
+    // built 2026-10-11 for the auto-tracking backfill (see DECISIONS.md,
+    // same date): BloodHorse and TDN main mark an article seen in a
+    // `finally` block regardless of outcome, including when every quote in
+    // it got silently discarded for an untracked trainer — now that auto-
+    // tracking means that same article would succeed, this clears just
+    // that source's seen-flags so the next run (or an immediate manual
+    // /debug-run-bloodhorse etc.) re-examines whatever's still in its feed
+    // window. Only ever recovers articles still listed in that source's
+    // OWN current feed (an RSS feed's rolling window, not an unlimited
+    // archive) — unlike SmartPony's full sweep, which can reach its whole
+    // 120-day table. `prefix` must be one of a short allowlist, not
+    // arbitrary, so this can't accidentally wipe an unrelated KV prefix.
+    // Deliberately does NOT include TDN Notebook or HRN News: both mark
+    // their seen-key per (article, trainer, horse) with no SEPARATE dup
+    // check the way BloodHorse/TDN main have (notes.find(...) before
+    // pushing) — their seen-key IS the only thing stopping a re-add, so
+    // clearing it would create duplicate notes for everything they'd
+    // already written successfully. Those two don't need clearing anyway:
+    // the old code `continue`d before ever computing/checking that seen key
+    // for an untracked-trainer section, so nothing was marked for the cases
+    // that actually need recovering — just re-running them now picks those
+    // up with zero risk.
+    if (url.pathname === "/debug-clear-seen" && request.method === "GET") {
+      const source = url.searchParams.get("source") || "";
+      const allowedPrefixes = { bloodhorse: "bloodhorse:seen:", tdnmain: "tdnmain:seen:" };
+      const prefix = allowedPrefixes[source];
+      if (!prefix) return json({ error: `source must be one of: ${Object.keys(allowedPrefixes).join(", ")}` }, 400);
+      let cursor;
+      let cleared = 0;
+      do {
+        const listed = await env.STABLE_KV.list({ prefix, cursor });
+        await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
+        cleared += listed.keys.length;
+        cursor = listed.list_complete ? undefined : listed.cursor;
+      } while (cursor);
+      return json({ source, prefix, cleared }, 200, { "Cache-Control": "no-store" });
+    }
+
     // One-time backfill for notes that predate the importedVia field (see
     // /notes POST's own comment on why it exists). Originally keyed off
     // `sentiment` presence as a stand-in for "came through SmartPony" — but
@@ -10182,12 +10221,18 @@ async function runSmartPonyFullSweep(env, { reset = false } = {}) {
   let checked = 0;
   let written = 0;
   let skippedMisattributed = 0;
+  let trainersAdded = 0;
   try {
     const state = await readNotesAndTrainers(env);
     const notes = state.notes;
+    // See runSmartPonyImport()'s identical comment — readNotesAndTrainers()
+    // doesn't carry trainerMeta, read separately for auto-track provenance.
+    const trainerMetaRaw = await env.STABLE_KV.get("trainerMeta");
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
     let addedAny = false;
+    let trainersChanged = false;
     const quotes = await fetchSmartPonyQuotes(env);
-    const resolveTracked = makeTrackedTrainerResolver(state.trainers);
+    let resolveTracked = makeTrackedTrainerResolver(state.trainers);
     const seenKeysToWrite = [];
     const noteKey = (trainer, jockey, horse, text) => `${trainer || ""}|${jockey || ""}|${horse}|${text}`;
     const existingNoteKeys = new Set(notes.map((n) => noteKey(n.trainer, n.jockey, n.horse, n.note)));
@@ -10241,8 +10286,24 @@ async function runSmartPonyFullSweep(env, { reset = false } = {}) {
         addedAny = true;
         continue;
       }
-      const matchedTrainer = resolveTracked(q.trainerName);
-      if (!matchedTrainer) continue; // untracked trainer — left unmarked, same as runSmartPonyImport()
+      let matchedTrainer = resolveTracked(q.trainerName);
+      if (!matchedTrainer) {
+        // Auto-track, same as runSmartPonyImport() (2026-10-11) — this is
+        // specifically the "go back and find quotes we skipped in the past"
+        // catch-up, so recovering previously-untracked-trainer quotes is
+        // the whole point of running this. See autoTrackUnverifiedSection()
+        // and runSmartPonyImport()'s own comment for the full reasoning.
+        matchedTrainer = q.trainerName;
+        state.trainers.push(matchedTrainer);
+        state.trainerMeta[matchedTrainer] = {
+          source: q.entriesConfirmedTrainer ? "smartpony-auto-confirmed" : "smartpony-auto-unverified",
+          addedAt: new Date().toISOString(),
+        };
+        state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+        resolveTracked = makeTrackedTrainerResolver(state.trainers);
+        trainersAdded++;
+        trainersChanged = true;
+      }
       if (!q.reattributedFromRaceEntries && smartPonyQuoteMisattributed(q.text, matchedTrainer)) {
         skippedMisattributed++;
         seenKeysToWrite.push(seenKey);
@@ -10277,17 +10338,21 @@ async function runSmartPonyFullSweep(env, { reset = false } = {}) {
       await env.STABLE_KV.put("jockeys", JSON.stringify(jockeyState.jockeys));
       await env.STABLE_KV.put("jockeyMeta", JSON.stringify(jockeyState.jockeyMeta));
     }
+    if (trainersChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+    }
     if (addedAny) {
       await env.STABLE_KV.put("notes", JSON.stringify(notes));
     }
-    if (addedAny || jockeysAdded) await bumpDataVersion(env);
+    if (addedAny || jockeysAdded || trainersChanged) await bumpDataVersion(env);
     for (const seenKey of seenKeysToWrite) {
       await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
     }
     if (batch.length) {
       await env.STABLE_KV.put(SMARTPONY_FULLSWEEP_CURSOR_KV_KEY, batch[batch.length - 1].quoteId, { expirationTtl: 60 * 60 * 24 * 30 });
     }
-    return { checked, written, jockeyNotes, jockeysAdded, skippedMisattributed, batchSize: batch.length, startIdx, totalQuotes: quotes.length, remaining, done: remaining === 0 };
+    return { checked, written, jockeyNotes, jockeysAdded, trainersAdded, skippedMisattributed, batchSize: batch.length, startIdx, totalQuotes: quotes.length, remaining, done: remaining === 0 };
   } catch (err) {
     console.error("SmartPony full sweep failed", err.message);
     return { checked, written, skippedMisattributed, error: err.message };
