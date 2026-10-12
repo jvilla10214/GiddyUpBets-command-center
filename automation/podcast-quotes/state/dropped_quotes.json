@@ -1,1 +1,58 @@
-[]
+[
+  {
+    "key": "898c439f-dafc-43a9-b764-d2d15b9277d3|00:27:23",
+    "reason": "lost_after_verify",
+    "episode": "Monday NYRA Bets ATR-Part 1: Phil Bauer, Mike Trombetta, Far Hills Race Meeting w/ Guy Torsilieri",
+    "episodeDate": "Mon, 12 Oct 2026 16:06:25 GMT",
+    "trainer": "Phil Bauer",
+    "horse": "Tam Tam",
+    "quote": "Certainly. That's your hope when you go and you buy a yearling is that they develop and turn into something great. When you spend that kind of money, for some reason, you hold them to a higher standard. There are a lot of disappointments in this game and there's no crystal ball.",
+    "question": "She was a $975,000 Saratoga yearling, now over a million in earnings \u2014 does she justify the price?",
+    "timestamp": "00:27:23",
+    "error": null,
+    "foundAt": "2026-10-12T20:20:37.941492Z",
+    "reviewed": false
+  },
+  {
+    "key": "898c439f-dafc-43a9-b764-d2d15b9277d3|00:41:42",
+    "reason": "lost_after_verify",
+    "episode": "Monday NYRA Bets ATR-Part 1: Phil Bauer, Mike Trombetta, Far Hills Race Meeting w/ Guy Torsilieri",
+    "episodeDate": "Mon, 12 Oct 2026 16:06:25 GMT",
+    "trainer": "Phil Bauer",
+    "horse": "Moonlight Dash",
+    "quote": "She keeps running about the same effort in this one other than condition. So we're going to give her a little more ground and maybe that's the key... She's got a really good half-brother that Tom Morley had that maybe she'll be similar to him.",
+    "question": "Asking about Wednesday's runner Moonlight Dash",
+    "timestamp": "00:41:42",
+    "error": null,
+    "foundAt": "2026-10-12T20:20:37.941526Z",
+    "reviewed": false
+  },
+  {
+    "key": "898c439f-dafc-43a9-b764-d2d15b9277d3|00:43:04",
+    "reason": "lost_after_verify",
+    "episode": "Monday NYRA Bets ATR-Part 1: Phil Bauer, Mike Trombetta, Far Hills Race Meeting w/ Guy Torsilieri",
+    "episodeDate": "Mon, 12 Oct 2026 16:06:25 GMT",
+    "trainer": "Phil Bauer",
+    "horse": "Clarita",
+    "quote": "Yes, he's been second there a couple times. I don't really think the formation of that track suits her the best. He's kind of a plodding type that needs horses to kind of come back to him... Well, we finally got her in a good rhythm and we'll bring her back here at Churchill and maybe the longer stretch will suit her a little better.",
+    "question": "Mentioning Clarita got class relief and a nice second last week at Keeneland",
+    "timestamp": "00:43:04",
+    "error": null,
+    "foundAt": "2026-10-12T20:20:37.941537Z",
+    "reviewed": false
+  },
+  {
+    "key": "898c439f-dafc-43a9-b764-d2d15b9277d3|01:05:01",
+    "reason": "lost_after_verify",
+    "episode": "Monday NYRA Bets ATR-Part 1: Phil Bauer, Mike Trombetta, Far Hills Race Meeting w/ Guy Torsilieri",
+    "episodeDate": "Mon, 12 Oct 2026 16:06:25 GMT",
+    "trainer": "Phil Bauer",
+    "horse": "Super Willowa",
+    "quote": "Yeah, Super Willowa. I think I might have run her on a synthetic once way back when, short or something at Gulfstream. But she's been training good and doing well. And I figured this would be a good place to try to run her. And we'll give it a shot and see.",
+    "question": "Asking about Super Willowa running tonight in the HBPA, second choice behind Joe Sharp",
+    "timestamp": "01:05:01",
+    "error": null,
+    "foundAt": "2026-10-12T20:20:37.941545Z",
+    "reviewed": false
+  }
+]
