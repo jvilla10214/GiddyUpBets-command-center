@@ -9,5 +9,10 @@ automation/podcast-quotes/logs/
 automation/podcast-quotes/tmp/
 automation/podcast-quotes/.env
 automation/podcast-quotes/venv/
+automation/kentucky-hbpa/credentials/
+automation/kentucky-hbpa/logs/
+automation/kentucky-hbpa/tmp/
+automation/kentucky-hbpa/.env
+automation/kentucky-hbpa/venv/
 .wrangler/
 automation/keeneland-barn-notes/tmp/

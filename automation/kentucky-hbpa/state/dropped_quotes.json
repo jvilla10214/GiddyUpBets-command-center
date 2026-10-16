@@ -1,0 +1,34 @@
+[
+  {
+    "key": "-3yCvuabD3s|00:00|unclear",
+    "reason": "no_clear_horse",
+    "video": "Javier Castellano on The Puma after PaDerby winner works for likely start in BC Classic",
+    "videoId": "-3yCvuabD3s",
+    "videoDate": "2026-10-09",
+    "speaker": "Javier Castellano",
+    "role": "jockey",
+    "horse": "unclear",
+    "quote": "Absolutely. The more you win you want to keep one of the race. It's amazing feeling when you win the Kentucky Derby... You can't wait for the next year to compete and to win again.",
+    "question": "After you win your first Derby, do you find there's even another depth of desire to win a second?",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-16T14:37:28.539663Z",
+    "reviewed": false
+  },
+  {
+    "key": "-3yCvuabD3s|00:00|The Puma / Mage",
+    "reason": "no_clear_horse",
+    "video": "Javier Castellano on The Puma after PaDerby winner works for likely start in BC Classic",
+    "videoId": "-3yCvuabD3s",
+    "videoDate": "2026-10-09",
+    "speaker": "Javier Castellano",
+    "role": "jockey",
+    "horse": "The Puma / Mage",
+    "quote": "I believe I appreciate you being thankful and for every single opportunity I have in my life... It's about luck, it's appreciation, it's about hard working behind the scenes.",
+    "question": "Does the Puma's scratch on Derby morning make it more devastating, or make you appreciate more that Mage got it done?",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-16T14:37:28.539713Z",
+    "reviewed": false
+  }
+]

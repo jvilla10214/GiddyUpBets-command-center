@@ -1,0 +1,55 @@
+name: Kentucky HBPA — trainer/jockey quote extraction
+
+on:
+  schedule:
+    # 21:00 UTC = 5:00pm America/New_York (4:00pm during EDT) — these clips
+    # post afternoon/evening after that day's works or races, so a morning
+    # run (like the Steve Byk pipeline's 7am) would mostly find nothing yet.
+    # Adjust once real posting-time patterns are observed.
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: kentucky-hbpa
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: automation/kentucky-hbpa
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/processed_video_ids.json state/dropped_quotes.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Kentucky HBPA quote pipeline: update processed-video state [skip ci]"
+            git push
+          else
+            echo "Nothing to commit."
+          fi
