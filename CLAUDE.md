@@ -1,6 +1,6 @@
 # GiddyUpBets Command Center
 
-Two independent pieces that deploy differently — keep that straight before touching either one.
+Three independent pieces that deploy differently — keep that straight before touching any one.
 
 ## 1. Frontend — `index.html` (static, GitHub Pages)
 
@@ -65,6 +65,51 @@ comment documents one feature/route.
     the overnight gap shortly after it reopens.
 - `automation/nyra-harness/` is a local-only test harness for the NYRA News extractor
   (`node run.mjs` scores it against hand-labeled articles). Run it before changing that code.
+
+## 3. Quote-extraction pipelines — `automation/*/` (GitHub Actions)
+
+A third deploy model, distinct from both of the above: each pipeline is its own folder with its
+own `run.py`, `requirements.txt`, and `state/` (committed back by the workflow after every run),
+driven by a matching `.github/workflows/*.yml` on a schedule. **Pushing to `main` deploys these
+immediately** (no manual step like the Worker, no build step like the frontend) — the next
+scheduled fire, or a manual `workflow_dispatch` run, just uses whatever's on `main`. Convention is
+to duplicate a working pipeline's shape for a new source rather than share code between them
+(confirmed repeatedly: `automation/podcast-quotes/` → `automation/kentucky-hbpa/` →
+`automation/nyra-broadcast-quotes/` → `automation/keeneland-barn-notes/`, each its own copy).
+
+All of them write into the same shared Stable Tour store (`workers/stable-tour-feed.js`'s
+`/notes`, `/trainers`, `/jockeys` routes) — current policy (2026-10-11) is to auto-track any
+trainer/jockey a real quote names rather than require it already be tracked, tagged
+`<source>-auto-unverified` so a filtered view can find everything a given week's manual audit
+needs to review. Match that tag convention for any new pipeline — a source tag without it is
+invisible to that filter (a real gap caught and fixed in Barn Notes, 2026-10-16).
+
+- **`automation/podcast-quotes/`** — Steve Byk podcast (RSS feed), daily, trainer-name title
+  filter (this one DOES pre-filter — a broad industry-roundtable feed, unlike the others below).
+- **`automation/kentucky-hbpa/`** — Kentucky HBPA YouTube channel, twice daily, no title filter
+  (channel is already narrowly scoped).
+- **`automation/nyra-broadcast-quotes/`** — NYRA's daily "America's Day at the Races" full
+  broadcast (YouTube), once daily; two extraction passes over one transcript (Maggie Wolfendale's
+  paddock analysis only, and separately any trainer/jockey post-race interview).
+- **`automation/keeneland-barn-notes/`** — Keeneland's own Barn Notes PDFs, 3x/day.
+
+**Any pipeline that touches YouTube via `yt-dlp` needs all three of these, confirmed the hard way
+(2026-10-16) — missing any one fails differently, not safely:**
+1. `denoland/setup-deno@v2` in the workflow — yt-dlp needs a JS runtime to solve YouTube's "n"
+   signature challenge; GitHub's bare runner has none.
+2. `--remote-components ejs:github` on every `yt-dlp` call — even with Deno present, yt-dlp won't
+   fetch/run its own challenge-solver script without this explicit opt-in.
+3. The `YOUTUBE_COOKIES` repo secret, written to `$RUNNER_TEMP` and passed as `--cookies` — GitHub
+   Actions' shared runner IPs get YouTube's "Sign in to confirm you're not a bot" wall otherwise,
+   even though the exact same code works fine from a local/home IP. Cookies come from a separate
+   Google account, deliberately not tied to anything the user cares about — see `kentucky-hbpa`'s
+   `config.py` for the full reasoning. A Netscape-format cookies file is required (must start with
+   the literal line `# Netscape HTTP Cookie File`) — a bare copy-paste mistake that drops this
+   header fails with a distinct, separate error from the bot-wall itself.
+
+Secrets shared across all of these: `GROQ_API_KEY` (Whisper transcription), `ANTHROPIC_API_KEY`
+(Claude extraction), `YOUTUBE_COOKIES` (yt-dlp auth, YouTube-based pipelines only) — set once,
+reused by every pipeline that needs them, no per-pipeline duplication.
 
 ## Conventions
 
