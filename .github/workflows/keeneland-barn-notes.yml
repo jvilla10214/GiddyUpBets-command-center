@@ -2,10 +2,10 @@ name: Keeneland Barn Notes — quote import
 
 on:
   schedule:
-    # Every 6 hours: 05:23, 11:23, 17:23, 23:23 UTC (1:23am, 7:23am, 1:23pm,
-    # 7:23pm Eastern during EDT; an hour earlier during EST). A run with
-    # nothing new exits in seconds.
-    - cron: "23 5,11,17,23 * * *"
+    # 3x a day, 6 hours apart: 11:05, 17:05, 23:05 UTC = 7:05am, 1:05pm,
+    # 7:05pm Eastern during EDT (6:05am, 12:05pm, 6:05pm during EST; GitHub
+    # cron is UTC-only). A run with nothing new exits in seconds.
+    - cron: "5 11,17,23 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
