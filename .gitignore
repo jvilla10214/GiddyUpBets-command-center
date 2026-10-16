@@ -10,3 +10,4 @@ automation/podcast-quotes/tmp/
 automation/podcast-quotes/.env
 automation/podcast-quotes/venv/
 .wrangler/
+automation/keeneland-barn-notes/tmp/

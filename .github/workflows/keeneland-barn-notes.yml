@@ -1,0 +1,70 @@
+name: Keeneland Barn Notes — quote import
+
+on:
+  # Schedule off until the first dry run has been reviewed. To turn on, uncomment:
+  # schedule:
+  #   # Hourly at :23 from 12:00 to 23:00 UTC (8am-7pm Eastern during EDT,
+  #   # 7am-6pm during EST). Barn Notes go up on race-day mornings; a run with
+  #   # nothing new exits in seconds.
+  #   - cron: "23 12-23 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print what would be saved without writing anything"
+        type: boolean
+        default: true
+      only_pdf:
+        description: "Process just this PDF URL (optional)"
+        type: string
+        default: ""
+
+concurrency:
+  group: keeneland-barn-notes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: automation/keeneland-barn-notes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pdftotext
+        run: sudo apt-get update -y && sudo apt-get install -y poppler-utils
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the import
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '' }}
+          ONLY_PDF: ${{ inputs.only_pdf }}
+        run: python run.py
+
+      - name: Commit updated state
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/processed_pdfs.json
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "Keeneland Barn Notes: update processed PDFs [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            sleep 5
+          done
+          exit 1
