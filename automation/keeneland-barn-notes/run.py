@@ -194,8 +194,13 @@ def build_notes(quotes, data, pdf_url, date, source):
     trainers, jockeys = list(data["trainers"]), list(data["jockeys"])
     new_trainers, new_jockeys, notes, skipped = [], [], [], []
     existing = {}
+    # Barn Notes sometimes drops an apostrophe ("Serenas Ghost" for Serena's
+    # Ghost). Notes link to entries by horse name, so reuse the spelling
+    # already in the store when the names match ignoring punctuation.
+    spelling = {}
     for n in data["notes"]:
         existing.setdefault(_horse_key(n.get("horse")), []).append(_norm_text(n.get("note")))
+        spelling.setdefault(_norm_text(n.get("horse")), (n.get("horse") or "").strip())
 
     def trainer_for(name):
         t = resolve(name, trainers)
@@ -207,6 +212,7 @@ def build_notes(quotes, data, pdf_url, date, source):
 
     for q in quotes:
         horse, speaker, role = q["horse"].strip(), q["speaker"].strip(), q["speaker_role"]
+        horse = spelling.get(_norm_text(horse), horse)
         text = q["quote"].strip()
         probe = _norm_text(text)[:60]
         if any(probe and probe in old for old in existing.get(_horse_key(horse), [])):
