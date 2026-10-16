@@ -16,3 +16,4 @@ automation/kentucky-hbpa/.env
 automation/kentucky-hbpa/venv/
 .wrangler/
 automation/keeneland-barn-notes/tmp/
+automation/keeneland-barn-notes/__pycache__/
