@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "key": "XRj19PivBEg|00:52:21|unclear",
+    "reason": "no_clear_horse",
+    "video": "America's Day at the Races - Friday October 9, 2026",
+    "videoId": "XRj19PivBEg",
+    "videoDate": "2026-10-09",
+    "horse": "unclear",
+    "speaker": "Jorge Abreu",
+    "role": "trainer",
+    "content": "This horse was a stakes winner, trying to bring her back as a four-year-old, showed she moved forward second off the layoff she needed a last race in Saratoga, you know, kind of sloppy track, she didn't need, come off a long layoff, and I think she needed the race after that, she was training pretty forwardly",
+    "timestamp": "00:52:21",
+    "error": null,
+    "foundAt": "2026-10-16T20:57:30.863410+00:00",
+    "reviewed": false
+  },
+  {
+    "key": "XRj19PivBEg|00:53:00|unclear",
+    "reason": "no_clear_horse",
+    "video": "America's Day at the Races - Friday October 9, 2026",
+    "videoId": "XRj19PivBEg",
+    "videoDate": "2026-10-09",
+    "horse": "unclear",
+    "speaker": "Greg Pedrovsky (with Vince Roth as partner)",
+    "role": "other (owner)",
+    "content": "Patience with her trying to get back to her better form, feel good to get the winner's circle It does. George and his team do a great job. We had a lot of patience with this Philly. We have some great partners in sports, been in final furlong, so we're excited what's next for.",
+    "timestamp": "00:53:00",
+    "error": null,
+    "foundAt": "2026-10-16T20:57:30.863439+00:00",
+    "reviewed": false
+  }
+]
