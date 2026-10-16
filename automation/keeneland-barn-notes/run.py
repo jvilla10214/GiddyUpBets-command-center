@@ -287,10 +287,14 @@ def main():
                 log(f"  new jockeys: {', '.join(new_jockeys)}")
             if config.DRY_RUN:
                 continue
+            # "-auto-unverified" suffix matches every other auto-track source
+            # in this project (see project_auto_track_trainers_shipped_2026-10-11
+            # in memory) — this is the Sunday-audit's filter target, so the
+            # tag needs to actually match what that filter looks for.
             if new_trainers:
-                worker("POST", "/trainers/bulk", {"names": new_trainers, "source": "keeneland-barn-notes"})
+                worker("POST", "/trainers/bulk", {"names": new_trainers, "source": "keeneland-barn-notes-auto-unverified"})
             if new_jockeys:
-                worker("POST", "/jockeys/bulk", {"names": new_jockeys, "source": "keeneland-barn-notes"})
+                worker("POST", "/jockeys/bulk", {"names": new_jockeys, "source": "keeneland-barn-notes-auto-unverified"})
             if notes:
                 res = worker("POST", "/notes/bulk", {"notes": notes})
                 saved = sum(1 for r in res.get("results", []) if not r.get("duplicate"))
