@@ -82,9 +82,10 @@ Repo → **Actions** tab → **Kentucky HBPA — trainer/jockey quote extraction
 
 ## Schedule
 
-Runs daily at 21:00 UTC (5pm ET / 4pm during EDT) — these clips post afternoon/evening after that
-day's works or races, not first thing in the morning like the Byk podcast. Adjust the cron
-expression in `.github/workflows/kentucky-hbpa.yml` once real posting-time patterns are observed.
+Runs twice daily — 16:00 and 01:00 UTC, i.e. 12:00pm and 9:00pm America/New_York during EDT
+(11:00am and 8:00pm during EST). Fixed UTC time, no DST adjustment, same convention as the Steve
+Byk and Barn Notes pipelines' schedules. Adjust the cron expressions in
+`.github/workflows/kentucky-hbpa.yml` if real posting-time patterns suggest a better split.
 
 ## Files
 

@@ -2,11 +2,11 @@ name: Kentucky HBPA — trainer/jockey quote extraction
 
 on:
   schedule:
-    # 21:00 UTC = 5:00pm America/New_York (4:00pm during EDT) — these clips
-    # post afternoon/evening after that day's works or races, so a morning
-    # run (like the Steve Byk pipeline's 7am) would mostly find nothing yet.
-    # Adjust once real posting-time patterns are observed.
-    - cron: "0 21 * * *"
+    # 16:00 and 01:00 UTC = 12:00pm and 9:00pm America/New_York during EDT
+    # (11:00am/8:00pm during EST) — fixed UTC time, no DST adjustment, same
+    # convention as the Steve Byk and Barn Notes pipelines' schedules.
+    - cron: "0 16 * * *"
+    - cron: "0 1 * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -47,9 +47,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/processed_video_ids.json state/dropped_quotes.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Kentucky HBPA quote pipeline: update processed-video state [skip ci]"
-            git push
-          else
+          if git diff --cached --quiet; then
             echo "Nothing to commit."
+            exit 0
           fi
+          git commit -m "Kentucky HBPA quote pipeline: update processed-video state [skip ci]"
+          # Retry with rebase — this repo has had same-day commits land from
+          # other concurrent pipelines/sessions, and a bare push would just
+          # fail outright if main moved in between (confirmed real, not
+          # theoretical, the day this workflow was built).
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            sleep 5
+          done
+          exit 1
