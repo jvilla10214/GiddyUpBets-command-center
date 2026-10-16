@@ -26,7 +26,10 @@ they're recorded in the dropped-quotes log (reason "non_trainer_jockey_role")
 rather than silently discarded, same as every other skip reason this
 project already tracks.
 """
+import os
+import re
 import time
+import unicodedata
 from collections import defaultdict
 
 import requests
@@ -44,11 +47,82 @@ def fetch_data():
     return r.json()
 
 
+# ---------- name resolution (mirrors the Worker's resolveTrackedTrainer) ----
+#
+# Found by comparing this pipeline against automation/keeneland-barn-notes/
+# (built the same day, same repo): a plain exact/case-insensitive match
+# would auto-track a brand-new duplicate trainer for a nickname ("Rusty
+# Arnold"), a different-generation family member filed under the head
+# trainer ("Justin Casse" -> Mark Casse), or a deceased trainer's barn
+# handoff (Christophe -> Miguel Clement) — all real, already-solved cases
+# the Worker's own nickname/successor tables cover. Reading those tables
+# straight out of workers/stable-tour-feed.js (same approach the Barn Notes
+# pipeline uses) keeps this in sync with the live app without a copy to
+# drift out of date.
+
+SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+
+
+def _load_worker_name_rules():
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "workers", "stable-tour-feed.js")
+    src = open(path, encoding="utf-8").read()
+
+    def block(name):
+        m = re.search(r"const " + name + r" = \{(.*?)\n\};", src, re.S)
+        return m.group(1) if m else ""
+
+    aliases = dict(re.findall(r'\b([a-z]+):\s*"([a-z]+)"', block("TRAINER_FIRST_NAME_ALIASES")))
+    successors = dict(re.findall(r'"([a-z]+\|[a-z\-]+)":\s*"([^"]+)"', block("TRAINER_SUCCESSORS")))
+    return aliases, successors
+
+
+ALIASES, SUCCESSORS = _load_worker_name_rules()
+
+
+def _strip(s):
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return re.sub(r"['‘’ʼʻ]", "", s)
+
+
+def _tokens(name):
+    toks = [t.lower().rstrip(".,") for t in _strip(name).split()]
+    while len(toks) > 1 and toks[-1] in SUFFIXES:
+        toks.pop()
+    return toks
+
+
+def _last_key(name):
+    toks = _tokens(name)
+    return toks[-1] if toks else ""
+
+
+def _norm_token(tok):
+    t = tok.lower().rstrip(".")
+    return ALIASES.get(t, t)
+
+
 def resolve_name(candidate, tracked_names):
-    """Exact match first, then case-insensitive — same convention as the Byk
-    pipeline's resolve_trainer_name."""
+    """Exact match first, then alias/successor-aware token matching (trainer
+    successions only apply when the roster being checked is trainers —
+    harmless no-op for jockeys since SUCCESSORS never matches a jockey
+    surname in practice), falling back to plain case-insensitive match."""
     if candidate in tracked_names:
         return candidate
+    toks = _tokens(candidate)
+    if toks:
+        target = SUCCESSORS.get(f"{_norm_token(toks[0])}|{toks[-1]}")
+        if target and target in tracked_names:
+            return target
+        last = toks[-1]
+        candidates = [t for t in tracked_names if _last_key(t) == last]
+        if len(candidates) == 1 and len(toks) < 2:
+            return candidates[0]
+        if len(toks) >= 2:
+            want = _norm_token(toks[0])
+            hits = [t for t in candidates if any(_norm_token(x) == want for x in _strip(t).split())]
+            if len(hits) == 1:
+                return hits[0]
     lowered = {t.lower(): t for t in tracked_names}
     return lowered.get(candidate.lower())
 
