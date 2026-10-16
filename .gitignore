@@ -17,3 +17,9 @@ automation/kentucky-hbpa/venv/
 .wrangler/
 automation/keeneland-barn-notes/tmp/
 automation/keeneland-barn-notes/__pycache__/
+automation/nyra-broadcast-quotes/credentials/
+automation/nyra-broadcast-quotes/logs/
+automation/nyra-broadcast-quotes/tmp/
+automation/nyra-broadcast-quotes/.env
+automation/nyra-broadcast-quotes/venv/
+automation/nyra-broadcast-quotes/__pycache__/

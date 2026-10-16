@@ -1,0 +1,63 @@
+name: NYRA Broadcast — Maggie's paddock notes & interviews
+
+on:
+  schedule:
+    # 03:10 UTC = 11:10pm America/New_York during EDT (10:10pm during EST) —
+    # well after the day's "America's Day at the Races" broadcast has aired
+    # and its VOD has posted to the channel's streams tab. Only one new
+    # broadcast exists per day, so (unlike the twice-daily Kentucky HBPA
+    # pipeline) once daily is enough.
+    - cron: "10 3 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: nyra-broadcast-quotes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    # Much longer than the other two pipelines' 90 min — this downloads and
+    # transcribes a 4.5-6 hour broadcast (vs. short clips/PDFs), confirmed
+    # locally to take a real while just to download the audio alone.
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: automation/nyra-broadcast-quotes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/processed_video_ids.json state/dropped_quotes.json
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "NYRA Broadcast quote pipeline: update processed-video state [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            sleep 5
+          done
+          exit 1
