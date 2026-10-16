@@ -17,7 +17,7 @@ STATE_DIR = os.path.join(HERE, "state")
 PROCESSED_PDFS_PATH = os.path.join(STATE_DIR, "processed_pdfs.json")
 TMP_DIR = os.path.join(HERE, "tmp")
 
-ANTHROPIC_MODEL = "claude-opus-5-5"
+ANTHROPIC_MODEL = "claude-sonnet-5"
 
 # Set DRY_RUN=1 to print what would be saved without writing anything or
 # marking PDFs processed (the workflow's manual-run input sets this).
