@@ -33,6 +33,15 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
 
+      # yt-dlp needs a JS runtime to solve YouTube's "n" signature challenge
+      # and resolve playable format URLs — confirmed real 2026-10-16 (GitHub's
+      # bare runner has none, so every download failed with "n challenge
+      # solving failed... The page needs to be reloaded" even with valid
+      # cookies). Deno is the runtime yt-dlp's own warning names.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
