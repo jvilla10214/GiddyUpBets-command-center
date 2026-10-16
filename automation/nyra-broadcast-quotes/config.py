@@ -53,6 +53,20 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 YTDLP_BIN = os.environ.get("YTDLP_BIN", "yt-dlp")
 
+# YouTube bot-walls GitHub Actions' shared runner IPs ("Sign in to confirm
+# you're not a bot") — confirmed real 2026-10-16 by triggering this
+# pipeline's own workflow and watching yt-dlp fail with exactly that error,
+# despite working fine from a local/home IP. The fix is real cookies from a
+# logged-in YouTube session (a separate account from anything the user
+# cares about, per that day's decision) — the workflow writes the
+# YOUTUBE_COOKIES secret to a file and points this at it; empty/unset
+# locally, where a home IP doesn't need it.
+YTDLP_COOKIES_PATH = os.environ.get("YTDLP_COOKIES_PATH", "")
+
+
+def ytdlp_cookie_args():
+    return ["--cookies", YTDLP_COOKIES_PATH] if YTDLP_COOKIES_PATH else []
+
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 

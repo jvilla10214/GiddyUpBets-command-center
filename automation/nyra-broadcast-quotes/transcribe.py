@@ -28,6 +28,7 @@ def download_audio(video_id, work_dir):
     _run([
         config.YTDLP_BIN,
         "--socket-timeout", "20",
+        *config.ytdlp_cookie_args(),
         "-f", "bestaudio",
         "-x", "--audio-format", "m4a",
         "-o", out_template,
