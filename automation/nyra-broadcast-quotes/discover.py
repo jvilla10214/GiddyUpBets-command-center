@@ -30,7 +30,7 @@ def fetch_streams(playlist_end=20):
     cmd = [
         config.YTDLP_BIN,
         "--socket-timeout", "20",
-        *config.ytdlp_cookie_args(),
+        *config.ytdlp_auth_args(),
         "--flat-playlist",
         "--playlist-end", str(playlist_end),
         "-j",
@@ -80,7 +80,7 @@ def get_upload_date(video_id):
     cmd = [
         config.YTDLP_BIN,
         "--socket-timeout", "20",
-        *config.ytdlp_cookie_args(),
+        *config.ytdlp_auth_args(),
         "--print", "%(upload_date)s",
         f"https://www.youtube.com/watch?v={video_id}",
     ]

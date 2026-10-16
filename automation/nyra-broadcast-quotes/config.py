@@ -63,9 +63,22 @@ YTDLP_BIN = os.environ.get("YTDLP_BIN", "yt-dlp")
 # locally, where a home IP doesn't need it.
 YTDLP_COOKIES_PATH = os.environ.get("YTDLP_COOKIES_PATH", "")
 
+# Even with cookies and a JS runtime (Deno, installed in the workflow)
+# present, yt-dlp's newer challenge-solver system won't actually fetch/run
+# its JS solver component without this explicit opt-in — confirmed real
+# 2026-10-16 on the sibling Kentucky HBPA pipeline (every download failed
+# with "n challenge solving failed... The page needs to be reloaded" until
+# this flag was added). This is yt-dlp's own documented, maintained solver
+# component (not a random third-party script) and its own "(recommended)"
+# option for this exact warning, not a bot-detection workaround.
+YTDLP_REMOTE_COMPONENTS_ARGS = ["--remote-components", "ejs:github"]
 
-def ytdlp_cookie_args():
-    return ["--cookies", YTDLP_COOKIES_PATH] if YTDLP_COOKIES_PATH else []
+
+def ytdlp_auth_args():
+    args = list(YTDLP_REMOTE_COMPONENTS_ARGS)
+    if YTDLP_COOKIES_PATH:
+        args += ["--cookies", YTDLP_COOKIES_PATH]
+    return args
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
