@@ -3338,7 +3338,17 @@ const RACE_RECAP_DOC_EXPORT_URL = "https://docs.google.com/document/d/1mp4oK11Um
 // real risk, never yet hit in practice, flagged 2026-09-20). Capture group
 // indices shifted: 1 = track label (undefined when a section has no
 // prefix), 2 = month, 3 = day.
-const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:([A-Za-z][A-Za-z .]*[A-Za-z])\s*[-–—]\s*)?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
+// Second lead-in form (added 2026-10-17): "TrackName M/D/YY" with just a
+// space, no dash — confirmed real, the doc switched to "Belmont 10/14/26"
+// style headers and every date from then on silently stopped being a
+// section at all (each one's races got swallowed into the 10/11 section
+// above it, last-occurrence-wins overwriting 10/11's real recaps). The
+// no-dash form REQUIRES the full year ("/26") via lookahead, because a
+// bare "word M/D" at a line start is exactly what odds look like in this
+// doc's prose ("Bet at 3/1 ..."); a 3-part date essentially never is.
+// Capture groups now: 1 = dash-form label, 2 = space-form label (at most
+// one of them is set), 3 = month, 4 = day.
+const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:([A-Za-z][A-Za-z .]*[A-Za-z])\s*[-–—]\s*|([A-Za-z][A-Za-z .]*[A-Za-z])[ \t]+(?=\d{1,2}\/\d{1,2}\/\d{2,4}(?!\d)))?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
 
 // Race marker: "R#" at the START of its own line, optionally followed —
 // still on that SAME line only — by "(...conditions...)" and/or a —/:
@@ -3373,14 +3383,33 @@ function cleanRaceRecapDocText(raw) {
     .join("\n\n");
 }
 
+// A track name alone on the first non-blank line UNDER a bare date header
+// counts as that section's label too (added 2026-10-17) — confirmed real,
+// the doc's 10/9, 10/10 and 10/11 sections are all "10/9/26" then
+// "Belmont" on its own line, so the auto-sync skipped them as unlabeled.
+// Only taken when the whole line is letters/spaces AND resolves to exactly
+// one tracked track (resolveRaceRecapTrackId), so it's reading a label the
+// user actually wrote, never guessing one — a "Card Notes:" or prose line
+// there just leaves the section unlabeled, same as before.
+function findRaceRecapNextLineTrackLabel(body) {
+  const lines = body.replace(/\r/g, "").split("\n").slice(1);
+  const next = (lines.find((l) => l.trim()) || "").trim();
+  if (!/^[A-Za-z][A-Za-z .]{0,30}$/.test(next)) return null;
+  return resolveRaceRecapTrackId(next) ? next : null;
+}
+
 function findRaceRecapDateSections(docText) {
   const matches = [...docText.matchAll(RACE_RECAP_DATE_MARKER)];
-  return matches.map((m, i) => ({
-    trackLabel: m[1] || null, // null (not "") when the heading had no "TrackName - " prefix at all
-    month: Number(m[2]),
-    day: Number(m[3]),
-    body: docText.slice(m.index, i + 1 < matches.length ? matches[i + 1].index : docText.length),
-  }));
+  return matches.map((m, i) => {
+    const body = docText.slice(m.index, i + 1 < matches.length ? matches[i + 1].index : docText.length);
+    return {
+      // null (not "") when the heading had no track label at all
+      trackLabel: m[1] || m[2] || findRaceRecapNextLineTrackLabel(body) || null,
+      month: Number(m[3]),
+      day: Number(m[4]),
+      body,
+    };
+  });
 }
 
 // Matches a doc section's captured track label ("Bel", "SA", "Woodbine",
