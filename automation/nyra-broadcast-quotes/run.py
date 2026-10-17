@@ -37,6 +37,34 @@ def save_dropped_quotes(dropped):
         json.dump(dropped, f, indent=2)
 
 
+def record_unparsed(dropped_list, video, label, lines):
+    """A line Claude returned that didn't match BULLET_RE has no
+    timestamp/horse to key on (unlike record_dropped's entries), so it's
+    keyed by position in this run's unparsed list instead. Without this, a
+    real parse-format failure (e.g. the 2026-10-17 run: 13/13 lines unparsed)
+    only ever showed up as a count in ephemeral GitHub Actions logs — never
+    the actual text — making it unrecoverable after the fact."""
+    for i, line in enumerate(lines):
+        key = f"{video['id']}|unparsed|{label}|{i}"
+        if any(d["key"] == key for d in dropped_list):
+            continue
+        dropped_list.append({
+            "key": key,
+            "reason": "unparsed_extraction",
+            "video": video["title"],
+            "videoId": video["id"],
+            "videoDate": video.get("upload_date", ""),
+            "horse": "",
+            "speaker": "",
+            "role": "",
+            "content": line,
+            "timestamp": "",
+            "error": None,
+            "foundAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "reviewed": False,
+        })
+
+
 def record_dropped(dropped_list, video, reason, entry, error=None):
     key = f"{video['id']}|{entry.get('timestamp', '')}|{entry.get('horse', '')}"
     if any(d["key"] == key for d in dropped_list):
@@ -71,8 +99,10 @@ def run_pass(label, video, dropped_quotes, windows, extract_fn, write_fn):
 
     result = extract_fn(windows)
     log(f"  extracting {label}: {len(result['entries'])} entries, {len(result['unparsed'])} unparsed")
+    if result["unparsed"]:
+        record_unparsed(dropped_quotes, video, label, result["unparsed"])
     if not result["entries"]:
-        return {"entries": 0}
+        return {"entries": 0, "unparsed": result["unparsed"]}
 
     write_result = write_fn(video, result["entries"])
     log(
