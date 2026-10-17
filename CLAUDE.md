@@ -58,8 +58,8 @@ comment documents one feature/route.
     explicitly-labeled sections, e.g. "Belmont - 9/19", get auto-synced — an unlabeled section is
     deliberately skipped, not guessed — but no longer silently: anything that doesn't sync within the
     last 14 days (no/unknown track label, a race number repeated in one day = a missed date header,
-    no saved race day by the next day, doc fetch failure) is emailed once per distinct problem, see
-    `alertRecapSyncIssues()`); (2) the stable-mail "day of draw" check — sends a horse's
+    no saved race day by the next day, doc fetch failure) is listed as a warning at the top of the
+    Race Recaps page — NOT emailed, user explicitly declined that — see `recordRecapSyncIssues()`); (2) the stable-mail "day of draw" check — sends a horse's
     digest the moment its card's entries are drawn, same day, instead of waiting for the once-daily
     7am check above (same dedup key, so whichever reaches a horse first is the real send). Only
     runs 6am-10pm ET — a real midnight send was confirmed 2026-10-11 (the date rollover itself

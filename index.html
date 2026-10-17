@@ -2487,6 +2487,13 @@
   .archive-race-header strong{ color: var(--parchment); }
   .archive-empty{ color: var(--parchment-dim); font-size: 13px; font-style: italic; }
   .archive-month-summary:empty{ display: none; }
+  .archive-sync-issues{
+    border: 1px solid var(--tote-amber); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px;
+    font-size: 13px; line-height: 1.45; color: var(--parchment);
+  }
+  .archive-sync-issues-title{ font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.05em; color: var(--tote-amber); margin-bottom: 6px; }
+  .archive-sync-issues ul{ margin: 0; padding-left: 18px; }
+  .archive-sync-issues li + li{ margin-top: 6px; }
   .archive-month-summary-grid{
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -3468,6 +3475,7 @@
         <input type="text" id="archiveSearchInput" placeholder="Search horse, trainer, or jockey…" aria-label="Search saved race days">
         <span class="log-note" id="archiveStatus">Loading saved race days…</span>
       </div>
+      <div class="archive-sync-issues" id="archiveSyncIssues" hidden></div>
       <div class="archive-month-summary" id="archiveMonthSummary"></div>
       <div class="stable-trainer-list" id="archiveList"></div>
       <div class="info-disclosure" id="archiveInfo">
@@ -7276,6 +7284,29 @@
     archiveDates = dates;
     archiveDatesLoaded = true;
     renderRaceDayArchive();
+    loadRecapSyncIssues();
+  }
+
+  // Recaps in the shared Google Doc that the Worker's 30-min auto-sync
+  // couldn't file (no/unknown track label, a missed date header, no saved
+  // race day to attach to, ...) — see recordRecapSyncIssues() in the
+  // Worker. Shown for every track, not just the active one: the doc is
+  // shared, and an unlabeled day can't be tied to a track at all.
+  async function loadRecapSyncIssues(){
+    const box = $("archiveSyncIssues");
+    if (!box) return;
+    let issues = [];
+    try{
+      const data = await stableApiGet("/raceday/recap/sync-issues");
+      issues = Array.isArray(data.issues) ? data.issues : [];
+    } catch(err){
+      console.error("Race Recap sync-issues fetch failed", err);
+    }
+    box.hidden = !issues.length;
+    box.innerHTML = issues.length ? `
+      <div class="archive-sync-issues-title">⚠ ${issues.length} RECAP${issues.length === 1 ? "" : "S"} NOT SYNCED FROM THE DOC</div>
+      <ul>${issues.map(i => `<li>${escapeHtml(i.message)}</li>`).join("")}</ul>
+    ` : "";
   }
 
   // One-line collapsed-card summary — today's high + dirt condition + dirt
