@@ -3456,9 +3456,18 @@ function parseRaceRecapsFromSection(sectionBody) {
     // one real accidental duplicate paste (8/30's Race 1), and the later
     // copy is reliably the complete/corrected one, matching how a person
     // reading top-to-bottom would resolve it themselves.
-    if (cleaned) recaps[Number(m[1])] = cleaned;
+    if (cleaned && !isUnfilledRecapTemplate(cleaned)) recaps[Number(m[1])] = cleaned;
   }
   return recaps;
+}
+
+// The doc's per-race template is pasted in ahead of race day as bare labels
+// ("PaceProj:" / "$$$:") and filled in later — confirmed real (2026-10-17),
+// an unfilled one was being stored as the literal recap "PaceProj: $$$:"
+// and would have shown in entry-alert emails as if it were a real recap.
+// Text that is nothing but short "Label:" tokens counts as no recap yet.
+function isUnfilledRecapTemplate(text) {
+  return /^(?:[^\s:]{1,15}:\s*)+$/.test((text || "").trim());
 }
 
 // Never clears a race's recap just because the doc section for it came back
@@ -3600,29 +3609,69 @@ function resolveRaceRecapYear(month, day, now) {
 // actually changed, burning KV write quota for nothing (this project has a
 // real prior KV write-quota incident on record).
 async function autoResyncRaceRecapsFromDoc(env) {
+  const issues = [];
   const docRes = await fetch(RACE_RECAP_DOC_EXPORT_URL);
-  if (!docRes.ok) return { available: false, error: `Doc fetch failed: ${docRes.status}` };
+  if (!docRes.ok) {
+    const { year, month, day } = nyNowParts();
+    issues.push({ key: `docfetch:${year}-${month}-${day}`, message: `Couldn't download the Race Recap Google Doc (HTTP ${docRes.status}) — nothing synced this run. If this keeps happening, check the doc is still shared "anyone with the link can view."` });
+    const alert = await alertRecapSyncIssues(env, issues);
+    return { available: false, error: `Doc fetch failed: ${docRes.status}`, issues, ...alert };
+  }
   const docText = await docRes.text();
   const sections = findRaceRecapDateSections(docText);
   const now = new Date();
+  const { year: nyY, month: nyM, day: nyD } = nyNowParts();
+  const nyToday = Date.UTC(nyY, nyM - 1, nyD);
 
   let skippedUnlabeled = 0, skippedNoContent = 0, skippedUnchanged = 0, updated = 0, noArchiveYet = 0;
   for (const section of sections) {
-    const trackId = resolveRaceRecapTrackId(section.trackLabel);
-    if (!trackId) { skippedUnlabeled++; continue; }
-
     const year = resolveRaceRecapYear(section.month, section.day, now);
     const date = `${year}-${String(section.month).padStart(2, "0")}-${String(section.day).padStart(2, "0")}`;
+    const ageDays = Math.round((nyToday - Date.UTC(year, section.month - 1, section.day)) / 86400000);
+    const inAlertWindow = ageDays <= RECAP_SYNC_ALERT_WINDOW_DAYS;
+    const header = section.body.split(/\r?\n/)[0].trim().slice(0, 60);
+
+    const repeats = findRepeatedRaceNumbers(section.body);
+    if (repeats.length && inAlertWindow) {
+      issues.push({ key: `repeat:${date}:${section.trackLabel || ""}:${repeats.join(",")}`, message: `"${header}" has ${repeats.map((n) => `R${n}`).join(", ")} more than once. That usually means the next day's date header wasn't recognized and its races got merged into this day — write the header like "Belmont - 10/9/26" or "Belmont 10/9/26" on its own line.` });
+    }
+
+    const trackId = resolveRaceRecapTrackId(section.trackLabel);
+    if (!trackId) {
+      skippedUnlabeled++;
+      if (inAlertWindow) {
+        issues.push(section.trackLabel
+          ? { key: `badlabel:${date}:${section.trackLabel}`, message: `"${header}": "${section.trackLabel}" isn't a track name the sync recognizes, so this day was skipped. Use the track's name (e.g. "Belmont", "Keeneland").` }
+          : { key: `unlabeled:${date}`, message: `"${header}" has no track name, so the auto-sync skipped it. Add the track to the header, e.g. "Belmont - ${section.month}/${section.day}/${String(year).slice(2)}" (or put the track name alone on the line right under the date).` });
+      }
+      continue;
+    }
 
     const recapsByRace = parseRaceRecapsFromSection(section.body);
     const fullCardRecap = parseFullCardRecapFromSection(section.body);
-    if (!Object.keys(recapsByRace).length && !fullCardRecap) { skippedNoContent++; continue; }
+    const hasContent = Object.keys(recapsByRace).length > 0 || !!fullCardRecap;
 
     const key = racedayKvKey(trackId, date);
     const existingRaw = await env.STABLE_KV.get(key);
-    if (!existingRaw) { noArchiveYet++; continue; } // same as upsertRaceRecapsBulk()'s own "nothing to attach this to yet" case
+    if (!existingRaw) {
+      if (!hasContent) { skippedNoContent++; continue; }
+      noArchiveYet++; // same as upsertRaceRecapsBulk()'s own "nothing to attach this to yet" case
+      // Same-day is normal (the card may not have been saved yet) and gets
+      // retried every 30 min; only a day that's STILL missing tomorrow is a
+      // real gap worth flagging.
+      if (inAlertWindow && ageDays >= 1) {
+        issues.push({ key: `noarchive:${trackId}:${date}`, message: `${ENTRIES_TRACK_LABEL[trackId] || trackId} ${section.month}/${section.day} has recaps in the doc, but that race day was never saved in the command center, so there's nothing to attach them to. Open that day's card in the command center so it saves — the next sync attaches the recaps.` });
+      }
+      continue;
+    }
     const existing = JSON.parse(existingRaw);
     const existingRecaps = existing.raceRecaps || {};
+    // Clear any unfilled template text an earlier sync already stored —
+    // upsertRaceRecapsBulk() only clears a race it's explicitly passed "".
+    Object.entries(existingRecaps).forEach(([raceNum, text]) => {
+      if (isUnfilledRecapTemplate(text) && !(raceNum in recapsByRace)) recapsByRace[raceNum] = "";
+    });
+    if (!Object.keys(recapsByRace).length && !fullCardRecap) { skippedNoContent++; continue; }
     const sameRaceRecaps = Object.keys(recapsByRace).length === Object.keys(existingRecaps).length
       && Object.entries(recapsByRace).every(([raceNum, text]) => (existingRecaps[raceNum] || "").trim() === text.trim());
     const sameFullCard = (fullCardRecap || "").trim() === (existing.fullCardRecap || "").trim();
@@ -3630,9 +3679,74 @@ async function autoResyncRaceRecapsFromDoc(env) {
 
     const result = await upsertRaceRecapsBulk(env, trackId, date, recapsByRace, { fullCardRecap: fullCardRecap || undefined });
     if (result.available) updated++;
+    else issues.push({ key: `upsertfail:${trackId}:${date}`, message: `${ENTRIES_TRACK_LABEL[trackId] || trackId} ${section.month}/${section.day} failed to save: ${result.error || "unknown error"}` });
   }
 
-  return { available: true, sectionsFound: sections.length, updated, skippedUnlabeled, skippedNoContent, skippedUnchanged, noArchiveYet };
+  const alert = await alertRecapSyncIssues(env, issues);
+  return { available: true, sectionsFound: sections.length, updated, skippedUnlabeled, skippedNoContent, skippedUnchanged, noArchiveYet, issues, ...alert };
+}
+
+// Every way a recap can fail to reach the command center (and so the
+// entry-alert emails) used to be a silent counter in this job's return
+// value — confirmed real (2026-10-17): a header-format change in the doc
+// ("Belmont 10/14/26", no dash) and a track name moved to the line under
+// the date left 10 days of recaps unsynced for over a week with nothing
+// flagging it. The user's explicit ask: none can fall through the cracks.
+// So each such case is now an "issue" emailed to NOTIFY_EMAILS — once per
+// distinct issue (the alerted set lives in KV, rewritten only when it
+// changes, so the 30-min cadence costs no extra writes on a quiet run). An
+// issue that clears drops out of the set, so if it ever comes back it
+// alerts again. Only days within RECAP_SYNC_ALERT_WINDOW_DAYS are checked,
+// so the old, already-hand-synced unlabeled Saratoga sections (8/21-9/7)
+// and 8/30's known duplicate R1 paste don't alert forever.
+const RECAP_SYNC_ALERT_WINDOW_DAYS = 14;
+const RECAP_SYNC_ALERTED_KV_KEY = "recapsync:alerted";
+
+// A race number showing up twice in one day is the tell-tale sign of a
+// missed date header (the next day's R1, R2... land in this day's section).
+function findRepeatedRaceNumbers(sectionBody) {
+  const seen = new Set(), repeats = new Set();
+  for (const m of sectionBody.matchAll(RACE_RECAP_RACE_MARKER)) {
+    const n = Number(m[1]);
+    if (seen.has(n)) repeats.add(n);
+    seen.add(n);
+  }
+  return [...repeats].sort((a, b) => a - b);
+}
+
+async function alertRecapSyncIssues(env, issues) {
+  const alerted = JSON.parse((await env.STABLE_KV.get(RECAP_SYNC_ALERTED_KV_KEY)) || "{}");
+  const fresh = issues.filter((i) => !alerted[i.key]);
+  const nowIso = new Date().toISOString();
+  const next = {};
+  issues.forEach((i) => { next[i.key] = alerted[i.key] || nowIso; });
+
+  let alertsSent = 0, alertError = null;
+  if (fresh.length) {
+    try {
+      const html = `<div style="font-family:Arial,Helvetica,sans-serif; font-size:14px; color:#222;">
+        <p><strong>Race Recap sync needs attention.</strong> These recaps from the Race Recap doc did NOT make it into the command center (or the entry-alert emails):</p>
+        <ul>${fresh.map((i) => `<li style="margin-bottom:8px;">${escapeHtmlForEmail(i.message)}</li>`).join("")}</ul>
+        <p style="color:#666; font-size:12px;">After fixing the doc, it re-syncs within 30 minutes (or run /debug-run-recap-sync). You'll get one email per new problem, not one every run.</p>
+      </div>`;
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: RESEND_FROM_EMAIL, to: NOTIFY_EMAILS, subject: `Race Recap sync: ${fresh.length} recap day${fresh.length === 1 ? "" : "s"} not synced`, html }),
+      });
+      if (!res.ok) throw new Error(`Resend HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 300)}`);
+      alertsSent = fresh.length;
+    } catch (err) {
+      // Leave the failed ones out of the alerted set so the next run retries the email.
+      alertError = err.message;
+      fresh.forEach((i) => { delete next[i.key]; });
+    }
+  }
+
+  const changed = Object.keys(next).length !== Object.keys(alerted).length
+    || Object.keys(next).some((k) => !alerted[k]);
+  if (changed) await env.STABLE_KV.put(RECAP_SYNC_ALERTED_KV_KEY, JSON.stringify(next));
+  return { alertsSent, alertError };
 }
 
 function trackConditionsKvKey(track, date) {
