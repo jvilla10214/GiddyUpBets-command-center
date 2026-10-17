@@ -3322,39 +3322,7 @@ async function upsertRaceRecap(env, track, date, raceNumber, recap) {
 // client-supplied, so this route can't be pointed at an arbitrary URL.
 const RACE_RECAP_DOC_EXPORT_URL = "https://docs.google.com/document/d/1mp4oK11UmuYYt0cnc1f9E7q8MTfsHe3FSwkKQHF_KMU/export?format=txt";
 
-// Date-section boundary: a line starting with bare "M/D" (1-2 digit month,
-// 1-2 digit day — a trailing "/YY" is tolerated too, e.g. "9/12/26", since
-// (?!\d) only rejects a THIRD immediately-following digit group, not a
-// "/" before one), optionally prefixed with "Recap " (as in "Recap 9/3",
-// "9/4 Recap:") or a "TrackName - " lead-in (as in "Woodbine - 9/12/26",
-// "Belmont - 9/19/26" — confirmed real, 2026-09-20: once more than one
-// track's recaps share this doc, a bare date alone no longer says which
-// track it's for). Deliberately NOT a fully loose match — a mid-paragraph
-// restatement like "SAR 8/30 — fast dirt..." doesn't have a "-"/"–"/"—"
-// directly BEFORE the date (the dash there comes AFTER "8/30", not before
-// it), so it still never gets mistaken for a new section; verified this
-// change against the doc's own full real text with zero new false
-// positives before shipping (13 sections in, 13 out, all sane).
-// (?!\d) instead of a trailing \b because real entries in this doc run the
-// date straight into the next word with no separator at all ("8/21Card:").
-// The track-name lead-in is now a CAPTURING group (added 2026-09-29) — it
-// was matched-and-discarded before, which is exactly why
-// resyncRaceRecapsFromDoc() could only ever pick a section by date, with no
-// way to tell two same-day sections for different tracks apart (confirmed
-// real risk, never yet hit in practice, flagged 2026-09-20). Capture group
-// indices shifted: 1 = track label (undefined when a section has no
-// prefix), 2 = month, 3 = day.
-// Second lead-in form (added 2026-10-17): "TrackName M/D/YY" with just a
-// space, no dash — confirmed real, the doc switched to "Belmont 10/14/26"
-// style headers and every date from then on silently stopped being a
-// section at all (each one's races got swallowed into the 10/11 section
-// above it, last-occurrence-wins overwriting 10/11's real recaps). The
-// no-dash form REQUIRES the full year ("/26") via lookahead, because a
-// bare "word M/D" at a line start is exactly what odds look like in this
-// doc's prose ("Bet at 3/1 ..."); a 3-part date essentially never is.
-// Capture groups now: 1 = dash-form label, 2 = space-form label (at most
-// one of them is set), 3 = month, 4 = day.
-const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:([A-Za-z][A-Za-z .]*[A-Za-z])\s*[-–—]\s*|([A-Za-z][A-Za-z .]*[A-Za-z])[ \t]+(?=\d{1,2}\/\d{1,2}\/\d{2,4}(?!\d)))?(\d{1,2})\/(\d{1,2})(?!\d)/gm;
+// Date-section boundaries: see parseRaceRecapHeaderLine() / findRaceRecapDateSections().
 
 // Race marker: "R#" at the START of its own line, optionally followed —
 // still on that SAME line only — by "(...conditions...)" and/or a —/:
@@ -3372,7 +3340,13 @@ const RACE_RECAP_DATE_MARKER = /^(?:Recap\s+)?(?:([A-Za-z][A-Za-z .]*[A-Za-z])\s
 // the race before it. A genuinely empty stub (nothing at all before the
 // next marker) still safely produces no recap — now because its captured
 // content comes back empty, not because the marker itself failed to match.
-const RACE_RECAP_RACE_MARKER = /^R(\d{1,2})\b[ \t]*(?:\([^)]*\))?[ \t]*(?:[—:][ \t]*)?/gm;
+// Widened 2026-10-17 (same "tolerate small format differences" ask as the
+// date headers): "R1", "R 1", "R#1", "r1", and "Race 1" / "RACE #1" — the
+// spelled-out form only when nothing but a separator/conditions follows on
+// that line, so a note that starts "Race 3 winner came back..." stays text.
+// A line that lists several races ("R2 R6 R9 were on OUTER TURF", real,
+// 9/3/2026) is a note too, not R2's start.
+const RACE_RECAP_RACE_MARKER = /^[ \t]*(?:R[ \t]*#?[ \t]*(\d{1,2})\b(?![ \t]*[,&/]?[ \t]*R[ \t]*\d)|Race[ \t]*#?[ \t]*(\d{1,2})\b(?=[ \t]*(?:$|[(:—–\-.])))[ \t]*(?:\([^)]*\))?[ \t]*(?:[—–:\-.][ \t]*)?/gim;
 
 // Collapses the doc's hard mid-sentence line-wraps into spaces while still
 // preserving a genuine blank-line paragraph break as one — verified
@@ -3404,15 +3378,118 @@ function findRaceRecapNextLineTrackLabel(body) {
   return resolveRaceRecapTrackId(next) ? next : null;
 }
 
+// Line-by-line date-header reader (rewritten 2026-10-17 — the user's ask:
+// "sometimes we just format things similar but a tad different," so this
+// has to tolerate variations instead of matching one or two exact header
+// styles). Confirmed real header styles from the doc itself, all handled:
+//   "8/21/26"  "9/20/26 Sunday"  "8/28 — fast dirt / firm turf, dry"
+//   "Woodbine - 9/12/26"  "Belmont 10/14/26"  "Belmont 9/24 - Thursday"
+//   "Belmont Park 10/1 - Thursday"  "Belmont 10/7"  "Recap 9/3"
+//   "10/9/26" with "Belmont" alone on the next line
+// plus the obvious near-variants ("Belmont: 10/9/26", "Sat 10/9/26",
+// "10/9/26 Belmont", "Belmont 10-9-26", "Belmont Oct 9", ...).
+// The hard part is NOT matching notes that just mention a date or odds —
+// confirmed real lines from the doc that must stay body text: "wired at
+// 7/1;", "Chad Brown had 3/5 fav", "DD 10/9 - Horses that were...", and
+// same-day restatements "SAR 8/30 — fast dirt..." / "WO 9/12 —
+// CLIFFNOTES". So: words before the date only count if they're a track
+// name or weekday (or the old "Track - " dash form, or the date has a
+// year); a bare yearless date that would go BACKWARDS from the previous
+// section is odds, not a header (the doc runs oldest to newest); and a
+// header for the same date as the section it's in, for the same (or no)
+// track, is a restatement, not a new section.
+const RECAP_WEEKDAY_WORD = /\b(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b\.?/gi;
+const RECAP_MONTH_NUMBER = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+const RACE_RECAP_HEADER_LINE = new RegExp(
+  String.raw`^[ \t]*(?:([A-Za-z][A-Za-z .'’&]{0,40}?)[ \t]*([-–—:,|]|(?=[ \t]))[ \t]*)?` +
+  String.raw`(?:(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?![\d/])` +
+  String.raw`|(\d{1,2})[-.](\d{1,2})[-.](\d{2,4})(?!\d)` +
+  String.raw`|(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?[ \t]+(\d{1,2})(?:st|nd|rd|th)?\b(?![\/\-.]\d)(?:,?[ \t]+(\d{4}))?)` +
+  String.raw`(.*)$`, "i");
+
+function stripRecapHeaderFiller(text) {
+  return (text || "").replace(RECAP_WEEKDAY_WORD, " ").replace(/\brecap\b/gi, " ")
+    .replace(/[-–—:,|.()]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Track name somewhere in the text AFTER the date ("10/9/26 Belmont") —
+// whole-word, exact name/alias only (no prefix matching like a leading
+// label gets, and no 1-2 letter aliases), since this text can be a
+// conditions blurb ("fast dirt / firm turf, dry") where a loose match
+// would invent a track. Exactly one track or nothing.
+function findTrackNameInRecapHeaderRest(rest) {
+  const words = stripDiacritics(stripRecapHeaderFiller(rest).slice(0, 80)).toLowerCase().split(" ").filter(Boolean);
+  const found = new Set();
+  for (const [trackId, label] of Object.entries(ENTRIES_TRACK_LABEL)) {
+    const names = [stripDiacritics(label).toLowerCase(), ...(RACE_RECAP_TRACK_ALIASES[trackId] || []).filter((a) => a.length > 2)];
+    for (const name of names) {
+      const parts = name.split(" ");
+      for (let i = 0; i + parts.length <= words.length; i++) {
+        if (parts.every((w, j) => words[i + j] === w)) found.add(trackId);
+      }
+    }
+  }
+  return found.size === 1 ? ENTRIES_TRACK_LABEL[[...found][0]] : null;
+}
+
+function parseRaceRecapHeaderLine(line) {
+  const m = RACE_RECAP_HEADER_LINE.exec(line);
+  if (!m) return null;
+  const [, prefixRaw, sep, sm, sd, sy, dm, dd, dy, mon, md, my, rest] = m;
+  const month = sm ? Number(sm) : dm ? Number(dm) : RECAP_MONTH_NUMBER[mon.toLowerCase().slice(0, 4)] || RECAP_MONTH_NUMBER[mon.toLowerCase().slice(0, 3)];
+  const day = Number(sd || dd || md);
+  const hasYear = !!(sy || dy || my);
+  if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) return null;
+  // A spelled-out month at a line start can just be prose ("May 5 got
+  // loose...") — only a header when nothing but filler follows it.
+  if (mon && !hasYear && stripRecapHeaderFiller(rest) && !findTrackNameInRecapHeaderRest(rest)) return null;
+
+  let trackLabel = null;
+  if (prefixRaw) {
+    const prefix = stripRecapHeaderFiller(prefixRaw);
+    const isDash = /[-–—]/.test(sep || "");
+    if (prefix) {
+      if (resolveRaceRecapTrackId(prefix)) trackLabel = prefix;
+      else if (isDash || hasYear) trackLabel = prefix; // the old "Anything - M/D" form, kept as-is; shows as an unknown-label warning
+      else return null; // "wired at 7/1", "DD 10/9 - Horses..." — words that aren't a track, no year: body text
+    }
+  }
+  if (!trackLabel) trackLabel = findTrackNameInRecapHeaderRest(rest);
+  return { trackLabel, month, day, hasYear, year: hasYear ? Number(sy || dy || my) : null };
+}
+
 function findRaceRecapDateSections(docText) {
-  const matches = [...docText.matchAll(RACE_RECAP_DATE_MARKER)];
-  return matches.map((m, i) => {
-    const body = docText.slice(m.index, i + 1 < matches.length ? matches[i + 1].index : docText.length);
+  const now = new Date();
+  const headers = [];
+  let offset = 0;
+  for (const line of docText.split("\n")) {
+    const h = parseRaceRecapHeaderLine(line.replace(/\r$/, "").replace(/^\uFEFF/, ""));
+    if (h) {
+      const prev = headers[headers.length - 1];
+      const year = h.hasYear ? (h.year < 100 ? 2000 + h.year : h.year) : resolveRaceRecapYear(h.month, h.day, now);
+      const sortKey = (y, mo, d) => y * 10000 + mo * 100 + d;
+      if (prev) {
+        const prevKey = sortKey(prev.year, prev.month, prev.day);
+        const thisKey = sortKey(year, h.month, h.day);
+        const sameDay = prev.month === h.month && prev.day === h.day;
+        const prevTrack = resolveRaceRecapTrackId(prev.trackLabel);
+        const thisTrack = resolveRaceRecapTrackId(h.trackLabel);
+        // Same-day restatement inside a section ("SAR 8/30 — fast dirt...").
+        if (sameDay && (!thisTrack || !prevTrack || thisTrack === prevTrack) && !h.hasYear) { offset += line.length + 1; continue; }
+        // Bare yearless date going backwards = odds/notes, not a header.
+        if (!h.hasYear && !h.trackLabel && thisKey < prevKey) { offset += line.length + 1; continue; }
+      }
+      headers.push({ ...h, index: offset, year });
+    }
+    offset += line.length + 1;
+  }
+  return headers.map((h, i) => {
+    const body = docText.slice(h.index, i + 1 < headers.length ? headers[i + 1].index : docText.length);
     return {
       // null (not "") when the heading had no track label at all
-      trackLabel: m[1] || m[2] || findRaceRecapNextLineTrackLabel(body) || null,
-      month: Number(m[3]),
-      day: Number(m[4]),
+      trackLabel: h.trackLabel || findRaceRecapNextLineTrackLabel(body) || null,
+      month: h.month,
+      day: h.day,
       body,
     };
   });
@@ -3440,6 +3517,9 @@ const RACE_RECAP_TRACK_ALIASES = {
   colonialdowns: ["cnl", "colonial"],
   delmar: ["dmr"],
   saratoga: ["sar", "spa"],
+  belmont: ["bel", "big a"],
+  keeneland: ["kee"],
+  woodbine: ["wo"],
 };
 function raceRecapTrackLabelMatches(trackLabel, trackId) {
   if (!trackLabel) return true; // no label on this section — never excludes a match, same backward-compat reasoning as the null-check at the call site
@@ -3458,13 +3538,27 @@ function parseRaceRecapsFromSection(sectionBody) {
     const contentStart = m.index + m[0].length;
     const contentEnd = i + 1 < raceMatches.length ? raceMatches[i + 1].index : sectionBody.length;
     const cleaned = cleanRaceRecapDocText(sectionBody.slice(contentStart, contentEnd));
-    // Last occurrence for a given race number wins — the doc has at least
-    // one real accidental duplicate paste (8/30's Race 1), and the later
-    // copy is reliably the complete/corrected one, matching how a person
-    // reading top-to-bottom would resolve it themselves.
-    if (cleaned && !isUnfilledRecapTemplate(cleaned)) recaps[Number(m[1])] = cleaned;
+    if (!cleaned || isUnfilledRecapTemplate(cleaned)) continue;
+    const raceNumber = Number(m[1] || m[2]);
+    recaps[raceNumber] = mergeRepeatedRaceRecap(recaps[raceNumber], cleaned);
   }
   return recaps;
+}
+
+// Same race number twice in one day. Used to be "last one wins," which was
+// right for 8/30/2026's accidental duplicate paste of R1 but silently threw
+// away real text on 9/30/2026, where R1 and R3 each have short notes first
+// ("R1: MSW 2YO") and the full recap further down. Now: if one copy
+// already contains the other (a duplicate paste, give or take the
+// "(conditions):" lead-in), keep the fuller one; otherwise keep both, in
+// doc order.
+function mergeRepeatedRaceRecap(existing, incoming) {
+  if (!existing) return incoming;
+  const norm = (t) => t.replace(/^\([^)]*\)\s*:?\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const a = norm(existing), b = norm(incoming);
+  if (a.includes(b)) return existing;
+  if (b.includes(a)) return incoming;
+  return `${existing}\n\n${incoming}`;
 }
 
 // The doc's per-race template is pasted in ahead of race day as bare labels
@@ -3497,7 +3591,7 @@ function isUnfilledRecapTemplate(text) {
 // sections, both silently unparsed until this fix).
 const FULL_CARD_RECAP_LABEL = /Full\s*Card\s*Recap\s*:\s*/i;
 const FULL_CARD_RECAP_FALLBACK_LABEL = /Card(?:\s+Notes)?\s*:\s*/gi;
-const FULL_CARD_RECAP_HEADER_LABEL = /^[ \t]*THE CARD[ \t]*$/im;
+const FULL_CARD_RECAP_HEADER_LABEL = /^[ \t]*(?:the[ \t]+|full[ \t]+)?card(?:[ \t]+(?:notes|recap))?[ \t]*:?[ \t]*$/im;
 
 function parseFullCardRecapFromSection(sectionBody) {
   // NOTE: sectionBody.match(RACE_RECAP_RACE_MARKER) here would be a real bug
@@ -3585,7 +3679,7 @@ function resolveRaceRecapTrackId(trackLabel) {
 }
 
 // The doc's own date markers are bare "M/D", no year (see
-// RACE_RECAP_DATE_MARKER's own comment) — fine for a human re-syncing a
+// findRaceRecapDateSections()) — fine for a human re-syncing a
 // specific archived date they already know the year for, but this
 // auto-sync job has no such context. A recap is always written about a
 // race that's already happened, so: assume the current year, unless that
@@ -3636,19 +3730,23 @@ async function autoResyncRaceRecapsFromDoc(env) {
     const ageDays = Math.round((nyToday - Date.UTC(year, section.month - 1, section.day)) / 86400000);
     const inAlertWindow = ageDays <= RECAP_SYNC_ALERT_WINDOW_DAYS;
     const header = section.body.split(/\r?\n/)[0].trim().slice(0, 60);
+    const mdy = `${section.month}/${section.day}/${year}`; // user rule: every date shown as month/day/year
 
-    const repeats = findRepeatedRaceNumbers(section.body);
-    if (repeats.length && inAlertWindow) {
-      issues.push({ key: `repeat:${date}:${section.trackLabel || ""}:${repeats.join(",")}`, message: `"${header}" has ${repeats.map((n) => `R${n}`).join(", ")} more than once. That usually means the next day's date header wasn't recognized and its races got merged into this day — write the header like "Belmont - 10/9/26" or "Belmont 10/9/26" on its own line.` });
+    const restartedAt = findRestartedRaceSequence(section.body);
+    if (restartedAt != null && inAlertWindow) {
+      issues.push({ key: `restart:${date}:${section.trackLabel || ""}`, message: `"${header}": the races start over at R${restartedAt} partway down. Either another day's date header wasn't recognized (give it its own line, e.g. "Belmont 10/9/2026"), or the race template got pasted twice (delete the extra copy).` });
     }
 
     const trackId = resolveRaceRecapTrackId(section.trackLabel);
     if (!trackId) {
       skippedUnlabeled++;
+      // An unlabeled day that's already stored, word for word, on some
+      // track (hand-synced with the Re-sync button) is filed — no warning.
+      if (inAlertWindow && !section.trackLabel && await recapSectionAlreadyStoredSomewhere(env, section, date)) continue;
       if (inAlertWindow) {
         issues.push(section.trackLabel
           ? { key: `badlabel:${date}:${section.trackLabel}`, message: `"${header}": "${section.trackLabel}" isn't a track name the sync recognizes, so this day was skipped. Use the track's name (e.g. "Belmont", "Keeneland").` }
-          : { key: `unlabeled:${date}`, message: `"${header}" has no track name, so the auto-sync skipped it. Add the track to the header, e.g. "Belmont - ${section.month}/${section.day}/${String(year).slice(2)}" (or put the track name alone on the line right under the date).` });
+          : { key: `unlabeled:${date}`, message: `"${header}" has no track name, so the auto-sync skipped it. Add the track to the header, e.g. "Belmont - ${mdy}" (or put the track name alone on the line right under the date).` });
       }
       continue;
     }
@@ -3666,7 +3764,7 @@ async function autoResyncRaceRecapsFromDoc(env) {
       // retried every 30 min; only a day that's STILL missing tomorrow is a
       // real gap worth flagging.
       if (inAlertWindow && ageDays >= 1) {
-        issues.push({ key: `noarchive:${trackId}:${date}`, message: `${ENTRIES_TRACK_LABEL[trackId] || trackId} ${section.month}/${section.day} has recaps in the doc, but that race day was never saved in the command center, so there's nothing to attach them to. Open that day's card in the command center so it saves — the next sync attaches the recaps.` });
+        issues.push({ key: `noarchive:${trackId}:${date}`, message: `${ENTRIES_TRACK_LABEL[trackId] || trackId} ${mdy} has recaps in the doc, but that race day was never saved in the command center, so there's nothing to attach them to. Open that day's card in the command center so it saves — the next sync attaches the recaps.` });
       }
       continue;
     }
@@ -3685,7 +3783,7 @@ async function autoResyncRaceRecapsFromDoc(env) {
 
     const result = await upsertRaceRecapsBulk(env, trackId, date, recapsByRace, { fullCardRecap: fullCardRecap || undefined });
     if (result.available) updated++;
-    else issues.push({ key: `upsertfail:${trackId}:${date}`, message: `${ENTRIES_TRACK_LABEL[trackId] || trackId} ${section.month}/${section.day} failed to save: ${result.error || "unknown error"}` });
+    else issues.push({ key: `upsertfail:${trackId}:${date}`, message: `${ENTRIES_TRACK_LABEL[trackId] || trackId} ${mdy} failed to save: ${result.error || "unknown error"}` });
   }
 
   await recordRecapSyncIssues(env, issues);
@@ -3703,22 +3801,45 @@ async function autoResyncRaceRecapsFromDoc(env) {
 // frontend's Race Recaps page (GET /raceday/recap/sync-issues). Rewritten
 // only when the set of issues changes, so the 30-min cadence costs no
 // extra writes on a quiet run; a fixed issue drops off on the next run.
-// Only days within RECAP_SYNC_ALERT_WINDOW_DAYS are checked, so the old,
-// already-hand-synced unlabeled Saratoga sections (8/21-9/7) and 8/30's
-// known duplicate R1 paste don't show forever.
-const RECAP_SYNC_ALERT_WINDOW_DAYS = 14;
+// Only days within RECAP_SYNC_ALERT_WINDOW_DAYS are checked (was 14 —
+// too short, it hid 9/20/2026 and 9/30/2026 holding other days' races),
+// and an unlabeled day already stored word-for-word on some track (the
+// hand-synced Saratoga 8/21/2026-9/7/2026 sections) doesn't warn.
+const RECAP_SYNC_ALERT_WINDOW_DAYS = 60;
+
+async function recapSectionAlreadyStoredSomewhere(env, section, date) {
+  const recapsByRace = parseRaceRecapsFromSection(section.body);
+  const fullCardRecap = parseFullCardRecapFromSection(section.body);
+  for (const trackId of Object.keys(ENTRIES_TRACK_LABEL)) {
+    const raw = await env.STABLE_KV.get(racedayKvKey(trackId, date));
+    if (!raw) continue;
+    const rec = JSON.parse(raw);
+    const stored = rec.raceRecaps || {};
+    const same = Object.keys(recapsByRace).length === Object.keys(stored).length
+      && Object.entries(recapsByRace).every(([n, t]) => (stored[n] || "").trim() === t.trim())
+      && (fullCardRecap || "").trim() === (rec.fullCardRecap || "").trim();
+    if (same) return true;
+  }
+  return false;
+}
 const RECAP_SYNC_ISSUES_KV_KEY = "recapsync:issues";
 
-// A race number showing up twice in one day is the tell-tale sign of a
-// missed date header (the next day's R1, R2... land in this day's section).
-function findRepeatedRaceNumbers(sectionBody) {
-  const seen = new Set(), repeats = new Set();
-  for (const m of sectionBody.matchAll(RACE_RECAP_RACE_MARKER)) {
-    const n = Number(m[1]);
-    if (seen.has(n)) repeats.add(n);
-    seen.add(n);
+// Race numbers starting over partway through a day (R1...R9, then R1,
+// R2, R3... again) is the tell-tale sign of a missed date header — the next
+// day's races landing in this day's section — or a template pasted twice.
+// A single race written twice (notes, then the recap) is normal in this
+// doc and doesn't count. Returns the race number it restarted at, or null.
+function findRestartedRaceSequence(sectionBody) {
+  const nums = [...sectionBody.matchAll(RACE_RECAP_RACE_MARKER)].map((m) => Number(m[1] || m[2]));
+  let max = 0;
+  for (let i = 0; i < nums.length; i++) {
+    if (max >= 3 && nums[i] <= 2) {
+      const run = nums.slice(i, i + 3);
+      if (run.length === 3 && run[1] > run[0] && run[2] > run[1]) return nums[i];
+    }
+    max = Math.max(max, nums[i]);
   }
-  return [...repeats].sort((a, b) => a - b);
+  return null;
 }
 
 async function recordRecapSyncIssues(env, issues) {

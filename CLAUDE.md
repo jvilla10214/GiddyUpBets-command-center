@@ -57,7 +57,7 @@ comment documents one feature/route.
     re-pulls the Race Recap Google Doc so an edit shows up without clicking "Re-sync" (only
     explicitly-labeled sections, e.g. "Belmont - 9/19", get auto-synced — an unlabeled section is
     deliberately skipped, not guessed — but no longer silently: anything that doesn't sync within the
-    last 14 days (no/unknown track label, a race number repeated in one day = a missed date header,
+    last 60 days (no/unknown track label, a race number repeated in one day = a missed date header,
     no saved race day by the next day, doc fetch failure) is listed as a warning at the top of the
     Race Recaps page — NOT emailed, user explicitly declined that — see `recordRecapSyncIssues()`); (2) the stable-mail "day of draw" check — sends a horse's
     digest the moment its card's entries are drawn, same day, instead of waiting for the once-daily
@@ -116,6 +116,12 @@ reused by every pipeline that needs them, no per-pipeline duplication.
 
 ## Conventions
 
+- **Every user-facing date is month/day/year** (e.g. 10/17/2026) — UI, emails, warnings, anything
+  shown to a person; user rule (2026-10-17), applies to everything. ISO `YYYY-MM-DD` stays as the
+  internal format for KV keys, API params and storage only — never displayed.
+- **The Race Recap doc is hand-written and its formatting drifts** — the header/race-marker parser
+  (`parseRaceRecapHeaderLine()` etc.) is deliberately tolerant; when changing it, re-run it against
+  the real doc and diff every day's output against the previous version before shipping.
 - **Commits go straight to `main`** — no branch/PR workflow in use on this repo currently.
 - **Build multi-part features in verified stages** (logic → storage → UI → wire-up), not as
   one big change — confirm each stage works before moving to the next.
