@@ -6191,9 +6191,9 @@
     const opts = [];
     for (let i = 0; i < 7; i++){
       const date = shiftDateStr(today, i);
-      const label = i === 0 ? "TODAY" : new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
-        weekday: 'short', month: 'numeric', day: 'numeric', timeZone: 'UTC',
-      }).toUpperCase();
+      const label = i === 0 ? "TODAY" : `${new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+        weekday: 'short', timeZone: 'UTC',
+      }).toUpperCase()}, ${fmtMDY(date)}`;
       opts.push({ date, label });
     }
     return opts;
@@ -7188,7 +7188,7 @@
       const turfStyleClass = BIAS_STYLE_CLASS[turfBias] ?? "bias-neutral";
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${entry.date}${entry.autoImported ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
+        <td>${fmtMDY(entry.date)}${entry.autoImported ? ' <span class="log-partial-tag">NYRA</span>' : ""}</td>
         <td>${dirtDisplay}</td>
         <td>${turfDisplay}</td>
         <td>${dirtBias ? `<span class="bias-tag ${dirtStyleClass}">${dirtBias}</span>` : "—"}</td>
@@ -7817,7 +7817,7 @@
             const race = (cached.entries || []).find(r => r.raceNumber === raceNumber) || { raceNumber, horses: null };
             return `
               <div class="archive-search-result">
-                <div class="archive-search-result-date">${date}</div>
+                <div class="archive-search-result-date">${fmtMDY(date)}</div>
                 ${archiveRaceHtml(race, resultsByRace[raceNumber], date, cached.raceRecaps?.[raceNumber])}
               </div>`;
           }).join("");
@@ -7900,7 +7900,7 @@
             <div class="stable-trainer-header">
               <button type="button" class="stable-trainer-toggle" data-archive-date="${date}">
                 <span class="chevron">▸</span>
-                <span class="stable-trainer-name">${date}</span>
+                <span class="stable-trainer-name">${fmtMDY(date)}</span>
                 ${summary ? `<span class="archive-summary">${escapeHtml(summary)}</span>` : ""}
               </button>
             </div>
@@ -8001,7 +8001,7 @@
         try{
           const result = await raceRecapResyncApiPost(activeTrack.id, date);
           if (!result.available){
-            alert(`Couldn't re-sync ${date} — ${result.error || "unknown error"}.`);
+            alert(`Couldn't re-sync ${fmtMDY(date)} — ${result.error || "unknown error"}.`);
             return;
           }
           await refreshArchiveDayCache(date);
@@ -8308,7 +8308,7 @@
       col.className = "bias-month-col";
       const stack = document.createElement("div");
       stack.className = "bias-month-stack";
-      stack.title = `${month}: ${total} ${total === 1 ? "entry" : "entries"}`;
+      stack.title = `${monthLabelOf(month)}: ${total} ${total === 1 ? "entry" : "entries"}`;
       Object.keys(BIAS_STYLE_CLASS).forEach(style => {
         const count = counts[style] ?? 0;
         if (!count) return;
@@ -8713,7 +8713,7 @@
 
   function fmtLogRow(entry){
     return `
-      <td>${entry.date}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}${entry.nyraSourced ? ` <span class="log-partial-tag">${OFFICIAL_CONDITIONS_LABEL[entry.conditionsProvider] || "NYRA"}</span>` : ""}</td>
+      <td>${fmtMDY(entry.date)}${entry.isPartial ? ' <span class="log-partial-tag">partial</span>' : ""}${entry.nyraSourced ? ` <span class="log-partial-tag">${OFFICIAL_CONDITIONS_LABEL[entry.conditionsProvider] || "NYRA"}</span>` : ""}</td>
       <td>${entry.tempHigh != null ? Math.round(entry.tempHigh) + "°" : "—"}</td>
       <td>${entry.tempLow != null ? Math.round(entry.tempLow) + "°" : "—"}</td>
       <td>${entry.windAvg != null ? Math.round(entry.windAvg) + " mph" : "—"}</td>
@@ -8836,7 +8836,7 @@
       const stats = computeDayStatsFromDaily(data.daily, data.hourly, dateStr, prevRain);
 
       if (!stats || stats.tempHigh == null){
-        status.textContent = `No archive data for ${dateStr} yet — the archive typically lags about 5 days behind today.`;
+        status.textContent = `No archive data for ${fmtMDY(dateStr)} yet — the archive typically lags about 5 days behind today.`;
         return;
       }
 
@@ -8875,10 +8875,10 @@
           weatherLog = entries;
           renderLogTable();
           pushBiasAlertForEntry(stats);
-          status.textContent = `Added ${dateStr} to the Daily Log.`;
+          status.textContent = `Added ${fmtMDY(dateStr)} to the Daily Log.`;
         } catch(err){
           console.error("Weather log failed to save", err);
-          status.textContent = `Couldn't add ${dateStr}: ${err.message}`;
+          status.textContent = `Couldn't add ${fmtMDY(dateStr)}: ${err.message}`;
         }
       });
     } catch(err){
@@ -9198,9 +9198,17 @@
     } catch(err){ stableApiError("edit note", err); }
   }
 
+  // The one shared date formatter — user rule (2026-10-17): every date a
+  // person sees is month/day/year (10/17/2026). Pure string split, no Date
+  // object, so no timezone can shift it a day. ISO YYYY-MM-DD stays the
+  // internal format (KV keys, API params, data-* attributes) — never shown.
+  function fmtMDY(dateStr){
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr || "");
+    return m ? `${Number(m[2])}/${Number(m[3])}/${m[1]}` : (dateStr || "");
+  }
   function fmtStableDate(dateStr){
     if (!dateStr) return "—";
-    return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+    return fmtMDY(dateStr);
   }
 
   // No live fetching/proxy involved for the PASTE path — the user pastes
@@ -11079,7 +11087,7 @@
   // changed 2026-10-11 from a bare "Oct 11" (no year) per the user's
   // standing rule that every date shown anywhere reads month-date-year.
   function fmtLogDateShort(dateStr){
-    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    return fmtMDY(dateStr);
   }
 
   // Bias alerts fire whenever the Daily Log gains or updates an entry —
@@ -13169,9 +13177,9 @@
       const rainAmt = data.daily.precipitation_sum?.[idx];
       const code = data.daily.weather_code?.[idx];
       const stormy = [95, 96, 99].includes(code) || (pop != null && pop >= 60);
-      const dayLabel = new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', {
-        weekday: 'short', month: 'numeric', day: 'numeric', timeZone: 'UTC',
-      });
+      const dayLabel = `${new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', {
+        weekday: 'short', timeZone: 'UTC',
+      })}, ${fmtMDY(dateStr)}`;
       const rainAmtText = rainAmt != null && rainAmt >= 0.01 ? ` (${rainAmt.toFixed(2)}")` : "";
 
       const card = document.createElement("div");
