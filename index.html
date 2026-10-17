@@ -12345,7 +12345,11 @@
   }
 
   function setWindVisuals(dirDeg, speed){
-    $("windArrow").setAttribute("transform", `rotate(${dirDeg} 50 50)`);
+    // The arrow shows where the wind is blowing TOWARD, not the meteorological
+    // "from" convention dirDeg itself uses — same 180° flip as flowAngleDeg
+    // below, for the same reason: a compass arrow pointing at where the wind
+    // *comes from* reads backwards at a glance.
+    $("windArrow").setAttribute("transform", `rotate(${(dirDeg + 180) % 360} 50 50)`);
     clearSkeleton("windSpeed", "windDir");
     $("windSpeed").textContent = Math.round(speed ?? 0);
     $("windDir").textContent = `${compassPoint(dirDeg)} (${Math.round(dirDeg)}°)`;
