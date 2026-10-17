@@ -3455,7 +3455,7 @@ function parseRaceRecapHeaderLine(line) {
     }
   }
   if (!trackLabel) trackLabel = findTrackNameInRecapHeaderRest(rest);
-  return { trackLabel, month, day, hasYear, year: hasYear ? Number(sy || dy || my) : null };
+  return { trackLabel, month, day, hasYear, year: hasYear ? Number(sy || dy || my) : null, restEmpty: !stripRecapHeaderFiller(rest) };
 }
 
 function findRaceRecapDateSections(docText) {
@@ -3472,14 +3472,25 @@ function findRaceRecapDateSections(docText) {
         const prevKey = sortKey(prev.year, prev.month, prev.day);
         const thisKey = sortKey(year, h.month, h.day);
         const sameDay = prev.month === h.month && prev.day === h.day;
-        const prevTrack = resolveRaceRecapTrackId(prev.trackLabel);
+        const prevTrack = resolveRaceRecapTrackId(prev.effectiveLabel);
         const thisTrack = resolveRaceRecapTrackId(h.trackLabel);
-        // Same-day restatement inside a section ("SAR 8/30 — fast dirt...").
-        if (sameDay && (!thisTrack || !prevTrack || thisTrack === prevTrack) && !h.hasYear) { offset += line.length + 1; continue; }
+        // Same-day, yearless line inside a section: a restatement ("SAR
+        // 8/30 — fast dirt...", "WO 9/12 — CLIFFNOTES") unless it names a
+        // DIFFERENT track than the section it's in, or names a track and
+        // nothing else — "Keeneland 10/10" right under the Belmont 10/10
+        // card is a second card that day, not a restatement (confirmed
+        // real 2026-10-17 by stripping every header's year from the doc).
+        if (sameDay && !h.hasYear) {
+          const newCard = thisTrack && ((prevTrack && thisTrack !== prevTrack) || (!prevTrack && h.restEmpty));
+          if (!newCard) { offset += line.length + 1; continue; }
+        }
         // Bare yearless date going backwards = odds/notes, not a header.
         if (!h.hasYear && !h.trackLabel && thisKey < prevKey) { offset += line.length + 1; continue; }
       }
-      headers.push({ ...h, index: offset, year });
+      // The label as the section will finally see it, including a track
+      // name on the line under the date — needed for the same-day check above.
+      const effectiveLabel = h.trackLabel || findRaceRecapNextLineTrackLabel(docText.slice(offset, offset + 400));
+      headers.push({ ...h, index: offset, year, effectiveLabel });
     }
     offset += line.length + 1;
   }
