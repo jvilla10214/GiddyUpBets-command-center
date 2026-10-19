@@ -163,7 +163,7 @@ def process_broadcast(video, dropped_quotes):
         video["upload_date"] = discover.get_upload_date(video["id"])
 
         log(f"  transcribing ({round(video.get('duration', 0) / 60, 1)} min)...")
-        transcript = transcribe.transcribe_broadcast(video["id"], work_dir)
+        transcript = transcribe.get_transcript(video["id"], work_dir)
         log(f"  transcribed: {len(transcript['segments'])} segments")
 
         paddock_windows = find_segments.find_candidate_windows(transcript["stitched"])

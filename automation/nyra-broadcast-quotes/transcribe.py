@@ -86,6 +86,91 @@ def format_ts(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+# Matches YouTube's own inline annotations ("[music]", "[Applause]", ...)
+# that its auto-captioner sometimes inserts mid-sentence — confirmed real in
+# a sample caption pull 2026-10-19 ("The world's premier breeding [music]
+# stock event..."). Left in, a cue phrase split across one of these (e.g.
+# "how did that [music] feel") would silently fail to match
+# find_segments.py's cue regexes, which expect the words contiguous.
+INLINE_CAPTION_ANNOTATION_RE = re.compile(r"\[\w+\]")
+
+
+def _parse_json3_captions(path):
+    """Converts YouTube's own auto-caption json3 format into the same
+    {start, end, text} segment shape transcribe_chunk()'s Whisper output
+    produces. `aAppend` events are just newline joiners between caption
+    lines, not real content — skipped, not transcribed text."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    segments = []
+    stitched_lines = []
+    for event in data.get("events", []):
+        if event.get("aAppend") or "segs" not in event:
+            continue
+        text = "".join(seg.get("utf8", "") for seg in event["segs"])
+        text = INLINE_CAPTION_ANNOTATION_RE.sub("", text).strip()
+        if not text:
+            continue
+        start = event.get("tStartMs", 0) / 1000
+        end = start + event.get("dDurationMs", 0) / 1000
+        segments.append({"start": start, "end": end, "text": text})
+        stitched_lines.append(f"[{format_ts(start)}] {text}")
+    return {
+        "text": " ".join(s["text"] for s in segments),
+        "segments": segments,
+        "stitched": "\n".join(stitched_lines),
+    }
+
+
+def fetch_captions_transcript(video_id, work_dir):
+    """Tries YouTube's own auto-generated captions before resorting to a
+    full audio download + Whisper transcription — a single ~1-second
+    metadata-style request instead of initiating a full media stream
+    download, which is specifically what triggers YouTube's "confirm you're
+    not a bot" wall (confirmed real 2026-10-19: a plain, cookie-less caption
+    fetch succeeded from a sandbox where every audio download for the same
+    channel's videos got walled). "en-orig" is the real original-language
+    auto-caption track; "en" is tried as a fallback for a video that only
+    exposes that label. Returns None (caller falls back to
+    transcribe_broadcast()) when neither is available for this video —
+    older or unusual uploads sometimes have no auto-caption track at all."""
+    os.makedirs(work_dir, exist_ok=True)
+    out_template = os.path.join(work_dir, "captions")
+    for lang in ("en-orig", "en"):
+        cmd = [
+            config.YTDLP_BIN,
+            "--socket-timeout", "20",
+            *config.ytdlp_auth_args(),
+            "--skip-download",
+            "--write-auto-sub",
+            "--sub-lang", lang,
+            "--sub-format", "json3",
+            "-o", out_template,
+            f"https://www.youtube.com/watch?v={video_id}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        caption_path = f"{out_template}.{lang}.json3"
+        if result.returncode == 0 and os.path.exists(caption_path):
+            parsed = _parse_json3_captions(caption_path)
+            if parsed["segments"]:
+                return parsed
+    return None
+
+
+def get_transcript(video_id, work_dir):
+    """Prefer YouTube's own captions (fetch_captions_transcript) over the
+    full audio-download + Whisper path — see that function's own comment
+    for why. Falls back to transcribe_broadcast() whenever no caption track
+    exists, so a video without one is no worse off than before this
+    existed."""
+    captions = fetch_captions_transcript(video_id, work_dir)
+    if captions is not None:
+        print(f"  using YouTube captions ({len(captions['segments'])} segments) — no audio download needed", flush=True)
+        return captions
+    print("  no YouTube captions available — falling back to audio download + Whisper", flush=True)
+    return transcribe_broadcast(video_id, work_dir)
+
+
 def transcribe_broadcast(video_id, work_dir):
     """Returns {text, segments, stitched} — `stitched` is the
     "[HH:MM:SS] text" format the segment-finder greps, same convention the
