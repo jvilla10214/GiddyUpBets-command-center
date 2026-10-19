@@ -37,7 +37,15 @@ The title often already names who's speaking and their connection to a horse (tr
 owner, bloodstock agent, etc.) — use it as a strong hint, but confirm against what the transcript \
 itself actually says (first-person answers about training or riding decisions, an interviewer \
 using someone's name). Don't guess a name or role with nothing in the title or transcript to \
-anchor it — use "unclear" instead.
+anchor it — use "unclear" instead. A surname alone from the title (no first name given) still \
+counts as an anchor — use it as the Speaker rather than "unclear" unless the transcript itself \
+points to a different person.
+
+If the whole video is one continuous interview about a single horse (the title names it, or the \
+transcript establishes it early on), carry that horse's name forward to every exchange that's \
+clearly still part of the same conversation — don't mark Horse "unclear" just because a later \
+answer doesn't restate the name. Only use "unclear" when you genuinely can't tell which horse an \
+answer is about.
 
 Extract every question-and-answer exchange in the transcript where the speaker is talking about a \
 specific horse's performance, work, trip, or plans, in order, with the nearest preceding \
@@ -47,9 +55,10 @@ exchange, in this exact shape:
 - [MM:SS] Speaker: <full name, or "unclear"> — Role: <trainer|jockey|owner|agent|other> — Horse: \
 <horse name, or "unclear"> — Q: <question, paraphrased briefly if needed> — A: "<direct quote>"
 
-If one person discusses multiple horses, give one bullet per horse. Skip pure narration/highlight \
-commentary with no actual interview exchange, and skip small talk that never addresses the horse \
-itself (career trivia, scheduling logistics, media-day chit-chat).
+If one person discusses multiple horses, give one bullet per horse — never combine two horse \
+names into one Horse field (not "Horse A / Horse B"). Skip pure narration/highlight commentary \
+with no actual interview exchange, and skip small talk that never addresses the horse itself \
+(career trivia, scheduling logistics, media-day chit-chat).
 
 TRANSCRIPT:
 {transcript}
@@ -108,6 +117,19 @@ def normalize_horse_field(horse):
     return horse
 
 
+def split_combined_horse_field(horse):
+    """The model sometimes names two horses in one Horse field (e.g. "The
+    Puma / Mage") despite being asked for one bullet per horse — confirmed
+    real 2026-10-17 (a Kentucky HBPA interview covering two horses). Rather
+    than throw the whole quote away as "no_clear_horse" (write_notes.py
+    rejects any horse field containing "/"), split it into one entry per
+    horse name so the content still gets filed. Returns None when the split
+    doesn't yield at least two real names (falls back to normal handling)."""
+    parts = [p.strip() for p in horse.split("/")]
+    parts = [p for p in parts if p and p.lower() != "unclear" and not NOT_A_REAL_HORSE_NAME_RE.search(p)]
+    return parts if len(parts) >= 2 else None
+
+
 def parse_bullets(raw_text):
     """Any line that doesn't match the expected shape is kept in `unparsed`
     rather than silently dropped, so nothing goes missing without a trace."""
@@ -119,14 +141,20 @@ def parse_bullets(raw_text):
             continue
         m = BULLET_RE.match(line)
         if m:
-            entries.append({
+            base = {
                 "timestamp": m.group("ts"),
                 "speaker": m.group("speaker").strip(),
                 "role": m.group("role").strip().lower(),
-                "horse": normalize_horse_field(m.group("horse")),
                 "question": m.group("question").strip(),
                 "quote": m.group("quote").strip(),
-            })
+            }
+            horse_raw = m.group("horse").strip()
+            split_horses = split_combined_horse_field(horse_raw) if "/" in horse_raw else None
+            if split_horses:
+                for h in split_horses:
+                    entries.append({**base, "horse": h})
+            else:
+                entries.append({**base, "horse": normalize_horse_field(horse_raw)})
         else:
             unparsed.append(line)
     return entries, unparsed
