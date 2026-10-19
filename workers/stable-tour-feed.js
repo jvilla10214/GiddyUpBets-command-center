@@ -2488,6 +2488,63 @@ async function handleRequest(request, env, ctx) {
       return json({ jobs }, 200, { "Cache-Control": "no-store" });
     }
 
+    // External (GitHub Actions) pipelines run as their own Python processes
+    // outside this Worker, so they can't call recordPipelineRun() directly
+    // the way the Worker's own cron jobs do — this lets them self-report
+    // into the same pipeline:lastrun: KV namespace /debug-pipeline-health
+    // already reads, plus a separate pipeline:lastsuccess: timestamp so a
+    // losing streak (e.g. the 2026-10-19 YOUTUBE_COOKIES outage) doesn't
+    // erase when the pipeline last actually worked. Body: { job, ok,
+    // summary } or { job, ok: false, error }. No auth, same posture as
+    // every other write route in this file (team-only tool, see the
+    // passphrase-removal history).
+    if (url.pathname === "/pipeline-report" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const job = (body.job || "").trim();
+      if (!job) return json({ error: "Missing job" }, 400);
+      const outcome = body.ok
+        ? { ok: true, summary: body.summary ?? null }
+        : { ok: false, error: body.error || "unknown error" };
+      await recordPipelineRun(env, job, outcome);
+      if (body.ok) {
+        await env.STABLE_KV.put(
+          `pipeline:lastsuccess:${job}`,
+          JSON.stringify({ ranAt: new Date().toISOString(), summary: body.summary ?? null })
+        );
+      }
+      return json({ ok: true }, 200, { "Cache-Control": "no-store" });
+    }
+
+    // Surfaces a dashboard warning when a YouTube-based pipeline (bot-wall-
+    // prone, see each pipeline's own config.py) hasn't had a genuinely
+    // successful run within its expected cadence. Built 2026-10-19 after
+    // the YOUTUBE_COOKIES secret went dead for ~19 hours across both
+    // pipelines before anyone noticed — only reads pipeline:lastsuccess:,
+    // written by /pipeline-report above, never computes anything new.
+    // maxStaleHours is deliberately generous (several multiples of each
+    // pipeline's own cadence) so one missed run from an ordinary retry
+    // cycle doesn't cry wolf.
+    if (url.pathname === "/pipeline-health-warnings" && request.method === "GET") {
+      const warnings = [];
+      for (const [job, cfg] of Object.entries(WATCHED_PIPELINES)) {
+        const lastSuccessRaw = await env.STABLE_KV.get(`pipeline:lastsuccess:${job}`);
+        const lastSuccess = lastSuccessRaw ? JSON.parse(lastSuccessRaw) : null;
+        const lastSuccessAt = lastSuccess?.ranAt ? new Date(lastSuccess.ranAt) : null;
+        const hoursSince = lastSuccessAt ? (Date.now() - lastSuccessAt.getTime()) / 36e5 : Infinity;
+        if (hoursSince > cfg.maxStaleHours) {
+          const lastRunRaw = await env.STABLE_KV.get(`pipeline:lastrun:${job}`);
+          const lastRun = lastRunRaw ? JSON.parse(lastRunRaw) : null;
+          warnings.push({
+            job,
+            message: `${cfg.label}: no successful pull in `
+              + `${lastSuccessAt ? Math.round(hoursSince) + "h" : "a long time"}`
+              + (lastRun && lastRun.ok === false ? ` (last error: ${lastRun.error})` : ""),
+          });
+        }
+      }
+      return json({ warnings }, 200, { "Cache-Control": "no-store" });
+    }
+
     // Wipes every job #16 dedup record (see raceNotifyKvKey()) — a reset
     // button for when the matching/gating rules change underneath already-
     // set keys (e.g. the note-gating change: horses emailed under the old
@@ -7011,6 +7068,16 @@ async function recordEntryAlertsRun(env, source, summary, runLabel = "am") {
 // both outcomes get one record each, under one shared key prefix
 // (`pipeline:lastrun:`) that /debug-pipeline-health below can list and read
 // back without needing every job name hardcoded there too.
+// Jobs /pipeline-health-warnings watches for staleness — both are GitHub
+// Actions pipelines that shell out to yt-dlp against YouTube, the one
+// failure mode (a bot-wall/cookie problem) this check exists for. Not every
+// job in pipeline:lastrun: needs this — most of those are the Worker's own
+// cron jobs scraping ordinary web pages, a much more reliable source.
+const WATCHED_PIPELINES = {
+  "nyra-broadcast-quotes": { label: "NYRA Broadcast quotes", maxStaleHours: 72 },
+  "kentucky-hbpa": { label: "Kentucky HBPA quotes", maxStaleHours: 48 },
+};
+
 async function recordPipelineRun(env, jobName, outcome) {
   try {
     await env.STABLE_KV.put(`pipeline:lastrun:${jobName}`, JSON.stringify({ ranAt: new Date().toISOString(), ...outcome }));

@@ -3634,6 +3634,8 @@
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="stableInfo" title="Why this works this way">ⓘ</button>
       </div>
 
+      <div class="archive-sync-issues" id="pipelineHealthWarnings" hidden></div>
+
       <div class="stable-search-row">
         <input type="search" id="stableSearchInput" placeholder="Search trainers or horses…">
       </div>
@@ -8966,6 +8968,31 @@
     $("stableApiStatus").textContent = `Couldn't ${action}: ${err.message}`;
   }
 
+  // Warns when a YouTube-based auto-import pipeline (NYRA Broadcast,
+  // Kentucky HBPA — both run outside this page, from GitHub Actions) hasn't
+  // had a genuinely successful pull in a while — see WATCHED_PIPELINES and
+  // /pipeline-health-warnings in the Worker. Built 2026-10-19 after a
+  // ~19-hour YOUTUBE_COOKIES outage on both pipelines went unnoticed until
+  // a manual check. Best-effort, non-fatal like every other Stable Tour
+  // fetch here — a failed check just means no warning shows, not a broken
+  // page.
+  async function loadPipelineHealthWarnings(){
+    const box = $("pipelineHealthWarnings");
+    if (!box) return;
+    let warnings = [];
+    try{
+      const data = await stableApiGet("/pipeline-health-warnings");
+      warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    } catch(err){
+      console.error("Pipeline health warnings fetch failed", err);
+    }
+    box.hidden = !warnings.length;
+    box.innerHTML = warnings.length ? `
+      <div class="archive-sync-issues-title">⚠ ${warnings.length} AUTO-IMPORT PIPELINE${warnings.length === 1 ? "" : "S"} STALLED</div>
+      <ul>${warnings.map(w => `<li>${escapeHtml(w.message)}</li>`).join("")}</ul>
+    ` : "";
+  }
+
   // ---------- Shared Daily Weather Log (same worker, no passphrase — see
   // the worker's own comment on why this endpoint is deliberately open) ----------
   async function weatherLogApiGet(track){
@@ -14054,6 +14081,7 @@
     // retirement comment near where its function used to live) — nothing
     // left to kick off here on load.
     loadHorseTrackIndex().then(() => { if (stableViewMode === "track") renderStableTour(); });
+    loadPipelineHealthWarnings();
   })();
 
   // Refresh from the shared source periodically and whenever the tab
