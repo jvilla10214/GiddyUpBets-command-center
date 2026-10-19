@@ -39,13 +39,16 @@ itself actually says (first-person answers about training or riding decisions, a
 using someone's name). Don't guess a name or role with nothing in the title or transcript to \
 anchor it — use "unclear" instead. A surname alone from the title (no first name given) still \
 counts as an anchor — use it as the Speaker rather than "unclear" unless the transcript itself \
-points to a different person.
+points to a different person. For example, if the title is "Lynch seeking another Breeders' Cup \
+win with Owen Almighty and/or Manuku Honey" and an answer is clearly about training one of those \
+two horses, output Speaker: Lynch — Role: trainer, even though the transcript itself never says \
+the name "Lynch" out loud.
 
-If the whole video is one continuous interview about a single horse (the title names it, or the \
-transcript establishes it early on), carry that horse's name forward to every exchange that's \
-clearly still part of the same conversation — don't mark Horse "unclear" just because a later \
-answer doesn't restate the name. Only use "unclear" when you genuinely can't tell which horse an \
-answer is about.
+If the whole video is one continuous interview — one person, answering about one or more of their \
+horses — carry BOTH that person's identity and the relevant horse's name forward to every \
+exchange that's clearly still the same conversation, even when a given answer doesn't restate \
+either one. Only reset to "unclear" when you genuinely can't tell who's speaking or which horse \
+an answer is about — not just because a single answer is generic or doesn't repeat the name.
 
 Extract every question-and-answer exchange in the transcript where the speaker is talking about a \
 specific horse's performance, work, trip, or plans, in order, with the nearest preceding \
