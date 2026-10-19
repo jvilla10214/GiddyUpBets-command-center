@@ -26,7 +26,14 @@ def save_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def fetch_streams(playlist_end=20):
+# Was 20 — confirmed real 2026-10-19 that this let 3 real broadcasts (Sept
+# 30, Oct 1-2) scroll out of the raw (pre-title-filter) window and never get
+# queued at all, with no trace left behind (not even a "seen on first run"
+# skip, since by the time anyone noticed they'd simply fallen off a window
+# that moves forward with every new "Talking Horses" or other non-matching
+# upload interspersed on the same tab). 40 gives real margin against a gap
+# like that recurring.
+def fetch_streams(playlist_end=40):
     cmd = [
         config.YTDLP_BIN,
         "--socket-timeout", "20",
