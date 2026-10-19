@@ -69,8 +69,17 @@ def call_claude(prompt):
     return "".join(block.get("text", "") for block in data.get("content", []))
 
 
+# "Speaker:\s*" is optional — real output captured 2026-10-19 (both a Whisper-
+# sourced and a captions-sourced transcript, two different broadcasts) shows
+# Claude consistently skipping that literal label and going straight from the
+# timestamp to the name (e.g. "- [00:53:49] Dylan Davis — Role: jockey..."
+# instead of "...Speaker: Dylan Davis..."). 100% consistent across every
+# sample seen, not random noise — this is the real cause of the 2026-10-17
+# "13 entries, 13 unparsed" incident that started this whole investigation.
+# Tolerating both forms recovers real quotes instead of chasing a prompt
+# wording fix for behavior the model doesn't reliably follow anyway.
 BULLET_RE = re.compile(
-    r"^-\s*\[(?P<ts>[\d:]+)\]\s*Speaker:\s*(?P<speaker>.*?)\s*—\s*Role:\s*(?P<role>.*?)\s*—\s*"
+    r"^-\s*\[(?P<ts>[\d:]+)\]\s*(?:Speaker:\s*)?(?P<speaker>.*?)\s*—\s*Role:\s*(?P<role>.*?)\s*—\s*"
     r"Horse:\s*(?P<horse>.*?)\s*—\s*Q:\s*(?P<question>.*?)\s*—\s*A:\s*\"(?P<quote>.*)\"\s*$"
 )
 
