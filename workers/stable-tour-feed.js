@@ -9637,12 +9637,26 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   const sections = {}; // "trainer:key" / "jockey:key" -> { role, name, parts: [] }
   const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)\b/g;
   const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
+  // A sentence that opens with a capitalized pronoun directly before the
+  // attribution verb ("She said, '...'") matches either regex exactly like
+  // a real name would, and since 2026-10-11's auto-track-everyone-
+  // unverified policy, an unresolved "name" gets filed as a brand new
+  // trainer rather than discarded — confirmed real on a live Sky Sports
+  // article (job #32's first real quote after its title-guess fix landed):
+  // "She" got auto-tracked as a trainer. A real human name is never a bare
+  // pronoun, so this is a safe, universal reject with no false-negative
+  // risk — placed here (not only in a per-source caller) so every current
+  // and future caller of this shared function gets the same safety net for
+  // free, same reasoning as the body-presence and trainer-collision checks
+  // above.
+  const COMMON_PRONOUN_RE = /^(he|she|it|they|his|her|their|him|them|i|we|you)$/i;
   for (const para of paragraphs) {
     if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(para)) continue;
     const found = [];
     for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
     for (const { quote, name } of found) {
+      if (COMMON_PRONOUN_RE.test(name)) continue;
       // Trainer checked first, same priority order as before this jockey
       // fallback existed — a name that happens to resolve against BOTH
       // rosters (same last+first name, different people, confirmed
