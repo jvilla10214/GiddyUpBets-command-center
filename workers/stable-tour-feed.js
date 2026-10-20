@@ -10097,6 +10097,37 @@ function skysportsSeenKvKey(articleId) {
 // "slice to the rest of the document" fallback spirit as TDN's version,
 // just bounded here since Sky Sports pages run long with lots of
 // boilerplate below the fold).
+// Sky Sports headlines often lead with a venue or race name before a colon
+// ("Ascot: Ombudsman simply supreme...", "Cesarewitch: Alphonse Le Grande
+// edges..." — confirmed real on this job's first live run 2026-10-20: 8
+// articles checked, 0 written). extractNyraTitleHorse()'s plain
+// capitalized-word-run logic doesn't know the colon is there and swallows
+// the venue into the guess ("Ascot: Ombudsman" instead of "Ombudsman"),
+// which then never matches the body text verbatim and silently kills the
+// whole extraction via extractGenericQuoteSections()'s own body-presence
+// check. Guessing off the colon-stripped remainder fixes the dominant case;
+// falling back to the plain full-title guess covers headlines with no
+// colon at all.
+//
+// One more real failure mode this guards against: sometimes the
+// colon-prefix IS the horse's own name ("Constitution Hill: Rossa Ryan to
+// partner Nicky Henderson's star at San Siro"), and the remainder-only
+// guess would then wrongly pick up the JOCKEY's name instead ("Rossa
+// Ryan") — extractGenericQuoteSections()'s own safety net only rejects a
+// guess colliding with a tracked TRAINER's surname, not a jockey's, so that
+// one would otherwise slip through. Rejecting a guess that collides with
+// either roster here closes that gap for this source specifically, same
+// "no note beats a wrong one" principle as everywhere else in this file.
+function skysportsTitleHorseGuess(title, trackedTrainers, trackedJockeys) {
+  const colonMatch = title.match(/^[^:]{2,40}:\s*(.+)$/);
+  const guess = (colonMatch && extractNyraTitleHorse(colonMatch[1])) || extractNyraTitleHorse(title);
+  if (!guess) return null;
+  const guessWords = guess.split(/\s+/).map((w) => w.toLowerCase().replace(/[.,]/g, ""));
+  if (trackedJockeys.some((name) => guessWords.includes(lastNameKey(name)))) return null;
+  if (trackedTrainers.some((name) => guessWords.includes(lastNameKey(name)))) return null;
+  return guess;
+}
+
 function extractSkySportsTitle(html) {
   const m = html.match(/data-short-title="([^"]*)"/);
   return m ? decodeEntities(m[1]).trim() : "";
@@ -10168,7 +10199,7 @@ async function runSkySportsImport(env) {
         if (!title) continue;
         if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(title)) continue;
         if (NON_RACE_SIGNAL_RE.test(title)) continue;
-        const titleHorseGuess = extractNyraTitleHorse(title);
+        const titleHorseGuess = skysportsTitleHorseGuess(title, state.trainers, state.jockeys);
         if (!titleHorseGuess) continue;
         const bodyHtml = extractSkySportsArticleBody(html);
         if (!bodyHtml) continue;
