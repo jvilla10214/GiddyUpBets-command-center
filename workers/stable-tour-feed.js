@@ -2180,6 +2180,21 @@ async function handleRequest(request, env, ctx) {
       await recordPipelineRun(env, "skysports", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
     }
+    // One-time repair tool for this job's own rollout: the very first live
+    // run (before skysportsTitleHorseGuess()'s venue-prefix fix shipped)
+    // marked every article it checked as "seen" despite extracting zero
+    // real quotes from any of them — the same "an article that yielded
+    // nothing today won't yield anything on a re-check either" seen-flag
+    // logic that's normally correct instead blocked the fix from ever being
+    // verified against real data. Clears every skysports:seen:* key so the
+    // next run (or a fresh GET /debug-run-skysports) re-checks the same
+    // batch of articles with the fix in place. Safe to re-run; a no-op once
+    // there's nothing left to clear.
+    if (url.pathname === "/debug-reset-skysports-seen" && request.method === "GET") {
+      const listed = await env.STABLE_KV.list({ prefix: "skysports:seen:" });
+      await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
+      return json({ cleared: listed.keys.length }, 200, { "Cache-Control": "no-store" });
+    }
     if (url.pathname === "/debug-run-smartpony" && request.method === "GET") {
       const result = await runSmartPonyImport(env);
       await recordPipelineRun(env, "smartpony", { ok: true, summary: result });
