@@ -11050,6 +11050,20 @@ async function fetchSmartPonyQuotes(env) {
   ])];
   const entryByHorseId = horseIds.length ? await lookupRaceEntriesByHorseId(accessToken, horseIds) : {};
 
+  // SmartPony's coverage includes Standardbred (harness) racing alongside
+  // Thoroughbred — this app is Thoroughbred-only. Confirmed real and
+  // recurring (2026-10-20 audit): 34 of 53 trainers auto-added in one
+  // ~10-day window were harness people (Ron Burke, Tim Tetrick, Nancy
+  // Takter, etc.), via quotes from Red Mile/Scioto/Breeders Crown articles.
+  // Filters on the SOURCE ARTICLE's title/URL (specific track and event
+  // names), not quote-text keywords like "pace" or "trot" — those are
+  // ambiguous (a Thoroughbred recap routinely says a horse "pressed the
+  // pace") and gave real false positives when tried against quote content
+  // during that same audit. A track/event name in the article's own title
+  // is a much more precise signal and was 100% consistent across every
+  // confirmed-harness case found.
+  const HARNESS_SOURCE_RE = /\b(red mile|scioto|northfield|harrah'?s philadelphia|yonkers|woodbine mohawk|\bmohawk\b|dover downs|pocono downs|the meadows\b|freehold raceway|tioga downs|vernon downs|batavia downs|monticello raceway|breeders crown|hambletonian|little brown jug|grand circuit|\bharness\b)/i;
+
   const quotes = [];
   const resolveTracked = makeTrackedTrainerResolver(trainers);
   const resolveJockey = makeTrackedTrainerResolver(jockeys, false);
@@ -11059,6 +11073,8 @@ async function fetchSmartPonyQuotes(env) {
     if (!horseName || !text) continue; // no identifiable horse — no guessing which one, same rule every other import job here follows
     let trainerName = (row.trainer_name_raw || row.trainer_name || "").trim();
     if (!trainerName) continue;
+    const sourceArticle = row.raw_articles || {};
+    if (HARNESS_SOURCE_RE.test(`${sourceArticle.title || ""} ${sourceArticle.url || ""}`)) continue;
     let noteText = text;
     // Set when the block below rewrites noteText/trainerName — lets
     // runSmartPonyImport() tell this deliberate, race-data-verified rewrite
