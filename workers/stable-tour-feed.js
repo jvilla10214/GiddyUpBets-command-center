@@ -843,6 +843,9 @@ function runSideJobs(event, env, ctx) {
     ctx.waitUntil(
       trackedRun(env, "smartpony", () => runSmartPonyImport(env), "SmartPony import")
     );
+    ctx.waitUntil(
+      trackedRun(env, "skysports", () => runSkySportsImport(env), "Sky Sports Racing import")
+    );
     return;
   }
   if (hour === 13) {
@@ -2169,6 +2172,28 @@ async function handleRequest(request, env, ctx) {
       const result = await runHrnNewsImport(env);
       await recordPipelineRun(env, "hrnnews", { ok: true, summary: result });
       return json(result, 200, { "Cache-Control": "no-store" });
+    }
+    // Manual trigger for job #32's runSkySportsImport() — same reasoning as
+    // /debug-run-bloodhorse above.
+    if (url.pathname === "/debug-run-skysports" && request.method === "GET") {
+      const result = await runSkySportsImport(env);
+      await recordPipelineRun(env, "skysports", { ok: true, summary: result });
+      return json(result, 200, { "Cache-Control": "no-store" });
+    }
+    // One-time repair tool for this job's own rollout: the very first live
+    // run (before skysportsTitleHorseGuess()'s venue-prefix fix shipped)
+    // marked every article it checked as "seen" despite extracting zero
+    // real quotes from any of them — the same "an article that yielded
+    // nothing today won't yield anything on a re-check either" seen-flag
+    // logic that's normally correct instead blocked the fix from ever being
+    // verified against real data. Clears every skysports:seen:* key so the
+    // next run (or a fresh GET /debug-run-skysports) re-checks the same
+    // batch of articles with the fix in place. Safe to re-run; a no-op once
+    // there's nothing left to clear.
+    if (url.pathname === "/debug-reset-skysports-seen" && request.method === "GET") {
+      const listed = await env.STABLE_KV.list({ prefix: "skysports:seen:" });
+      await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
+      return json({ cleared: listed.keys.length }, 200, { "Cache-Control": "no-store" });
     }
     if (url.pathname === "/debug-run-smartpony" && request.method === "GET") {
       const result = await runSmartPonyImport(env);
@@ -9612,12 +9637,26 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   const sections = {}; // "trainer:key" / "jockey:key" -> { role, name, parts: [] }
   const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)\b/g;
   const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
+  // A sentence that opens with a capitalized pronoun directly before the
+  // attribution verb ("She said, '...'") matches either regex exactly like
+  // a real name would, and since 2026-10-11's auto-track-everyone-
+  // unverified policy, an unresolved "name" gets filed as a brand new
+  // trainer rather than discarded — confirmed real on a live Sky Sports
+  // article (job #32's first real quote after its title-guess fix landed):
+  // "She" got auto-tracked as a trainer. A real human name is never a bare
+  // pronoun, so this is a safe, universal reject with no false-negative
+  // risk — placed here (not only in a per-source caller) so every current
+  // and future caller of this shared function gets the same safety net for
+  // free, same reasoning as the body-presence and trainer-collision checks
+  // above.
+  const COMMON_PRONOUN_RE = /^(he|she|it|they|his|her|their|him|them|i|we|you)$/i;
   for (const para of paragraphs) {
     if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(para)) continue;
     const found = [];
     for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
     for (const { quote, name } of found) {
+      if (COMMON_PRONOUN_RE.test(name)) continue;
       // Trainer checked first, same priority order as before this jockey
       // fallback existed — a name that happens to resolve against BOTH
       // rosters (same last+first name, different people, confirmed
@@ -10046,6 +10085,201 @@ async function runTdnMainImport(env) {
     return { checked, written, rosterChanged };
   } catch (err) {
     console.error("TDN main feed import failed", err.message);
+    return { checked, written, error: err.message };
+  }
+}
+
+// ---------- 32. Sky Sports Racing news ----------
+// Confirmed real 2026-10-20: three UK sources were checked for this (user
+// specifically asked about Racing Post first) — Racing Post 406s every
+// plain fetch (confirmed again, consistent with the existing hard boundary
+// documented in CLAUDE.md; its only real API is a paid commercial product,
+// not a fit for this project's free/keyless-only sources), At The Races
+// 403s, and Racing TV returns 200 but is a JS-rendered SPA shell with no
+// content in the raw HTML. Sky Sports Racing returns a real 200, is plain
+// server-rendered HTML, and a live fetched article was confirmed to carry
+// direct trainer AND jockey quotes about a named horse — same shape as
+// BloodHorse/TDN main. No RSS feed found for this section, so discovery is
+// a listing-page scrape (HRN's shape), but the actual quote/horse
+// extraction reuses extractNyraTitleHorse()/extractGenericQuoteSections()
+// completely unchanged — both are already markup-agnostic and proven
+// across three other sources, so there was no reason to write new
+// extraction logic just because the HTML tags differ.
+const SKYSPORTS_NEWS_LIST_URL = "https://www.skysports.com/racing/news";
+const SKYSPORTS_MAX_ARTICLES_PER_RUN = 15;
+
+function skysportsArticleIdFromLink(link) {
+  const m = /\/racing\/news\/(\d+)\//.exec(link || "");
+  return m ? m[1] : null;
+}
+function skysportsSeenKvKey(articleId) {
+  return `skysports:seen:${articleId}`;
+}
+
+// Confirmed real 2026-10-20 against a live fetched article: the title sits
+// in an h1's own data-short-title="..." attribute as plain text — simpler
+// and more robust than parsing the nested <h1><span> markup around it. The
+// body lives in a <div class="sdc-article-body ...">; indexOf-bounded by
+// the related-articles widget's own "sdc-site-tile" marker that reliably
+// follows it, same approach as extractTdnArticleBody() above. A 20KB hard
+// cap stands in for that marker on the rare page where it's missing (same
+// "slice to the rest of the document" fallback spirit as TDN's version,
+// just bounded here since Sky Sports pages run long with lots of
+// boilerplate below the fold).
+// Sky Sports headlines often lead with a venue or race name before a colon
+// ("Ascot: Ombudsman simply supreme...", "Cesarewitch: Alphonse Le Grande
+// edges..." — confirmed real on this job's first live run 2026-10-20: 8
+// articles checked, 0 written). extractNyraTitleHorse()'s plain
+// capitalized-word-run logic doesn't know the colon is there and swallows
+// the venue into the guess ("Ascot: Ombudsman" instead of "Ombudsman"),
+// which then never matches the body text verbatim and silently kills the
+// whole extraction via extractGenericQuoteSections()'s own body-presence
+// check. Guessing off the colon-stripped remainder fixes the dominant case;
+// falling back to the plain full-title guess covers headlines with no
+// colon at all.
+//
+// One more real failure mode this guards against: sometimes the
+// colon-prefix IS the horse's own name ("Constitution Hill: Rossa Ryan to
+// partner Nicky Henderson's star at San Siro"), and the remainder-only
+// guess would then wrongly pick up the JOCKEY's name instead ("Rossa
+// Ryan") — extractGenericQuoteSections()'s own safety net only rejects a
+// guess colliding with a tracked TRAINER's surname, not a jockey's, so that
+// one would otherwise slip through. Rejecting a guess that collides with
+// either roster here closes that gap for this source specifically, same
+// "no note beats a wrong one" principle as everywhere else in this file.
+function skysportsTitleHorseGuess(title, trackedTrainers, trackedJockeys) {
+  const colonMatch = title.match(/^[^:]{2,40}:\s*(.+)$/);
+  const guess = (colonMatch && extractNyraTitleHorse(colonMatch[1])) || extractNyraTitleHorse(title);
+  if (!guess) return null;
+  const guessWords = guess.split(/\s+/).map((w) => w.toLowerCase().replace(/[.,]/g, ""));
+  if (trackedJockeys.some((name) => guessWords.includes(lastNameKey(name)))) return null;
+  if (trackedTrainers.some((name) => guessWords.includes(lastNameKey(name)))) return null;
+  return guess;
+}
+
+function extractSkySportsTitle(html) {
+  const m = html.match(/data-short-title="([^"]*)"/);
+  return m ? decodeEntities(m[1]).trim() : "";
+}
+function extractSkySportsArticleBody(html) {
+  const start = html.indexOf("sdc-article-body");
+  if (start === -1) return "";
+  const openEnd = html.indexOf(">", start) + 1;
+  const end = html.indexOf("sdc-site-tile", openEnd);
+  return end === -1 ? html.slice(openEnd, openEnd + 20000) : html.slice(openEnd, end);
+}
+
+// Runs on SIDE_JOBS_CRON's twice-daily slot, same as BloodHorse/TDN main —
+// a news source benefits from twice-daily freshness the same way those do.
+// Also reachable on demand at GET /debug-run-skysports.
+async function runSkySportsImport(env) {
+  let checked = 0;
+  let written = 0;
+  try {
+    const listRes = await fetch(SKYSPORTS_NEWS_LIST_URL, {
+      headers: { "User-Agent": BROWSER_UA },
+      cf: { cacheTtl: 900, cacheEverything: true },
+    });
+    if (!listRes.ok) throw new Error(`Sky Sports Racing news list returned HTTP ${listRes.status}`);
+    const listHtml = await listRes.text();
+    const items = [];
+    const seenLinks = new Set();
+    for (const m of listHtml.matchAll(/href="(\/racing\/news\/\d+\/[a-z0-9-]+)"/g)) {
+      const link = "https://www.skysports.com" + m[1];
+      if (seenLinks.has(link)) continue;
+      seenLinks.add(link);
+      const id = skysportsArticleIdFromLink(link);
+      if (!id) continue;
+      items.push({ link, id });
+    }
+
+    const state = await readNotesTrainersAndJockeys(env);
+    const notes = state.notes;
+    // trainerMeta/jockeyMeta aren't part of readNotesTrainersAndJockeys()'s
+    // return shape — read separately for autoTrackUnverifiedSection()'s
+    // provenance, same as every other caller of that function.
+    const [trainerMetaRaw, jockeyMetaRaw] = await Promise.all([
+      env.STABLE_KV.get("trainerMeta"),
+      env.STABLE_KV.get("jockeyMeta"),
+    ]);
+    state.trainerMeta = trainerMetaRaw ? JSON.parse(trainerMetaRaw) : {};
+    state.jockeyMeta = jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {};
+    let addedAny = false;
+    let rosterChanged = false;
+
+    // Listing page's own order is newest-first — walks the full list rather
+    // than a fixed top-N slice, same fix BloodHorse/TDN main needed for
+    // their own stalled-window bug (an already-seen item costs only a cheap
+    // KV read and doesn't block the run from reaching older unseen articles
+    // further down).
+    for (const item of items) {
+      if (checked >= SKYSPORTS_MAX_ARTICLES_PER_RUN) break;
+      const seenKey = skysportsSeenKvKey(item.id);
+      if (await env.STABLE_KV.get(seenKey)) continue;
+      checked++;
+      try {
+        const articleRes = await fetch(item.link, {
+          headers: { "User-Agent": BROWSER_UA },
+          cf: { cacheTtl: 3600, cacheEverything: true },
+        });
+        if (!articleRes.ok) continue;
+        const html = await articleRes.text();
+        const title = extractSkySportsTitle(html);
+        if (!title) continue;
+        if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(title)) continue;
+        if (NON_RACE_SIGNAL_RE.test(title)) continue;
+        const titleHorseGuess = skysportsTitleHorseGuess(title, state.trainers, state.jockeys);
+        if (!titleHorseGuess) continue;
+        const bodyHtml = extractSkySportsArticleBody(html);
+        if (!bodyHtml) continue;
+        const paragraphs = [...bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
+          .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
+          .filter(Boolean);
+        if (!paragraphs.length) continue;
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
+        for (const section of sections) {
+          if (autoTrackUnverifiedSection(state, section, "skysports-auto-unverified")) rosterChanged = true;
+          for (const horseName of section.horseNames) {
+            const dup = notes.find((n) => (section.trainerName ? n.trainer === section.trainerName : n.jockey === section.jockeyName) && n.horse === horseName && normalizeLinkForDedup(n.link) === normalizeLinkForDedup(item.link));
+            if (dup) continue;
+            notes.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              trainer: section.trainerName || "",
+              jockey: section.jockeyName || "",
+              horse: horseName,
+              note: section.text,
+              date: "",
+              source: title,
+              link: item.link,
+              autoImported: true,
+              sentiment: null,
+              importedVia: "skysports",
+              capturedAt: new Date().toISOString(),
+            });
+            addedAny = true;
+            written++;
+          }
+        }
+      } finally {
+        // Same "an article that yielded nothing today won't yield anything
+        // on a re-check either" reasoning as every other seen-flag here.
+        await env.STABLE_KV.put(seenKey, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+      }
+    }
+
+    if (rosterChanged) {
+      await env.STABLE_KV.put("trainers", JSON.stringify(state.trainers));
+      await env.STABLE_KV.put("trainerMeta", JSON.stringify(state.trainerMeta));
+      await env.STABLE_KV.put("jockeys", JSON.stringify(state.jockeys));
+      await env.STABLE_KV.put("jockeyMeta", JSON.stringify(state.jockeyMeta));
+    }
+    if (addedAny) {
+      await env.STABLE_KV.put("notes", JSON.stringify(notes));
+    }
+    if (addedAny || rosterChanged) await bumpDataVersion(env);
+    return { checked, written, rosterChanged };
+  } catch (err) {
+    console.error("Sky Sports Racing import failed", err.message);
     return { checked, written, error: err.message };
   }
 }
