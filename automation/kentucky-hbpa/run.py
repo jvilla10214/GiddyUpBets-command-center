@@ -100,7 +100,7 @@ def process_video(video, dropped_quotes):
         video["upload_date"] = discover.get_upload_date(video["id"])
 
         log(f"  transcribing ({round(video.get('duration', 0) / 60, 1)} min)...")
-        transcript = transcribe.transcribe_video(video["id"], work_dir)
+        transcript = transcribe.get_transcript(video["id"], work_dir)
         log(f"  transcribed: {len(transcript['segments'])} segments")
 
         log("  extracting quotes...")

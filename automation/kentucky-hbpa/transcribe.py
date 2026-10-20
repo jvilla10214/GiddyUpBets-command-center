@@ -21,6 +21,78 @@ def _run(cmd, timeout=180):
     return result.stdout
 
 
+# Matches YouTube's own inline annotations ("[music]", "[Applause]", ...)
+# that its auto-captioner sometimes inserts mid-sentence — see the identical
+# constant and reasoning in automation/nyra-broadcast-quotes/transcribe.py.
+INLINE_CAPTION_ANNOTATION_RE = re.compile(r"\[\w+\]")
+
+
+def _parse_json3_captions(path):
+    """Converts YouTube's own auto-caption json3 format into the same
+    {start, end, text} segment shape transcribe_chunk()'s Whisper output
+    produces, so get_transcript() can hand either one to extract_quotes.py
+    unchanged."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    segments = []
+    for event in data.get("events", []):
+        if event.get("aAppend") or "segs" not in event:
+            continue
+        text = "".join(seg.get("utf8", "") for seg in event["segs"])
+        text = INLINE_CAPTION_ANNOTATION_RE.sub("", text).strip()
+        if not text:
+            continue
+        start = event.get("tStartMs", 0) / 1000
+        end = start + event.get("dDurationMs", 0) / 1000
+        segments.append({"start": start, "end": end, "text": text})
+    return {"text": " ".join(s["text"] for s in segments), "segments": segments}
+
+
+def fetch_captions_transcript(video_id, work_dir):
+    """Tries YouTube's own auto-generated captions before falling back to
+    audio download + Whisper — a single ~1-second metadata-style request
+    instead of a full media stream download, which is specifically what
+    triggers YouTube's "confirm you're not a bot" wall (same real finding
+    as automation/nyra-broadcast-quotes/transcribe.py; confirmed 2026-10-20
+    that this channel's recent clips all carry a real en-orig auto-caption
+    track too). Returns None (caller falls back to transcribe_video()) when
+    neither "en-orig" nor "en" is available for this video."""
+    os.makedirs(work_dir, exist_ok=True)
+    out_template = os.path.join(work_dir, "captions")
+    for lang in ("en-orig", "en"):
+        cmd = [
+            config.YTDLP_BIN,
+            "--socket-timeout", "20",
+            *config.ytdlp_auth_args(),
+            "--skip-download",
+            "--write-auto-sub",
+            "--sub-lang", lang,
+            "--sub-format", "json3",
+            "-o", out_template,
+            f"https://www.youtube.com/watch?v={video_id}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        caption_path = f"{out_template}.{lang}.json3"
+        if result.returncode == 0 and os.path.exists(caption_path):
+            parsed = _parse_json3_captions(caption_path)
+            if parsed["segments"]:
+                return parsed
+    return None
+
+
+def get_transcript(video_id, work_dir):
+    """Prefer YouTube's own captions over the full audio-download + Whisper
+    path — see fetch_captions_transcript()'s own comment for why. Falls back
+    to transcribe_video() whenever no caption track exists, so a video
+    without one is no worse off than before this existed."""
+    captions = fetch_captions_transcript(video_id, work_dir)
+    if captions is not None:
+        print(f"  using YouTube captions ({len(captions['segments'])} segments) — no audio download needed", flush=True)
+        return captions
+    print("  no YouTube captions available — falling back to audio download + Whisper", flush=True)
+    return transcribe_video(video_id, work_dir)
+
+
 def download_audio(video_id, work_dir):
     os.makedirs(work_dir, exist_ok=True)
     out_template = os.path.join(work_dir, "audio.%(ext)s")
