@@ -10237,7 +10237,24 @@ async function runSkySportsImport(env) {
           .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
           .filter(Boolean);
         if (!paragraphs.length) continue;
-        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
+        // Confirmed real on a live article (2026-10-20): Sky Sports' house
+        // style opens a quote mark on one <p> and doesn't close it until a
+        // LATER <p> (a traditional multi-paragraph block-quote convention —
+        // confirmed directly: a real paragraph had exactly one quote
+        // character, not a matching pair). extractGenericQuoteSections()
+        // matches quote+attribution within ONE paragraph at a time, so
+        // every quote split this way was silently invisible to it — real
+        // Gosden/Buick quotes on that article matched zero times per-
+        // paragraph but matched correctly once the paragraphs were joined
+        // into one search window. Merging is scoped to this source's own
+        // call site only (NOT a change to extractGenericQuoteSections()
+        // itself, which the other 3 callers still use per-paragraph) —
+        // accepted tradeoff: NYRA_RETIRED_HORSE_SIGNAL_RE's per-paragraph
+        // skip (inside that shared function) now applies to the whole
+        // article at once rather than isolating just the retirement-
+        // related paragraph, a real but much smaller risk than the total
+        // extraction failure this fixes.
+        const sections = extractGenericQuoteSections([paragraphs.join(" ")], titleHorseGuess, state.trainers, state.jockeys);
         for (const section of sections) {
           if (autoTrackUnverifiedSection(state, section, "skysports-auto-unverified")) rosterChanged = true;
           for (const horseName of section.horseNames) {
