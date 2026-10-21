@@ -6784,7 +6784,8 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
           : "";
         return `
         <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink}; border-left:2px solid ${theme.accent}; padding-left:10px; margin:4px 0 10px;">
-          <strong>${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}</strong> (${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")})${siteTag}: ${escapeHtmlForEmail(n.note)}
+          <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:16px; color:${theme.accent}; margin-bottom:2px;">${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}</div>
+          <span style="font-size:10.5px; color:${theme.dim};">(${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")})</span>${siteTag}: ${escapeHtmlForEmail(n.note)}
         </div>
       `;
       }).join("");
