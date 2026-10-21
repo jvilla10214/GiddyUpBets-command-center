@@ -6764,6 +6764,25 @@ function formatEmailDateLabel(dateStr) {
 // cardLabel added 2026-09-17 ("today" | "tomorrow") for the new evening
 // (day-before) send — that digest covers TOMORROW's card while it's sent
 // today, so the template can no longer hardcode "today" everywhere.
+// Quote/Race Recap/Full Card Recap colors — deliberately NOT theme.accent for
+// the latter two. Design pass 2026-10-21: all three content types share one
+// "ribbon header + tinted body" shape (color-coded, not shape-coded) so the
+// type reads at a glance without needing to read the label text — a quote
+// in the track's own accent color, a race recap in gold, a full card recap
+// in steel blue, consistently across every track rather than varying with
+// each track's own theme (which would make "gold = race recap" stop being a
+// reliable visual shortcut from one track's email to the next).
+const RECAP_RIBBON_COLORS = { race: "#c99a2e", fullCard: "#4a6b8a" };
+
+function ribbonBlockHtml(hue, bodyTextColor, icon, label, badgeHtml, bodyHtml, bottomMargin) {
+  return `
+        <div style="border-radius:6px; overflow:hidden; margin:4px 0 ${bottomMargin};">
+          <div style="background:${hue}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">${icon} ${label}${badgeHtml}</div>
+          <div style="background:${hue}12; padding:10px 12px; font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${bodyTextColor};">${bodyHtml}</div>
+        </div>
+      `;
+}
+
 function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest = false, cardLabel = "today" } = {}) {
   const theme = STYLED_DIGEST_TRACK_THEME[track] || STYLED_DIGEST_TRACK_THEME.saratoga;
   const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
@@ -6774,32 +6793,45 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
     const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
     const raceTag = [`RACE ${race.raceNumber}`, postTime, conditionsBits, distBits].filter(Boolean).join(" · ");
-    const horsesHtml = horses.map(({ horse, notes, recaps }) => {
+    const horsesHtml = horses.map(({ horse, notes, recaps }, horseIdx) => {
       const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition) : "";
+      // Quote/Race Recap/Full Card Recap all share one "ribbon header + tinted
+      // body" shape, color-coded by type (not by track theme) so the three
+      // read as distinct at a glance regardless of which track's accent is
+      // active — design pass 2026-10-21, replacing the old plain-left-border
+      // quote style and the recaps' separate box treatments. See
+      // ribbonBlockHtml()'s own comment for the exact rationale.
       // Full, untruncated note text — no slicing anywhere in this path.
       const notesHtml = notes.map((n) => {
         const siteLabel = siteLabelForEmail(n.link);
         const siteTag = siteLabel
           ? ` <span style="display:inline-block; font-size:9px; font-family:'Courier New',Courier,monospace; color:${theme.dim}; background:rgba(0,0,0,0.06); padding:1px 5px; border-radius:3px;">${escapeHtmlForEmail(siteLabel)}</span>`
           : "";
-        return `
-        <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink}; border-left:2px solid ${theme.accent}; padding-left:10px; margin:4px 0 10px;">
-          <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:16px; color:${theme.accent}; margin-bottom:2px;">${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}</div>
-          <span style="font-size:10.5px; color:${theme.dim};">(${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")})</span>${siteTag}: ${escapeHtmlForEmail(n.note)}
-        </div>
-      `;
+        // Trainer vs. jockey gets a different icon so "who's talking" reads
+        // at a glance, not just from the text below the quote — a note only
+        // ever has one of these two fields set (see write_notes.py's own
+        // callers), never both, so this is an either/or, not a priority order.
+        const roleIcon = n.trainer ? "&#127908;" : "&#127943;";
+        const roleLabel = n.trainer ? "Trainer" : "Jockey";
+        const speakerName = n.trainer || n.jockey || "";
+        // "NEW" means genuinely never sent in a real (non-test) digest
+        // before — not just "newest by date" — n.digestedAt is set the
+        // first time a REAL send succeeds for this note (see
+        // runEntryAlerts()'s post-send loop) and persists on the note
+        // forever after, so this only ever shows once per quote, ever.
+        const newBadge = !n.digestedAt
+          ? `<span style="display:inline-block; background:#ffffff; color:${theme.accent}; font-weight:700; font-size:9px; letter-spacing:0.04em; padding:1px 6px; border-radius:8px; margin-left:7px; vertical-align:middle;">NEW</span>`
+          : "";
+        const body = `${escapeHtmlForEmail(n.note)}
+          <div style="font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:${theme.dim}; margin-top:5px;"><strong style="color:${theme.ink};">${escapeHtmlForEmail(speakerName)}</strong> (${roleLabel}) &middot; ${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}${siteTag}</div>`;
+        return ribbonBlockHtml(theme.accent, theme.ink, roleIcon, `QUOTE &mdash; ${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}`, newBadge, body, "10px");
       }).join("");
-      // Filled box (not the notes' plain left-border style) so a race recap
-      // reads as visually distinct at a glance — this is "how this horse's
-      // actual last race went," a different kind of information than a
-      // quote or observation, and shouldn't blend in with regular notes.
       // A FULL CARD RECAP box (when that date has one) sits right above its
-      // matching RACE RECAP box, broad context before the specific race —
-      // dashed/muted styling on purpose so it doesn't compete with the
-      // solid-accent race recap for attention. Wired in the same way the
-      // race recap itself is: an independent per-date lookup attached to
-      // each recap entry in runEntryAlerts()/collectTodaysRaceGroupsForPreview(),
-      // not stored on the horse/note data itself.
+      // matching RACE RECAP box, broad context before the specific race.
+      // Wired in the same way the race recap itself is: an independent
+      // per-date lookup attached to each recap entry in
+      // runEntryAlerts()/collectTodaysRaceGroupsForPreview(), not stored on
+      // the horse/note data itself.
       // Recaps don't come pre-sorted the way notesForHorse() already sorts
       // notes (newest first) — the underlying index is built by whatever
       // order raceday records get walked, often oldest-first. Sorted here,
@@ -6815,29 +6847,28 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         // this email's own, rather than letting it read as if it happened
         // at the track this email is actually about.
         const originTrackTag = r.track && r.track !== track ? ` &middot; ${escapeHtmlForEmail(ENTRIES_TRACK_LABEL[r.track] || r.track)}` : "";
-        const fullCardHtml = r.fullCardRecap ? `
-          <div style="background:rgba(0,0,0,0.03); border:1px dashed ${theme.dim}; border-radius:6px; padding:10px 12px; margin:4px 0 6px;">
-            <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.dim}; margin-bottom:4px;">FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${originTrackTag}</span>
-            <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.fullCardRecap)}</div>
-          </div>
-        ` : "";
+        const fullCardHtml = r.fullCardRecap
+          ? ribbonBlockHtml(RECAP_RIBBON_COLORS.fullCard, theme.ink, "&#128197;", `FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${originTrackTag}`, "", escapeHtmlForEmail(r.fullCardRecap), "6px")
+          : "";
         // r.recap can now be empty — a horse indexed ONLY because that
         // day's full-card recap was written with no specific per-race
         // recap for them (see upsertRaceRecapsBulk's own comment) — so the
         // solid RACE RECAP box only renders when there's real per-race
         // text to put in it, not an empty box under a real recap's heading.
-        const raceRecapHtml = r.recap ? `
-        <div style="background:rgba(0,0,0,0.05); border:1px solid ${theme.accent}; border-radius:6px; padding:10px 12px; margin:4px 0 10px;">
-          <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10px; letter-spacing:0.05em; color:${theme.accent}; margin-bottom:4px;">RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}${originTrackTag}</span>
-          <div style="font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:${theme.ink};">${escapeHtmlForEmail(r.recap)}</div>
-        </div>
-        ` : "";
+        const raceRecapHtml = r.recap
+          ? ribbonBlockHtml(RECAP_RIBBON_COLORS.race, theme.ink, "&#127937;", `RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}${originTrackTag}`, "", escapeHtmlForEmail(r.recap), "10px")
+          : "";
         return `
         ${fullCardHtml}
         ${raceRecapHtml}
       `;
       }).join("");
+      // A dashed rule between horses sharing one race block — without it,
+      // two or three tracked horses in the same race ran together with
+      // nothing but a little margin between them (design pass 2026-10-21).
+      const horseDivider = horseIdx > 0 ? `<div style="border-top:1px dashed ${theme.hairline}; margin:14px 0 10px;"></div>` : "";
       return `
+        ${horseDivider}
         <div style="margin:10px 0 3px;">
           ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
         </div>
@@ -7041,6 +7072,27 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
           for (const { key } of horses) {
             await env.STABLE_KV.put(key, new Date().toISOString(), { expirationTtl: 60 * 60 * 24 * 30 });
           }
+        }
+        // Marks every note just sent as "digested" so the email's "NEW"
+        // badge (see buildStyledEntryDigestEmail) never shows on it again —
+        // only after a REAL send succeeds, same reasoning as the dedup-key
+        // writes right above: a failed send shouldn't silently mark
+        // anything as already-seen. `notes` here are the exact same object
+        // references as state.notes (notesForHorse() filters, doesn't
+        // clone), so mutating them in place and writing state.notes back
+        // once covers every horse in this track's digest in one KV write.
+        let anyNewlyDigested = false;
+        const digestedAtIso = new Date().toISOString();
+        for (const { notes } of raceGroups.flatMap((g) => g.horses)) {
+          for (const n of notes) {
+            if (!n.digestedAt) {
+              n.digestedAt = digestedAtIso;
+              anyNewlyDigested = true;
+            }
+          }
+        }
+        if (anyNewlyDigested) {
+          await env.STABLE_KV.put("notes", JSON.stringify(state.notes));
         }
         const trackSent = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
         sent += trackSent;
