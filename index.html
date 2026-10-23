@@ -1771,24 +1771,19 @@
     gap: 6px 10px;
   }
   .bc-horse-chip{
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    display: block;
+    width: 100%;
+    text-align: left;
     font-size: 12.5px;
+    font-family: inherit;
     color: var(--parchment);
+    background: none;
+    border: none;
     padding: 4px 0;
+    cursor: pointer;
   }
-  .bc-horse-pgm{
-    font-family:'IBM Plex Mono', monospace;
-    font-size: 10.5px;
-    color: var(--ink);
-    background: var(--parchment-dim);
-    min-width: 18px;
-    text-align: center;
-    border-radius: 4px;
-    padding: 1px 4px;
-    flex-shrink: 0;
-  }
+  .bc-horse-chip:hover{ color: var(--tote-amber); text-decoration: underline; }
+  .bc-jump-notes-btn{ margin-left: auto; }
   .entries-results-card{
     margin-bottom: 18px;
     padding: 14px 16px;
@@ -10847,13 +10842,16 @@
     const tabs = $("bcDayTabs");
     tabs.innerHTML = BREEDERS_CUP_2026.days.map(d => `
       <button type="button" class="entries-date-tab${d.date === bcSelectedDay ? " active" : ""}" data-bc-day="${d.date}">${d.label}</button>
-    `).join("");
+    `).join("") + `<button type="button" class="entries-date-tab bc-jump-notes-btn" id="bcJumpToNotesBtn">↓ Notes</button>`;
     tabs.querySelectorAll("[data-bc-day]").forEach(btn => {
       btn.addEventListener("click", () => {
         bcSelectedDay = btn.dataset.bcDay;
         renderBreedersCupDayTabs();
         renderBreedersCupRaces();
       });
+    });
+    $("bcJumpToNotesBtn").addEventListener("click", () => {
+      $("bcNotesList").scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
 
@@ -10869,11 +10867,27 @@
         </div>
         <div class="entries-race-meta bc-race-conditions">${escapeHtml(race.dist)} ${escapeHtml(race.surf)} · ${escapeHtml(race.purse)} · ${escapeHtml(race.cond)}</div>
         <div class="bc-horse-grid">
-          ${race.horses.map(h => `<div class="bc-horse-chip"><span class="bc-horse-pgm">${h.pgm}</span>${escapeHtml(h.name)}</div>`).join("")}
+          ${race.horses.map(h => `<button type="button" class="bc-horse-chip" data-bc-horse-key="${escapeHtml(h.name.trim().toLowerCase())}">${escapeHtml(h.name)}</button>`).join("")}
         </div>
       </div>
     `).join("");
   }
+
+  // Jumps a clicked horse chip straight to its own Stable Tour Notes card
+  // below (opening it if it's closed) instead of making the user scroll
+  // down and hunt for it among 250+ pre-entered horses. A horse with no
+  // notes yet has nothing to jump to — just scroll to the subsection itself
+  // so it's obvious that's where notes would show up.
+  $("bcRaceList").addEventListener("click", (e) => {
+    const chip = e.target.closest(".bc-horse-chip");
+    if (!chip) return;
+    const key = chip.dataset.bcHorseKey;
+    stableOpenHorses.add(`bc-${key}`);
+    renderBreedersCupNotes();
+    const card = [...$("bcNotesList").querySelectorAll(".stable-trainer-toggle")]
+      .find(btn => btn.dataset.horseKey === `bc-${key}`)?.closest(".stable-trainer");
+    (card || $("bcNotesList")).scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 
   // Reuses the same renderStableTourByHorse grouping/card markup (via
   // renderStableNoteHtml) rather than inventing a parallel note renderer —
