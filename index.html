@@ -1752,6 +1752,43 @@
   .entries-jockey-changed{ color: var(--tote-amber); font-weight: 600; }
   .entries-race-card{ margin-bottom: 22px; }
   .entries-race-card:last-child{ margin-bottom: 0; }
+  .bc-subhead{
+    font-size: 12.5px;
+    color: var(--parchment-dim);
+    margin: -4px 0 14px;
+    line-height: 1.5;
+  }
+  .bc-race-card{
+    padding: 14px 16px;
+    background: var(--panel-2);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+  }
+  .bc-race-conditions{ margin-bottom: 12px; opacity: 0.85; }
+  .bc-horse-grid{
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 6px 10px;
+  }
+  .bc-horse-chip{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    color: var(--parchment);
+    padding: 4px 0;
+  }
+  .bc-horse-pgm{
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink);
+    background: var(--parchment-dim);
+    min-width: 18px;
+    text-align: center;
+    border-radius: 4px;
+    padding: 1px 4px;
+    flex-shrink: 0;
+  }
   .entries-results-card{
     margin-bottom: 18px;
     padding: 14px 16px;
@@ -3015,6 +3052,16 @@
       </svg>
       Stable Tour
     </button>
+    <button type="button" class="sidebar-btn" data-page="breederscup">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 21h8"/>
+        <path d="M12 17v4"/>
+        <path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/>
+        <path d="M7 5H4a3 3 0 0 0 3 5"/>
+        <path d="M17 5h3a3 3 0 0 1-3 5"/>
+      </svg>
+      Breeders' Cup
+    </button>
   </nav>
 
   <div class="page active" id="page-dashboard">
@@ -3797,6 +3844,29 @@
         partial by design rather than guessed at wherever a source can't confidently tell which horse a quote is
         about.
       </div>
+    </div>
+  </div>
+
+  <div class="page" id="page-breederscup">
+    <div class="panel">
+      <div class="panel-title">
+        Breeders' Cup 2026
+        <span class="tag">PRE-ENTRIES — DRAW NOT YET MADE</span>
+      </div>
+      <div class="bc-subhead">
+        Keeneland · Friday, October 30 &amp; Saturday, October 31, 2026 — fields below are pre-entries pulled
+        from the official PP documents. Post positions, scratches, and final fields aren't set until the draw.
+      </div>
+      <div class="entries-date-picker" id="bcDayTabs"></div>
+      <div id="bcRaceList"></div>
+    </div>
+
+    <div class="panel log-panel">
+      <div class="panel-title">
+        Stable Tour Notes — Breeders' Cup Horses
+        <span class="tag">THIS WEEKEND'S FIELD ONLY</span>
+      </div>
+      <div class="stable-trainer-list" id="bcNotesList"></div>
     </div>
   </div>
 
@@ -8889,6 +8959,1206 @@
     }
   }
 
+  // ---------- Breeders' Cup 2026 (temporary — pre-entries only, remove
+  // after the meet; pattern to reuse for Derby/other event weekends) ----------
+  // Hand-entered from the official Keeneland pre-entry PP documents (not a
+  // live feed — the draw hasn't happened yet, so this is deliberately
+  // static: every field could still change before post). Program (pgm)
+  // numbers are pre-entry post-position placeholders, not final gate
+  // assignments. Re-extract from the real draw/entries once it's out if
+  // this needs to stay accurate past opening week.
+  const BREEDERS_CUP_2026 = {
+    "track": "Keeneland",
+    "days": [
+      {
+        "date": "2026-10-30",
+        "label": "Friday, October 30",
+        "races": [
+          {
+            "num": 6,
+            "name": "Breeders' Cup Juvenile Turf Sprint",
+            "post": "2:55 PM ET",
+            "dist": "5.5 Furlongs",
+            "surf": "Turf",
+            "purse": "$1,000,000",
+            "cond": "2yo",
+            "horses": [
+              {
+                "pgm": 12,
+                "name": "Harper's Corner"
+              },
+              {
+                "pgm": 3,
+                "name": "Brickyard Belle"
+              },
+              {
+                "pgm": 11,
+                "name": "Good to Be King"
+              },
+              {
+                "pgm": 10,
+                "name": "Go for Launch"
+              },
+              {
+                "pgm": 18,
+                "name": "Mrs D"
+              },
+              {
+                "pgm": 26,
+                "name": "Seneca Park"
+              },
+              {
+                "pgm": 1,
+                "name": "Adonius (IRE)"
+              },
+              {
+                "pgm": 28,
+                "name": "Wood Island"
+              },
+              {
+                "pgm": 24,
+                "name": "Ruiva"
+              },
+              {
+                "pgm": 2,
+                "name": "Arctic Wolf"
+              },
+              {
+                "pgm": 15,
+                "name": "Love a Warrior"
+              },
+              {
+                "pgm": 16,
+                "name": "Luminous Beauty"
+              },
+              {
+                "pgm": 7,
+                "name": "Fanshell Beach"
+              },
+              {
+                "pgm": 20,
+                "name": "My Kid's Said No"
+              },
+              {
+                "pgm": 23,
+                "name": "Riyadh Way"
+              },
+              {
+                "pgm": 22,
+                "name": "Primetime Emmy (AUS)"
+              },
+              {
+                "pgm": 19,
+                "name": "Mussab (GB)"
+              },
+              {
+                "pgm": 25,
+                "name": "Sale Shark (IRE)"
+              },
+              {
+                "pgm": 21,
+                "name": "Nabati (IRE)"
+              },
+              {
+                "pgm": 13,
+                "name": "Hell of A Spin (IRE)"
+              },
+              {
+                "pgm": 27,
+                "name": "Velozee (IRE)"
+              },
+              {
+                "pgm": 9,
+                "name": "Force Noir (IRE)"
+              },
+              {
+                "pgm": 14,
+                "name": "Libertango (IRE)"
+              },
+              {
+                "pgm": 17,
+                "name": "Moonrise (IRE)"
+              },
+              {
+                "pgm": 5,
+                "name": "Crownbreaker (IRE)"
+              },
+              {
+                "pgm": 4,
+                "name": "Carry The Flag (IRE)"
+              },
+              {
+                "pgm": 8,
+                "name": "Final Objective (IRE)"
+              },
+              {
+                "pgm": 6,
+                "name": "Drazinda (FR)"
+              }
+            ]
+          },
+          {
+            "num": 7,
+            "name": "Breeders' Cup Juvenile Fillies",
+            "post": "3:35 PM ET",
+            "dist": "8.5 Furlongs",
+            "surf": "Dirt",
+            "purse": "$2,000,000",
+            "cond": "2yo Fillies",
+            "horses": [
+              {
+                "pgm": 4,
+                "name": "Emphatic"
+              },
+              {
+                "pgm": 8,
+                "name": "Manuka Honey"
+              },
+              {
+                "pgm": 6,
+                "name": "Lexi's Charm"
+              },
+              {
+                "pgm": 3,
+                "name": "Dotsy"
+              },
+              {
+                "pgm": 12,
+                "name": "Scarlett Begonia"
+              },
+              {
+                "pgm": 11,
+                "name": "Rum Twist"
+              },
+              {
+                "pgm": 9,
+                "name": "Miss Monica"
+              },
+              {
+                "pgm": 13,
+                "name": "Voyager"
+              },
+              {
+                "pgm": 7,
+                "name": "Life Changing"
+              },
+              {
+                "pgm": 1,
+                "name": "Badittude"
+              },
+              {
+                "pgm": 10,
+                "name": "Revenge of the Sis"
+              },
+              {
+                "pgm": 2,
+                "name": "Domain Expansion"
+              },
+              {
+                "pgm": 5,
+                "name": "Foxiest"
+              }
+            ]
+          },
+          {
+            "num": 8,
+            "name": "John Deere Breeders' Cup Juvenile Fillies Turf",
+            "post": "4:15 PM ET",
+            "dist": "8 Furlongs",
+            "surf": "Turf",
+            "purse": "$1,000,000",
+            "cond": "2yo Fillies",
+            "horses": [
+              {
+                "pgm": 4,
+                "name": "Citrus Springs"
+              },
+              {
+                "pgm": 17,
+                "name": "Seneca Park"
+              },
+              {
+                "pgm": 18,
+                "name": "Serenas Ghost"
+              },
+              {
+                "pgm": 10,
+                "name": "Go for Launch"
+              },
+              {
+                "pgm": 9,
+                "name": "Domestic Agenda"
+              },
+              {
+                "pgm": 23,
+                "name": "Voyager"
+              },
+              {
+                "pgm": 6,
+                "name": "De la Renta"
+              },
+              {
+                "pgm": 13,
+                "name": "Luminous Beauty"
+              },
+              {
+                "pgm": 15,
+                "name": "Quibbler"
+              },
+              {
+                "pgm": 12,
+                "name": "Hidden Overture"
+              },
+              {
+                "pgm": 8,
+                "name": "Domain Expansion"
+              },
+              {
+                "pgm": 22,
+                "name": "Vanta"
+              },
+              {
+                "pgm": 5,
+                "name": "Curracloe"
+              },
+              {
+                "pgm": 20,
+                "name": "So Lovely"
+              },
+              {
+                "pgm": 2,
+                "name": "Amusingly (GB)"
+              },
+              {
+                "pgm": 7,
+                "name": "Dee's Funny Girl (IRE)"
+              },
+              {
+                "pgm": 16,
+                "name": "Scommessa Sicura (IRE)"
+              },
+              {
+                "pgm": 3,
+                "name": "Ballinea Star (IRE)"
+              },
+              {
+                "pgm": 1,
+                "name": "Alwaysanangel (IRE)"
+              },
+              {
+                "pgm": 19,
+                "name": "Silent Beauty (IRE)"
+              },
+              {
+                "pgm": 11,
+                "name": "Green Empress (IRE)"
+              },
+              {
+                "pgm": 14,
+                "name": "Nuit d'Eclair (IRE)"
+              },
+              {
+                "pgm": 21,
+                "name": "Sun Goddess (IRE)"
+              }
+            ]
+          },
+          {
+            "num": 9,
+            "name": "FanDuel Breeders' Cup Juvenile",
+            "post": "4:55 PM ET",
+            "dist": "8.5 Furlongs",
+            "surf": "Dirt",
+            "purse": "$2,000,000",
+            "cond": "2yo Colts & Geldings",
+            "horses": [
+              {
+                "pgm": 5,
+                "name": "Gaudreau"
+              },
+              {
+                "pgm": 2,
+                "name": "Coach Pope"
+              },
+              {
+                "pgm": 9,
+                "name": "Salahudin"
+              },
+              {
+                "pgm": 1,
+                "name": "American History"
+              },
+              {
+                "pgm": 6,
+                "name": "He Is No Lie"
+              },
+              {
+                "pgm": 7,
+                "name": "Hughes"
+              },
+              {
+                "pgm": 3,
+                "name": "Damavand"
+              },
+              {
+                "pgm": 4,
+                "name": "Earth Song"
+              },
+              {
+                "pgm": 8,
+                "name": "Net Par"
+              }
+            ]
+          },
+          {
+            "num": 10,
+            "name": "Brown Advisory Breeders' Cup Juvenile Turf",
+            "post": "5:35 PM ET",
+            "dist": "8 Furlongs",
+            "surf": "Turf",
+            "purse": "$1,000,000",
+            "cond": "2yo Colts & Geldings",
+            "horses": [
+              {
+                "pgm": 12,
+                "name": "How's Al Today"
+              },
+              {
+                "pgm": 1,
+                "name": "Agate"
+              },
+              {
+                "pgm": 23,
+                "name": "Real Goodbar"
+              },
+              {
+                "pgm": 4,
+                "name": "Bold Leadership"
+              },
+              {
+                "pgm": 6,
+                "name": "Earth Song"
+              },
+              {
+                "pgm": 22,
+                "name": "Popcorn"
+              },
+              {
+                "pgm": 15,
+                "name": "Liam's Law"
+              },
+              {
+                "pgm": 5,
+                "name": "Canada"
+              },
+              {
+                "pgm": 14,
+                "name": "Let Em Know"
+              },
+              {
+                "pgm": 2,
+                "name": "Al Hudaiba (GB)"
+              },
+              {
+                "pgm": 24,
+                "name": "Riyadh Way"
+              },
+              {
+                "pgm": 20,
+                "name": "Oscar"
+              },
+              {
+                "pgm": 13,
+                "name": "Induction"
+              },
+              {
+                "pgm": 19,
+                "name": "Observed"
+              },
+              {
+                "pgm": 16,
+                "name": "Majik Mooney"
+              },
+              {
+                "pgm": 18,
+                "name": "Maxify"
+              },
+              {
+                "pgm": 11,
+                "name": "Haffner"
+              },
+              {
+                "pgm": 3,
+                "name": "Avec Toi"
+              },
+              {
+                "pgm": 8,
+                "name": "Folsom Blues (IRE)"
+              },
+              {
+                "pgm": 25,
+                "name": "Sale Shark (IRE)"
+              },
+              {
+                "pgm": 10,
+                "name": "Great Barrier Reef (IRE)"
+              },
+              {
+                "pgm": 7,
+                "name": "Florida Bay (IRE)"
+              },
+              {
+                "pgm": 17,
+                "name": "Man's Best Friend (IRE)"
+              },
+              {
+                "pgm": 9,
+                "name": "Force Noir (IRE)"
+              },
+              {
+                "pgm": 21,
+                "name": "Pikachu (GB)"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "date": "2026-10-31",
+        "label": "Saturday, October 31",
+        "races": [
+          {
+            "num": 4,
+            "name": "Breeders' Cup Filly & Mare Sprint",
+            "post": "1:10 PM ET",
+            "dist": "7 Furlongs",
+            "surf": "Dirt",
+            "purse": "$1,000,000",
+            "cond": "3yo+ Fillies & Mares",
+            "horses": [
+              {
+                "pgm": 14,
+                "name": "Ways and Means"
+              },
+              {
+                "pgm": 10,
+                "name": "R Disaster"
+              },
+              {
+                "pgm": 12,
+                "name": "Splendora"
+              },
+              {
+                "pgm": 3,
+                "name": "Foie Gras"
+              },
+              {
+                "pgm": 2,
+                "name": "Explora"
+              },
+              {
+                "pgm": 13,
+                "name": "Sweet Azteca"
+              },
+              {
+                "pgm": 1,
+                "name": "Evanescence"
+              },
+              {
+                "pgm": 5,
+                "name": "Kilwin"
+              },
+              {
+                "pgm": 9,
+                "name": "Praying"
+              },
+              {
+                "pgm": 6,
+                "name": "Look Forward"
+              },
+              {
+                "pgm": 8,
+                "name": "Nooni"
+              },
+              {
+                "pgm": 7,
+                "name": "Majestic Oops"
+              },
+              {
+                "pgm": 4,
+                "name": "Kerry's Kiss"
+              },
+              {
+                "pgm": 11,
+                "name": "Simply Joking"
+              }
+            ]
+          },
+          {
+            "num": 5,
+            "name": "Prevagen Breeders' Cup Turf Sprint",
+            "post": "1:48 PM ET",
+            "dist": "5.5 Furlongs",
+            "surf": "Turf",
+            "purse": "$1,000,000",
+            "cond": "3yo+",
+            "horses": [
+              {
+                "pgm": 10,
+                "name": "Joe Shiesty"
+              },
+              {
+                "pgm": 19,
+                "name": "Possiblemente"
+              },
+              {
+                "pgm": 8,
+                "name": "Golden Afternoon"
+              },
+              {
+                "pgm": 16,
+                "name": "No Nay Hudson (IRE)"
+              },
+              {
+                "pgm": 26,
+                "name": "Yellow Card"
+              },
+              {
+                "pgm": 6,
+                "name": "Doncho"
+              },
+              {
+                "pgm": 25,
+                "name": "Victory Achieved"
+              },
+              {
+                "pgm": 24,
+                "name": "Time to Dazzle"
+              },
+              {
+                "pgm": 11,
+                "name": "John the Beer Man"
+              },
+              {
+                "pgm": 9,
+                "name": "In Our Time"
+              },
+              {
+                "pgm": 15,
+                "name": "My Boy Prince"
+              },
+              {
+                "pgm": 17,
+                "name": "Nobals"
+              },
+              {
+                "pgm": 12,
+                "name": "Kehoe Beach"
+              },
+              {
+                "pgm": 20,
+                "name": "Roja"
+              },
+              {
+                "pgm": 5,
+                "name": "Cy Fair"
+              },
+              {
+                "pgm": 22,
+                "name": "Sorrento Sky (IRE)"
+              },
+              {
+                "pgm": 21,
+                "name": "Shisospicy"
+              },
+              {
+                "pgm": 18,
+                "name": "Outfielder"
+              },
+              {
+                "pgm": 2,
+                "name": "Bacio"
+              },
+              {
+                "pgm": 1,
+                "name": "American Stage"
+              },
+              {
+                "pgm": 7,
+                "name": "Ecoro Reve"
+              },
+              {
+                "pgm": 4,
+                "name": "Comanche Brave (IRE)"
+              },
+              {
+                "pgm": 13,
+                "name": "Lugal (JPN)"
+              },
+              {
+                "pgm": 14,
+                "name": "Miss Yechance (IRE)"
+              },
+              {
+                "pgm": 23,
+                "name": "Starlust (GB)"
+              },
+              {
+                "pgm": 3,
+                "name": "Big Mojo (IRE)"
+              }
+            ]
+          },
+          {
+            "num": 6,
+            "name": "Breeders' Cup Dirt Mile",
+            "post": "2:26 PM ET",
+            "dist": "8 Furlongs",
+            "surf": "Dirt",
+            "purse": "$1,000,000",
+            "cond": "3yo+",
+            "horses": [
+              {
+                "pgm": 10,
+                "name": "Knightsbridge"
+              },
+              {
+                "pgm": 4,
+                "name": "Coal Battle"
+              },
+              {
+                "pgm": 2,
+                "name": "Built"
+              },
+              {
+                "pgm": 7,
+                "name": "Further Ado"
+              },
+              {
+                "pgm": 14,
+                "name": "Owen Almighty"
+              },
+              {
+                "pgm": 3,
+                "name": "Chunk of Gold"
+              },
+              {
+                "pgm": 1,
+                "name": "Bracket Buster"
+              },
+              {
+                "pgm": 5,
+                "name": "Forged Steel"
+              },
+              {
+                "pgm": 8,
+                "name": "Hymn"
+              },
+              {
+                "pgm": 13,
+                "name": "Napoleon Solo"
+              },
+              {
+                "pgm": 6,
+                "name": "Full Serrano (ARG)"
+              },
+              {
+                "pgm": 15,
+                "name": "T Kraft"
+              },
+              {
+                "pgm": 9,
+                "name": "Iron Man Cal"
+              },
+              {
+                "pgm": 12,
+                "name": "Moonlight"
+              },
+              {
+                "pgm": 11,
+                "name": "Lord Fons (JPN)"
+              },
+              {
+                "pgm": 16,
+                "name": "T O Password (JPN)"
+              }
+            ]
+          },
+          {
+            "num": 7,
+            "name": "Maker's Mark Breeders' Cup Filly & Mare Turf",
+            "post": "3:04 PM ET",
+            "dist": "9.5 Furlongs",
+            "surf": "Turf",
+            "purse": "$2,000,000",
+            "cond": "3yo+ Fillies & Mares",
+            "horses": [
+              {
+                "pgm": 3,
+                "name": "Classic Q"
+              },
+              {
+                "pgm": 11,
+                "name": "Lush Lips (GB)"
+              },
+              {
+                "pgm": 1,
+                "name": "Bless the Broken"
+              },
+              {
+                "pgm": 10,
+                "name": "Kathynmarissa"
+              },
+              {
+                "pgm": 17,
+                "name": "Vina Arana (IRE)"
+              },
+              {
+                "pgm": 7,
+                "name": "Expensive Queen (IRE)"
+              },
+              {
+                "pgm": 14,
+                "name": "Stellify"
+              },
+              {
+                "pgm": 16,
+                "name": "Thought Process"
+              },
+              {
+                "pgm": 8,
+                "name": "Gimme a Nother (SAF)"
+              },
+              {
+                "pgm": 6,
+                "name": "Evershed (IRE)"
+              },
+              {
+                "pgm": 15,
+                "name": "Survie (IRE)"
+              },
+              {
+                "pgm": 9,
+                "name": "Jancis (IRE)"
+              },
+              {
+                "pgm": 13,
+                "name": "Red Letter (GB)"
+              },
+              {
+                "pgm": 2,
+                "name": "Blue Bolt (IRE)"
+              },
+              {
+                "pgm": 4,
+                "name": "Diamond Necklace (IRE)"
+              },
+              {
+                "pgm": 12,
+                "name": "Precise (IRE)"
+              },
+              {
+                "pgm": 5,
+                "name": "Eccentric (CHI)"
+              }
+            ]
+          },
+          {
+            "num": 8,
+            "name": "Cygames Breeders' Cup Sprint",
+            "post": "3:42 PM ET",
+            "dist": "6 Furlongs",
+            "surf": "Dirt",
+            "purse": "$2,000,000",
+            "cond": "3yo+",
+            "horses": [
+              {
+                "pgm": 5,
+                "name": "Englishman"
+              },
+              {
+                "pgm": 19,
+                "name": "T O Elvis"
+              },
+              {
+                "pgm": 2,
+                "name": "Built"
+              },
+              {
+                "pgm": 16,
+                "name": "Roll On Big Joe"
+              },
+              {
+                "pgm": 6,
+                "name": "Hymn"
+              },
+              {
+                "pgm": 9,
+                "name": "Listenupshance"
+              },
+              {
+                "pgm": 8,
+                "name": "Liam Smith"
+              },
+              {
+                "pgm": 12,
+                "name": "Mad House"
+              },
+              {
+                "pgm": 14,
+                "name": "Nakatomi"
+              },
+              {
+                "pgm": 18,
+                "name": "T Kraft"
+              },
+              {
+                "pgm": 10,
+                "name": "Little Thunder"
+              },
+              {
+                "pgm": 17,
+                "name": "Stradale"
+              },
+              {
+                "pgm": 15,
+                "name": "Praying"
+              },
+              {
+                "pgm": 7,
+                "name": "Iron Man Cal"
+              },
+              {
+                "pgm": 13,
+                "name": "Moonlight"
+              },
+              {
+                "pgm": 3,
+                "name": "Dark Saffron"
+              },
+              {
+                "pgm": 1,
+                "name": "American Stage"
+              },
+              {
+                "pgm": 4,
+                "name": "Ecoro Reve"
+              },
+              {
+                "pgm": 11,
+                "name": "Lord Fons (JPN)"
+              }
+            ]
+          },
+          {
+            "num": 9,
+            "name": "FanDuel Breeders' Cup Mile",
+            "post": "4:20 PM ET",
+            "dist": "8 Furlongs",
+            "surf": "Turf",
+            "purse": "$2,000,000",
+            "cond": "3yo+",
+            "horses": [
+              {
+                "pgm": 15,
+                "name": "Notable Speech (GB)"
+              },
+              {
+                "pgm": 5,
+                "name": "Classic Q"
+              },
+              {
+                "pgm": 7,
+                "name": "Deterministic"
+              },
+              {
+                "pgm": 19,
+                "name": "Rhetorical"
+              },
+              {
+                "pgm": 14,
+                "name": "Lush Lips (GB)"
+              },
+              {
+                "pgm": 3,
+                "name": "Brilliant Berti"
+              },
+              {
+                "pgm": 22,
+                "name": "Vina Arana (IRE)"
+              },
+              {
+                "pgm": 12,
+                "name": "Lake Forest (GB)"
+              },
+              {
+                "pgm": 23,
+                "name": "Zulu Kingdom (IRE)"
+              },
+              {
+                "pgm": 8,
+                "name": "Facteur Cheval (IRE)"
+              },
+              {
+                "pgm": 9,
+                "name": "Formidable Man"
+              },
+              {
+                "pgm": 4,
+                "name": "Cabo Spirit"
+              },
+              {
+                "pgm": 20,
+                "name": "Ten Bob Tony (IRE)"
+              },
+              {
+                "pgm": 2,
+                "name": "Blue Bolt (IRE)"
+              },
+              {
+                "pgm": 13,
+                "name": "Lugal (JPN)"
+              },
+              {
+                "pgm": 17,
+                "name": "Puerto Rico (IRE)"
+              },
+              {
+                "pgm": 1,
+                "name": "Ask Ikigomi (JPN)"
+              },
+              {
+                "pgm": 16,
+                "name": "Power Blue (IRE)"
+              },
+              {
+                "pgm": 6,
+                "name": "Constitution River (FR)"
+              },
+              {
+                "pgm": 11,
+                "name": "Hotazhell (GB)"
+              },
+              {
+                "pgm": 10,
+                "name": "Gstaad (GB)"
+              },
+              {
+                "pgm": 21,
+                "name": "True Love (IRE)"
+              },
+              {
+                "pgm": 18,
+                "name": "Qirat (GB)"
+              }
+            ]
+          },
+          {
+            "num": 10,
+            "name": "Longines Breeders' Cup Distaff",
+            "post": "4:58 PM ET",
+            "dist": "9 Furlongs",
+            "surf": "Dirt",
+            "purse": "$2,000,000",
+            "cond": "3yo+ Fillies & Mares",
+            "horses": [
+              {
+                "pgm": 5,
+                "name": "Nitrogen"
+              },
+              {
+                "pgm": 8,
+                "name": "Splendora"
+              },
+              {
+                "pgm": 6,
+                "name": "Regaled"
+              },
+              {
+                "pgm": 2,
+                "name": "Fully Subscribed"
+              },
+              {
+                "pgm": 9,
+                "name": "Super Corredora"
+              },
+              {
+                "pgm": 7,
+                "name": "Scottish Lassie"
+              },
+              {
+                "pgm": 1,
+                "name": "Eunomia"
+              },
+              {
+                "pgm": 3,
+                "name": "Immersive"
+              },
+              {
+                "pgm": 4,
+                "name": "Measure"
+              }
+            ]
+          },
+          {
+            "num": 11,
+            "name": "Longines Breeders' Cup Turf",
+            "post": "5:36 PM ET",
+            "dist": "12 Furlongs",
+            "surf": "Turf",
+            "purse": "$5,000,000",
+            "cond": "3yo+",
+            "horses": [
+              {
+                "pgm": 1,
+                "name": "Almaqam (GB)"
+              },
+              {
+                "pgm": 2,
+                "name": "Bay City Roller (IRE)"
+              },
+              {
+                "pgm": 3,
+                "name": "Benvenuto Cellini (IRE)"
+              },
+              {
+                "pgm": 4,
+                "name": "Burnham Square"
+              },
+              {
+                "pgm": 5,
+                "name": "Deep Monster (JPN)"
+              },
+              {
+                "pgm": 6,
+                "name": "Diamond Necklace (IRE)"
+              },
+              {
+                "pgm": 7,
+                "name": "Eccentric (CHI)"
+              },
+              {
+                "pgm": 8,
+                "name": "El Cordobes (IRE)"
+              },
+              {
+                "pgm": 9,
+                "name": "Ethical Diamond (IRE)"
+              },
+              {
+                "pgm": 10,
+                "name": "Far Bridge"
+              },
+              {
+                "pgm": 11,
+                "name": "Gold Phoenix (IRE)"
+              },
+              {
+                "pgm": 12,
+                "name": "Hotazhell (GB)"
+              },
+              {
+                "pgm": 13,
+                "name": "Johanna Walsh (IRE)"
+              },
+              {
+                "pgm": 14,
+                "name": "Lambourn (IRE)"
+              },
+              {
+                "pgm": 15,
+                "name": "Map of Stars (GB)"
+              },
+              {
+                "pgm": 16,
+                "name": "Minaret Station"
+              },
+              {
+                "pgm": 17,
+                "name": "Minnie Hauk (IRE)"
+              },
+              {
+                "pgm": 18,
+                "name": "Ombudsman (IRE)"
+              },
+              {
+                "pgm": 19,
+                "name": "Survie (IRE)"
+              },
+              {
+                "pgm": 20,
+                "name": "Telescopic"
+              },
+              {
+                "pgm": 21,
+                "name": "Test Score"
+              },
+              {
+                "pgm": 22,
+                "name": "Tiffany (IRE)"
+              }
+            ]
+          },
+          {
+            "num": 12,
+            "name": "Longines Breeders' Cup Classic",
+            "post": "6:16 PM ET",
+            "dist": "10 Furlongs",
+            "surf": "Dirt",
+            "purse": "$7,000,000",
+            "cond": "3yo+",
+            "horses": [
+              {
+                "pgm": 5,
+                "name": "Knightsbridge"
+              },
+              {
+                "pgm": 9,
+                "name": "Sovereignty"
+              },
+              {
+                "pgm": 1,
+                "name": "Forever Young (JPN)"
+              },
+              {
+                "pgm": 11,
+                "name": "The Puma"
+              },
+              {
+                "pgm": 2,
+                "name": "Forged Steel"
+              },
+              {
+                "pgm": 3,
+                "name": "Further Ado"
+              },
+              {
+                "pgm": 8,
+                "name": "Phileas Fogg"
+              },
+              {
+                "pgm": 7,
+                "name": "Napoleon Solo"
+              },
+              {
+                "pgm": 6,
+                "name": "Magnitude"
+              },
+              {
+                "pgm": 4,
+                "name": "Golden Tempo"
+              },
+              {
+                "pgm": 10,
+                "name": "T O Password (JPN)"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+
   // ---------- Stable Tour ----------
   // What trainers say about their own horses — manual entry for now, same
   // reasoning as Bias Tracker (no automated source wired up yet). Global,
@@ -9560,7 +10830,142 @@
     // rewrites entriesBody's innerHTML, same as any other hidden-panel
     // update elsewhere in this app.
     if (lastEntriesRaces.length) renderEntriesPage(lastEntriesDate, lastEntriesRaces);
+    renderBreedersCupNotes();
   }
+
+  // ---------- Breeders' Cup 2026 (temporary — see BREEDERS_CUP_2026 above) ----------
+  let bcSelectedDay = BREEDERS_CUP_2026.days[0].date;
+
+  // Flat lowercase-keyed index of every pre-entered horse across both days,
+  // built once (the dataset is static) — used to filter the shared
+  // stableNotes store down to just this weekend's field.
+  const BC_HORSE_NAME_SET = new Set(
+    BREEDERS_CUP_2026.days.flatMap(d => d.races.flatMap(r => r.horses.map(h => h.name.trim().toLowerCase())))
+  );
+
+  function renderBreedersCupDayTabs(){
+    const tabs = $("bcDayTabs");
+    tabs.innerHTML = BREEDERS_CUP_2026.days.map(d => `
+      <button type="button" class="entries-date-tab${d.date === bcSelectedDay ? " active" : ""}" data-bc-day="${d.date}">${d.label}</button>
+    `).join("");
+    tabs.querySelectorAll("[data-bc-day]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        bcSelectedDay = btn.dataset.bcDay;
+        renderBreedersCupDayTabs();
+        renderBreedersCupRaces();
+      });
+    });
+  }
+
+  function renderBreedersCupRaces(){
+    const day = BREEDERS_CUP_2026.days.find(d => d.date === bcSelectedDay) || BREEDERS_CUP_2026.days[0];
+    $("bcRaceList").innerHTML = day.races.map(race => `
+      <div class="entries-race-card bc-race-card">
+        <div class="entries-race-header">
+          <span class="entries-race-num">Race ${race.num}</span>
+          <span class="entries-race-grade-badge">G1</span>
+          <span class="entries-race-meta">${escapeHtml(race.name)}</span>
+          <span class="entries-race-mtp">${escapeHtml(race.post)}</span>
+        </div>
+        <div class="entries-race-meta bc-race-conditions">${escapeHtml(race.dist)} ${escapeHtml(race.surf)} · ${escapeHtml(race.purse)} · ${escapeHtml(race.cond)}</div>
+        <div class="bc-horse-grid">
+          ${race.horses.map(h => `<div class="bc-horse-chip"><span class="bc-horse-pgm">${h.pgm}</span>${escapeHtml(h.name)}</div>`).join("")}
+        </div>
+      </div>
+    `).join("");
+  }
+
+  // Reuses the same renderStableTourByHorse grouping/card markup (via
+  // renderStableNoteHtml) rather than inventing a parallel note renderer —
+  // this is just that same view pre-filtered to one weekend's field.
+  function renderBreedersCupNotes(){
+    const el = $("bcNotesList");
+    if (!el) return; // page not yet in the DOM on first load, harmless
+    const trackedSet = new Set(stableTrainers);
+    const byHorse = {};
+    for (const n of stableNotes){
+      if (n.trainer && !trackedSet.has(n.trainer)) continue;
+      const horse = (n.horse || "").trim();
+      if (!horse || !BC_HORSE_NAME_SET.has(horse.toLowerCase())) continue;
+      const key = horse.toLowerCase();
+      if (!byHorse[key]) byHorse[key] = { display: horse, notes: [] };
+      byHorse[key].notes.push(n);
+    }
+    const keys = Object.keys(byHorse).sort((a, b) => byHorse[a].display.localeCompare(byHorse[b].display));
+    if (!keys.length){
+      el.innerHTML = `<div class="log-empty">No Stable Tour notes yet for a horse in this weekend's Breeders' Cup pre-entries.</div>`;
+      return;
+    }
+    el.innerHTML = keys.map(key => {
+      const { display, notes: rawNotes } = byHorse[key];
+      const notes = sortNotesNewestFirst(rawNotes);
+      const isOpen = stableOpenHorses.has(`bc-${key}`);
+      const distinctTrainers = new Set(notes.map(n => n.trainer).filter(Boolean)).size;
+      const hasUntracked = notes.some(n => !n.trainer);
+      const notesHtml = notes.map(n => renderStableNoteHtml(n, { showHorse: false, showTrainer: distinctTrainers > 1 || (distinctTrainers >= 1 && hasUntracked) })).join("");
+      return `
+        <div class="stable-trainer ${isOpen ? "open" : ""}">
+          <div class="stable-trainer-header">
+            <button type="button" class="stable-trainer-toggle" data-horse-key="bc-${escapeHtml(key)}">
+              <span class="chevron">▸</span>
+              <span class="stable-trainer-name">${escapeHtml(display)}</span>
+              <span class="tag">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
+            </button>
+          </div>
+          <div class="stable-trainer-body" ${isOpen ? "" : "hidden"}>
+            <div class="stable-note-list">${notesHtml}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  renderBreedersCupDayTabs();
+  renderBreedersCupRaces();
+
+  // Own delegated listener (separate from stableTrainerList's below) since
+  // this subsection lives in a different container on a different page —
+  // only the toggle/edit/remove/save subset applies here (no trainer-remove
+  // or paste-extract UI, which this read-mostly view doesn't render).
+  $("bcNotesList").addEventListener("click", (e) => {
+    const toggleBtn = e.target.closest(".stable-trainer-toggle");
+    if (toggleBtn && toggleBtn.dataset.horseKey !== undefined){
+      const key = toggleBtn.dataset.horseKey;
+      if (stableOpenHorses.has(key)) stableOpenHorses.delete(key);
+      else stableOpenHorses.add(key);
+      renderBreedersCupNotes();
+      return;
+    }
+    const removeNoteBtn = e.target.closest(".stable-note-remove");
+    if (removeNoteBtn){
+      removeStableNote(removeNoteBtn.dataset.id);
+      return;
+    }
+    const editNoteBtn = e.target.closest(".stable-note-edit");
+    if (editNoteBtn){
+      stableEditingNoteId = editNoteBtn.dataset.id;
+      renderBreedersCupNotes();
+      return;
+    }
+    const cancelEditBtn = e.target.closest(".stable-note-cancel");
+    if (cancelEditBtn){
+      stableEditingNoteId = null;
+      renderBreedersCupNotes();
+      return;
+    }
+    const saveEditBtn = e.target.closest(".stable-note-save");
+    if (saveEditBtn){
+      const row = saveEditBtn.closest(".stable-note-editing");
+      const trainer = row.querySelector(".stable-edit-trainer").value.trim();
+      const horse = row.querySelector(".stable-edit-horse").value.trim();
+      const note = row.querySelector(".stable-edit-quote").value.trim();
+      if (!horse || !note){
+        stableApiError("edit note", new Error("Horse and quote can't be empty"));
+        return;
+      }
+      editStableNote(saveEditBtn.dataset.id, { trainer, horse, note });
+      return;
+    }
+  });
 
   // Grouped by horse name (case-insensitive — sources vary in casing, e.g.
   // NYRA's ALL CAPS vs a news article's title case) instead of trainer, for
@@ -13766,7 +15171,7 @@
   // ---------- Sidebar page navigation ----------
   // Config-driven like LOG_TABS below — adding another sidebar page is just
   // another button in the sidebar HTML plus one more entry here, no restructuring.
-  const SIDEBAR_PAGES = ["dashboard", "entries", "archive", "news", "historical", "bias", "stable", "compare"];
+  const SIDEBAR_PAGES = ["dashboard", "entries", "archive", "news", "historical", "bias", "stable", "breederscup", "compare"];
   function setActivePage(pageId){
     SIDEBAR_PAGES.forEach(p => {
       $(`page-${p}`).classList.toggle("active", p === pageId);
