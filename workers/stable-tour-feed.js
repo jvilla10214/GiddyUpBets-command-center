@@ -2289,6 +2289,63 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
+    // Generic relay: sends whatever {to, subject, html} the caller provides
+    // through Resend, using this Worker's own RESEND_API_KEY so a one-off
+    // script never needs that secret locally. Added 2026-10-24 for the
+    // Breeders' Cup pre-entry digest emails (a temporary, non-recurring
+    // need — see automation/breeders-cup-email/), since every other email
+    // route here is hardwired to the real-drawn-entries data model and BC's
+    // pre-entries don't fit that shape. No passphrase, same as every other
+    // route on this Worker (removed project-wide 2026-10-07) — this is a
+    // team-only tool, not a public endpoint to harden.
+    if (url.pathname === "/send-custom-email" && request.method === "POST") {
+      try {
+        const payload = await request.json();
+        const to = Array.isArray(payload.to) ? payload.to : NOTIFY_EMAILS;
+        if (!payload.subject || !payload.html) {
+          return json({ error: "Both 'subject' and 'html' are required." }, 400);
+        }
+        const res = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ from: RESEND_FROM_EMAIL, to, subject: payload.subject, html: payload.html }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          return json({ error: `Resend HTTP ${res.status}: ${body.slice(0, 300)}` }, 502);
+        }
+        const body = await res.json().catch(() => ({}));
+        return json({ sentTo: to, resendId: body.id || null }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Custom email failed: ${err.message}` }, 500);
+      }
+    }
+
+    // Exposes the merged horse -> recaps index (readAllRecapIndexes, the
+    // same data runEntryAlerts()/collectTodaysRaceGroupsForPreview() use
+    // internally) over HTTP, with each entry's full-card recap already
+    // resolved and attached — added 2026-10-24 alongside /send-custom-email
+    // for the same Breeders' Cup one-off (see automation/breeders-cup-email/):
+    // a local script has no way to read this Worker's own KV directly, so
+    // this does the same two-step lookup runEntryAlerts() does (per-horse
+    // recap index, then the raceday record's fullCardRecap for each
+    // date+track the index touches) and hands back one flat JSON blob
+    // instead of making the caller re-implement either KV read.
+    if (url.pathname === "/recap-index" && request.method === "GET") {
+      try {
+        const byHorse = await readAllRecapIndexes(env);
+        const fullCardCache = {};
+        for (const entries of Object.values(byHorse)) {
+          for (const entry of entries) {
+            entry.fullCardRecap = await readFullCardRecapForDate(env, entry.track, entry.date, fullCardCache);
+          }
+        }
+        return json({ byHorse }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `Recap index failed: ${err.message}` }, 500);
+      }
+    }
+
     // One-off: sends today's REAL matched Saratoga/Belmont/Del Mar horses
     // (same trainer/note matching as runEntryAlerts(), see
     // collectTodaysRaceGroupsForPreview()'s own comment) through
