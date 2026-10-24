@@ -40,9 +40,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # NOT actions/setup-python here, deliberately — confirmed real
+      # 2026-10-24: GitHub's official darwin Python build has `/Users/runner`
+      # baked into it from the hosted-runner machine it was built on, and its
+      # install script tries to mkdir that exact path regardless of
+      # RUNNER_TOOL_CACHE — fails with "Permission denied" on any self-hosted
+      # Mac whose account isn't literally named "runner". This Mac's own
+      # python3 (no version pin needed — requirements.txt has none) avoids
+      # the whole problem.
+      - name: Ensure python3 is installed
+        run: command -v python3 >/dev/null 2>&1 || brew install python3
 
       # macOS, not Ubuntu — apt-get doesn't exist here. ffmpeg is already
       # installed on this runner's Mac directly (not via brew inside the
@@ -61,7 +68,7 @@ jobs:
           deno-version: v2.x
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt
+        run: python3 -m pip install -r requirements.txt
 
       # Kept as an optional fallback, not required — confirmed 2026-10-24
       # that this self-hosted runner's home IP doesn't need cookies at all
@@ -81,7 +88,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           YTDLP_COOKIES_PATH: ${{ runner.temp }}/youtube_cookies.txt
-        run: python run.py
+        run: python3 run.py
 
       - name: Commit updated state
         run: |
