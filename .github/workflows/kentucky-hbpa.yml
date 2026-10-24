@@ -63,8 +63,13 @@ jobs:
         with:
           deno-version: v2.x
 
+      # --break-system-packages: this Mac's Homebrew python3 is PEP
+      # 668-protected ("externally-managed-environment") — confirmed real
+      # 2026-10-24. Safe here: this runner only ever runs these pipelines,
+      # so there's no other project's dependencies on this system Python to
+      # collide with.
       - name: Install Python dependencies
-        run: python3 -m pip install -r requirements.txt
+        run: python3 -m pip install --break-system-packages -r requirements.txt
 
       # Kept as an optional fallback, not required — confirmed 2026-10-24
       # that this self-hosted runner's home IP doesn't need cookies at all
