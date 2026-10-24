@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +35,23 @@ THEME = {"accent": "#0d5c44", "bg": "#f6fbf8", "ink": "#123328", "dim": "#5c8274
 # the same color as the race-tag badge directly above it, so the two
 # blended together. Fixed alongside the Worker's own copy of this same bug.
 NOTE_TYPE_RIBBON_COLORS = {"quote": "#5b4e8f", "race": "#c99a2e", "fullCard": "#4a6b8a"}
+
+# A recap's "track" field is the raw lowercase track id (see
+# readAllRecapIndexes() in workers/stable-tour-feed.js) — fine as a key, but
+# "belmont"/"saratoga" shown as-is next to a recap date reads badly. Same
+# map/same fix as ENTRIES_TRACK_LABEL in the Worker's own entry-alert email,
+# which already does this lookup correctly; this script just hadn't been
+# updated to match when the recap-origin tag was added here.
+TRACK_LABEL = {
+    "saratoga": "Saratoga", "belmont": "Belmont", "delmar": "Del Mar", "monmouth": "Monmouth",
+    "york": "York", "ascot": "Ascot", "epsomdowns": "Epsom Downs", "newmarket": "Newmarket",
+    "curragh": "Curragh", "longchamp": "Longchamp",
+    "shatin": "Sha Tin", "happyvalley": "Happy Valley", "meydan": "Meydan",
+    "churchilldowns": "Churchill Downs", "santaanita": "Santa Anita", "oaklawnpark": "Oaklawn Park",
+    "keeneland": "Keeneland", "gulfstreampark": "Gulfstream Park", "colonialdowns": "Colonial Downs",
+    "kentuckydowns": "Kentucky Downs", "ellispark": "Ellis Park", "fairgrounds": "Fair Grounds",
+    "woodbine": "Woodbine", "parx": "Parx",
+}
 
 COUNTRY_SUFFIX_RE = re.compile(r"\s*\([a-zA-Z]{2,4}\)\s*$")
 
@@ -63,6 +81,45 @@ def esc(s):
     return html.escape(s or "", quote=False)
 
 
+DATE_LABEL_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def format_date_label(date_str):
+    """ISO date -> M/D/Y, matching formatEmailDateLabel() in
+    workers/stable-tour-feed.js and the project's month/day/year convention
+    for everything user-facing."""
+    m = DATE_LABEL_RE.match(date_str or "")
+    if not m:
+        return date_str or "—"
+    year, month, day = m.groups()
+    return f"{int(month)}/{int(day)}/{year}"
+
+
+# Note-age badge — same shape/position as the Worker's "NEW" badge on a
+# quote ribbon (white pill, inline next to the QUOTE label), tiered by age
+# instead of a single color. Thresholds match stableNoteAgeBadgeHtml() in
+# index.html, so a quote reads the same age-wise in the UI and in email.
+AGE_BADGE_COLORS = {"mild": "#a9a496", "caution": "#f0b429", "stale": "#e05252"}
+
+
+def note_age_badge_html(date_str):
+    m = DATE_LABEL_RE.match(date_str or "")
+    if not m:
+        return ""
+    year, month, day = (int(x) for x in m.groups())
+    days = (date.today() - date(year, month, day)).days
+    if days < 122:
+        return ""
+    months = round(days / 30.4)
+    tier = "mild" if days < 183 else "caution" if days < 274 else "stale"
+    color = AGE_BADGE_COLORS[tier]
+    return (
+        f'<span style="display:inline-block; background:#ffffff; color:{color}; font-weight:700; '
+        f'font-size:9px; letter-spacing:0.04em; padding:1px 6px; border-radius:8px; margin-left:7px; '
+        f'vertical-align:middle;">{months} MO OLD</span>'
+    )
+
+
 def notes_for_horse(all_notes, tracked_trainers, horse_name):
     key = horse_name.strip().lower()
     matches = [n for n in all_notes if (n.get("horse") or "").strip().lower() == key]
@@ -82,9 +139,10 @@ def note_card_html(n):
     speaker = n.get("trainer") or n.get("jockey") or ""
     source = n.get("source") or ("auto-imported" if n.get("autoImported") else "manual")
     quote_hue = NOTE_TYPE_RIBBON_COLORS["quote"]
+    age_badge = note_age_badge_html(n.get("date"))
     return f"""
     <div style="border-radius:6px; overflow:hidden; margin:4px 0 8px;">
-      <div style="background:{quote_hue}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">{role_icon} QUOTE &mdash; {esc(n.get('date') or '—')}</div>
+      <div style="background:{quote_hue}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">{role_icon} QUOTE &mdash; {esc(format_date_label(n.get('date')))}{age_badge}</div>
       <div style="background:{quote_hue}12; padding:10px 12px; font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:{THEME['ink']};">
         {esc(n.get('note'))}
         <div style="font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:{THEME['dim']}; margin-top:5px;"><strong style="color:{THEME['ink']};">{esc(speaker)}</strong> ({role_label}) &middot; {esc(source)}</div>
@@ -112,8 +170,8 @@ def recap_cards_html(entries):
     colors as buildStyledEntryDigestEmail() in workers/stable-tour-feed.js."""
     parts = []
     for e in entries:
-        date_label = e.get("date") or "—"
-        origin_tag = f" &middot; {esc(e['track'])}" if e.get("track") else ""
+        date_label = format_date_label(e.get("date"))
+        origin_tag = f" &middot; {esc(TRACK_LABEL.get(e['track'], e['track']))}" if e.get("track") else ""
         if e.get("fullCardRecap"):
             parts.append(ribbon_block_html(
                 NOTE_TYPE_RIBBON_COLORS["fullCard"], "&#128197;",

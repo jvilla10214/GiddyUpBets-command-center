@@ -6810,6 +6810,24 @@ function formatEmailDateLabel(dateStr) {
   return `${Number(month)}/${Number(day)}/${year}`;
 }
 
+// Note-age badge — same shape/position as the "NEW" badge just below (white
+// pill, inline next to the QUOTE label), tiered by age instead of a single
+// color, so a quote old enough that the trainer's situation may have moved
+// on gets flagged even once it's no longer "NEW". Thresholds/colors match
+// stableNoteAgeBadgeHtml() in index.html, so a quote reads the same age-wise
+// in the UI and in email.
+const NOTE_AGE_BADGE_COLORS = { mild: "#a9a496", caution: "#f0b429", stale: "#e05252" };
+function noteAgeBadgeHtml(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || "");
+  if (!m) return "";
+  const noteDate = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const days = Math.floor((Date.now() - noteDate) / 86400000);
+  if (days < 122) return ""; // under ~4 months — no badge
+  const months = Math.round(days / 30.4);
+  const tier = days < 183 ? "mild" : days < 274 ? "caution" : "stale";
+  return `<span style="display:inline-block; background:#ffffff; color:${NOTE_AGE_BADGE_COLORS[tier]}; font-weight:700; font-size:9px; letter-spacing:0.04em; padding:1px 6px; border-radius:8px; margin-left:7px; vertical-align:middle;">${months} MO OLD</span>`;
+}
+
 // Full untruncated note text, each as its own <div> (not a <ul><li> list,
 // to match the artifact's card layout) — inline-styled throughout since
 // Gmail strips most <style>-block rules and never renders custom web fonts
@@ -6881,9 +6899,10 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         const newBadge = !n.digestedAt
           ? `<span style="display:inline-block; background:#ffffff; color:${theme.accent}; font-weight:700; font-size:9px; letter-spacing:0.04em; padding:1px 6px; border-radius:8px; margin-left:7px; vertical-align:middle;">NEW</span>`
           : "";
+        const ageBadge = noteAgeBadgeHtml(n.date);
         const body = `${escapeHtmlForEmail(n.note)}
           <div style="font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:${theme.dim}; margin-top:5px;"><strong style="color:${theme.ink};">${escapeHtmlForEmail(speakerName)}</strong> (${roleLabel}) &middot; ${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}${siteTag}</div>`;
-        return ribbonBlockHtml(NOTE_TYPE_RIBBON_COLORS.quote, theme.ink, roleIcon, `QUOTE &mdash; ${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}`, newBadge, body, "10px");
+        return ribbonBlockHtml(NOTE_TYPE_RIBBON_COLORS.quote, theme.ink, roleIcon, `QUOTE &mdash; ${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}`, newBadge + ageBadge, body, "10px");
       }).join("");
       // A FULL CARD RECAP box (when that date has one) sits right above its
       // matching RACE RECAP box, broad context before the specific race.

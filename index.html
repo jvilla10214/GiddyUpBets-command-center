@@ -2411,6 +2411,19 @@
     border-radius: 3px;
     letter-spacing: 0.3px;
   }
+  /* Note-age badge — same small-badge shape as the family above, tiered by
+     age so only a note old enough that the trainer's situation may have
+     moved on gets flagged; nothing shown under ~4 months. */
+  .stable-age-badge{
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stable-age-mild{ color: var(--parchment-dim); background: rgba(169,164,150,0.12); }
+  .stable-age-caution{ color: var(--tote-amber); background: rgba(240,180,41,0.14); }
+  .stable-age-stale{ color: #e05252; background: rgba(224,82,82,0.14); }
   .stable-trainer-list{ display:flex; flex-direction:column; gap:10px; }
   .stable-trainer{
     background: var(--panel-2);
@@ -10617,6 +10630,24 @@
   }
   const STABLE_NOTE_TYPE_LABEL = { trainer: "Trainer Quote", jockey: "Jockey Quote", paddock: "Paddock Read" };
 
+  // Note-age badge — only a quote old enough that the trainer's situation
+  // may have moved on (claim, barn change, plans changed) gets flagged;
+  // the vast majority of notes (last few months) render with no badge at
+  // all, exactly as before this was added. Thresholds/colors match the
+  // equivalent badge added to the entry-alert emails (formatEmailDateLabel's
+  // neighbor, noteAgeBadgeHtml(), in workers/stable-tour-feed.js) so a note
+  // reads the same age-wise whether seen on this page or in an email.
+  function stableNoteAgeBadgeHtml(dateStr){
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr || "");
+    if (!m) return "";
+    const noteDate = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const days = Math.floor((Date.now() - noteDate) / 86400000);
+    if (days < 122) return ""; // under ~4 months — no badge
+    const months = Math.round(days / 30.4);
+    const tier = days < 183 ? "mild" : days < 274 ? "caution" : "stale";
+    return `<span class="stable-age-badge stable-age-${tier}" title="This note is from ${fmtMDY(dateStr)}">${months} mo old</span>`;
+  }
+
   function renderStableNoteHtml(n, opts = {}){
     const { showHorse = true, showTrainer = false, upcoming = null } = opts;
     if (n.id === stableEditingNoteId){
@@ -10651,6 +10682,7 @@
         <div class="stable-note-meta">
           ${leadBits.join(" · ")}
           ${noteType ? `<span class="stable-notetype-badge stable-notetype-${noteType}">${STABLE_NOTE_TYPE_LABEL[noteType]}</span>` : ""}
+          ${stableNoteAgeBadgeHtml(n.date)}
           ${upcoming ? `<span class="stable-site-badge" title="Next known entry for this horse">Runs R${upcoming.raceNumber} · ${fmtStableDate(upcoming.date)}</span>` : ""}
           <span>${fmtStableDate(n.date)}${sourceHtml ? " · " + sourceHtml : ""}</span>
           ${siteLabel ? `<span class="stable-site-badge">${escapeHtml(siteLabel)}</span>` : ""}
