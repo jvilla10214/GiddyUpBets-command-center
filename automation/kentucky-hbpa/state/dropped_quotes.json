@@ -1630,5 +1630,21 @@
     "error": null,
     "foundAt": "2026-10-19T18:12:34.590969+00:00",
     "reviewed": false
+  },
+  {
+    "key": "gdtxEFeDVT8|00:00|unclear",
+    "reason": "no_clear_horse",
+    "video": "Kentucky Barnstorming: Meet Sarah Shaffer",
+    "videoId": "gdtxEFeDVT8",
+    "videoDate": "2026-10-22",
+    "speaker": "Samara Schaffer",
+    "role": "trainer",
+    "horse": "unclear",
+    "quote": "Yes, I do.",
+    "question": "You haul the horses too?",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-23T17:35:02.366392+00:00",
+    "reviewed": false
   }
 ]

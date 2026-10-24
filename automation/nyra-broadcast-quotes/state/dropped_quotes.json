@@ -223,5 +223,50 @@
     "error": null,
     "foundAt": "2026-10-19T19:05:40.312223+00:00",
     "reviewed": false
+  },
+  {
+    "key": "TwMFa8wea2I|01:25:52|unclear",
+    "reason": "no_clear_horse",
+    "video": "America's Day at the Races - Wednesday  October 21, 2026",
+    "videoId": "TwMFa8wea2I",
+    "videoDate": "2026-10-21",
+    "horse": "unclear",
+    "speaker": "Bruce Lavine",
+    "role": "trainer",
+    "content": "Asked about Edgar having a great Belmont meet I never rode him before. It's the first time I ever rode him...I'm happy he came up here. It's a new face and you know he tries hard. I'm happy.",
+    "timestamp": "01:25:52",
+    "error": null,
+    "foundAt": "2026-10-23T17:50:59.727385+00:00",
+    "reviewed": false
+  },
+  {
+    "key": "TwMFa8wea2I|04:26:03|unclear",
+    "reason": "no_clear_horse",
+    "video": "America's Day at the Races - Wednesday  October 21, 2026",
+    "videoId": "TwMFa8wea2I",
+    "videoDate": "2026-10-21",
+    "horse": "unclear",
+    "speaker": "Rachel McLaughlin relaying trainer comments (Joe Sharp's barn, via assistant Kylie Wellington) \u2014 Speaker: unclear",
+    "role": "other",
+    "content": "Insight on the horse's chances Joe always jokes around with uh with me about how when he's here in person, don't bet my horses, Rachel. He's not here today.",
+    "timestamp": "04:26:03",
+    "error": null,
+    "foundAt": "2026-10-23T17:50:59.727778+00:00",
+    "reviewed": false
+  },
+  {
+    "key": "1wRvE63hZdw|00:19:30|Fed Up With the Fed",
+    "reason": "non_trainer_jockey_role",
+    "video": "America's Day at the Races - Thursday October 22, 2026",
+    "videoId": "1wRvE63hZdw",
+    "videoDate": "2026-10-22",
+    "horse": "Fed Up With the Fed",
+    "speaker": "Joe Gioia",
+    "role": "other",
+    "content": "Talk about your horse names, including \"Is There No Normal Wife\" Well, me and my wife, who's over here, my my wonderful wife, we're having a little bit of an argument and she said I wasn't normal.",
+    "timestamp": "00:19:30",
+    "error": null,
+    "foundAt": "2026-10-23T17:52:06.590251+00:00",
+    "reviewed": false
   }
 ]

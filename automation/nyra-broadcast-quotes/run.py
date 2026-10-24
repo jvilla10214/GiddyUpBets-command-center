@@ -235,7 +235,24 @@ def main():
     # about.
     errored = [s for s in all_summaries if s.get("status") == "error"]
     if errored and len(errored) == len(all_summaries):
-        report_pipeline_status(False, error=errored[0].get("error", "unknown error")[:500])
+        raw_error = errored[0].get("error", "unknown error")
+        # The raw error is a Python traceback with a full yt-dlp command
+        # embedded — accurate for debugging but unreadable on the dashboard.
+        # When it's clearly the bot wall, say that plainly instead; anything
+        # else still shows the raw text so a genuinely new failure mode
+        # isn't hidden behind a wrong label.
+        if transcribe.YOUTUBE_BOT_WALL_RE.search(raw_error):
+            clean_error = "YouTube blocked the download — check the runner / cookies."
+        else:
+            clean_error = raw_error[:500]
+        report_pipeline_status(False, error=clean_error)
+        # report_pipeline_status() only posts a warning to the Worker — it
+        # doesn't affect this process's own exit code. Without this, a run
+        # where every single broadcast failed (e.g. YouTube's bot wall)
+        # still exits 0, so GitHub Actions marks it green. Confirmed real:
+        # every run since 2026-10-20 showed "success" despite transcribing
+        # nothing, which is exactly what let that outage run unnoticed.
+        sys.exit(1)
     else:
         report_pipeline_status(True, summary={"processed": len(all_summaries), "errored": len(errored)})
 

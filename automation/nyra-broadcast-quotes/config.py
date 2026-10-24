@@ -53,14 +53,20 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 YTDLP_BIN = os.environ.get("YTDLP_BIN", "yt-dlp")
 
-# YouTube bot-walls GitHub Actions' shared runner IPs ("Sign in to confirm
-# you're not a bot") — confirmed real 2026-10-16 by triggering this
-# pipeline's own workflow and watching yt-dlp fail with exactly that error,
-# despite working fine from a local/home IP. The fix is real cookies from a
-# logged-in YouTube session (a separate account from anything the user
-# cares about, per that day's decision) — the workflow writes the
-# YOUTUBE_COOKIES secret to a file and points this at it; empty/unset
-# locally, where a home IP doesn't need it.
+# YouTube bot-walled GitHub Actions' shared runner IPs ("Sign in to confirm
+# you're not a bot") from 2026-10-16 through 2026-10-20, even with these
+# cookies present — confirmed the wall targets cloud/datacenter IPs
+# specifically, not this cookies mechanism. Since 2026-10-24 this pipeline
+# runs on a self-hosted runner on a home Mac instead (see the GitHub
+# Actions workflow file's own comment), confirmed NOT to need cookies at
+# all for captions (step 1 of that migration: a cookie-less caption fetch
+# succeeded). Left in as a fallback rather than removed — still useful if a
+# future broadcast needs the full audio-download path instead of captions,
+# and harmless if it stays unused. Optional, not required:
+# ytdlp_auth_args() below only passes --cookies when a real file actually
+# exists at this path, so an unset secret or a write step that never ran
+# just means no cookies get passed, not a broken yt-dlp invocation pointed
+# at a missing file.
 YTDLP_COOKIES_PATH = os.environ.get("YTDLP_COOKIES_PATH", "")
 
 # Even with cookies and a JS runtime (Deno, installed in the workflow)
@@ -76,7 +82,7 @@ YTDLP_REMOTE_COMPONENTS_ARGS = ["--remote-components", "ejs:github"]
 
 def ytdlp_auth_args():
     args = list(YTDLP_REMOTE_COMPONENTS_ARGS)
-    if YTDLP_COOKIES_PATH:
+    if YTDLP_COOKIES_PATH and os.path.exists(YTDLP_COOKIES_PATH):
         args += ["--cookies", YTDLP_COOKIES_PATH]
     return args
 

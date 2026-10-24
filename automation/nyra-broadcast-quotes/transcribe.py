@@ -94,6 +94,14 @@ def format_ts(seconds):
 # find_segments.py's cue regexes, which expect the words contiguous.
 INLINE_CAPTION_ANNOTATION_RE = re.compile(r"\[\w+\]")
 
+# yt-dlp's own wording for YouTube's bot-wall ("Sign in to confirm you're
+# not a bot") — confirmed real on GitHub's shared runner IPs since
+# 2026-10-20. Checked for explicitly so a walled run says so plainly instead
+# of being misreported as "no captions available for this broadcast", which
+# looks identical to a genuinely caption-less upload and hid this outage
+# for days.
+YOUTUBE_BOT_WALL_RE = re.compile(r"sign in to confirm you'?re not a bot", re.IGNORECASE)
+
 
 def _parse_json3_captions(path):
     """Converts YouTube's own auto-caption json3 format into the same
@@ -136,6 +144,7 @@ def fetch_captions_transcript(video_id, work_dir):
     older or unusual uploads sometimes have no auto-caption track at all."""
     os.makedirs(work_dir, exist_ok=True)
     out_template = os.path.join(work_dir, "captions")
+    last_stderr = ""
     for lang in ("en-orig", "en"):
         cmd = [
             config.YTDLP_BIN,
@@ -154,6 +163,19 @@ def fetch_captions_transcript(video_id, work_dir):
             parsed = _parse_json3_captions(caption_path)
             if parsed["segments"]:
                 return parsed
+        elif result.returncode != 0:
+            last_stderr = result.stderr
+    # Neither language worked — surface WHY instead of leaving the caller to
+    # assume this broadcast just has no caption track. A walled attempt and
+    # a genuinely caption-less upload look identical from the caller's side
+    # otherwise, which is exactly what hid the 2026-10-20 bot-wall outage:
+    # every run logged "no captions available" and kept reporting success.
+    if last_stderr:
+        if YOUTUBE_BOT_WALL_RE.search(last_stderr):
+            print("  captions fetch blocked: YouTube's bot wall (\"Sign in to confirm you're "
+                  "not a bot\") — this runner's IP is walled, not a caption-less broadcast.", flush=True)
+        else:
+            print(f"  captions fetch failed (not the bot wall): {last_stderr.strip()[-500:]}", flush=True)
     return None
 
 

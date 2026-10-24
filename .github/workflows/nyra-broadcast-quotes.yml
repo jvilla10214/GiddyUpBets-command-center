@@ -19,7 +19,17 @@ permissions:
 
 jobs:
   extract:
-    runs-on: ubuntu-latest
+    # Moved off GitHub's shared runners 2026-10-24 — those runners' IPs got
+    # permanently bot-walled by YouTube ("Sign in to confirm you're not a
+    # bot") starting 2026-10-20, even with valid cookies; the same code
+    # works from this home Mac's IP. See the self-hosted runner set up on
+    # this machine (custom label `youtube-mac`, registered under this
+    # repo's Settings → Actions → Runners) — that one custom label already
+    # uniquely identifies this runner, so the OS label (actually `OSX` for
+    # this runner version, not `macOS`) is deliberately left out of the
+    # match here to avoid a label-name trap. Everything else about this
+    # workflow (schedule, secrets, state commit) is unchanged.
+    runs-on: [self-hosted, youtube-mac]
     # Much longer than the other two pipelines' 90 min — this downloads and
     # transcribes a 4.5-6 hour broadcast (vs. short clips/PDFs), confirmed
     # locally to take a real while just to download the audio alone.
@@ -34,8 +44,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install ffmpeg
-        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+      # macOS, not Ubuntu — apt-get doesn't exist here. ffmpeg is already
+      # installed on this runner's Mac directly (not via brew inside the
+      # job), so this is just a safety net for a future re-registration on
+      # a fresh machine.
+      - name: Ensure ffmpeg is installed
+        run: command -v ffmpeg >/dev/null 2>&1 || brew install ffmpeg
 
       # yt-dlp needs a JS runtime to solve YouTube's "n" signature challenge
       # and resolve playable format URLs — confirmed real 2026-10-16 (GitHub's
@@ -49,12 +63,17 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # YouTube bot-walls GitHub's shared runner IPs ("Sign in to confirm
-      # you're not a bot") — confirmed real 2026-10-16. Real cookies from a
-      # logged-in session (a separate account, not tied to anything the user
-      # cares about) are the fix; written to $RUNNER_TEMP, outside the repo
-      # checkout, so there's no chance of it ending up committed.
-      - name: Write YouTube cookies
+      # Kept as an optional fallback, not required — confirmed 2026-10-24
+      # that this self-hosted runner's home IP doesn't need cookies at all
+      # for captions (the bot wall only ever hit GitHub's shared runner
+      # IPs). Still written in case a future broadcast needs the full
+      # audio-download path instead of captions; continue-on-error so a
+      # missing/empty secret never fails the job — config.py's
+      # ytdlp_auth_args() only passes --cookies when this file actually
+      # exists, so this step not running (or running on nothing) is a
+      # no-op, not a break.
+      - name: Write YouTube cookies (optional fallback, not required)
+        continue-on-error: true
         run: echo "${{ secrets.YOUTUBE_COOKIES }}" > "$RUNNER_TEMP/youtube_cookies.txt"
 
       - name: Run the pipeline
