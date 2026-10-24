@@ -105,8 +105,21 @@ jobs:
             exit 0
           fi
           git commit -m "NYRA Broadcast quote pipeline: update processed-video state [skip ci]"
+          # Retry on push rejection — see kentucky-hbpa.yml's identical step
+          # for the full reasoning: a plain `git pull --rebase` fails
+          # outright (confirmed real 2026-10-24) when both sides append new
+          # ids to the end of the same JSON array, since that's a textual
+          # conflict git can't auto-resolve even though the actual merge
+          # rule is trivial ("union of two id lists"). Merging by id/key in
+          # Python instead means both sides' new entries always survive.
           for i in 1 2 3; do
-            git pull --rebase origin main && git push && exit 0
-            sleep 5
+            if git push; then exit 0; fi
+            echo "Push rejected — merging state by id/key instead of rebasing, attempt $i"
+            git fetch origin main
+            python3 merge_state_on_conflict.py
+            git reset --soft origin/main
+            git add state/processed_video_ids.json state/dropped_quotes.json
+            git commit -m "NYRA Broadcast quote pipeline: update processed-video state [skip ci]"
+            sleep 2
           done
           exit 1
