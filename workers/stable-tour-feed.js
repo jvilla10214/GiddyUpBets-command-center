@@ -6821,15 +6821,17 @@ function formatEmailDateLabel(dateStr) {
 // cardLabel added 2026-09-17 ("today" | "tomorrow") for the new evening
 // (day-before) send — that digest covers TOMORROW's card while it's sent
 // today, so the template can no longer hardcode "today" everywhere.
-// Quote/Race Recap/Full Card Recap colors — deliberately NOT theme.accent for
-// the latter two. Design pass 2026-10-21: all three content types share one
-// "ribbon header + tinted body" shape (color-coded, not shape-coded) so the
-// type reads at a glance without needing to read the label text — a quote
-// in the track's own accent color, a race recap in gold, a full card recap
-// in steel blue, consistently across every track rather than varying with
-// each track's own theme (which would make "gold = race recap" stop being a
-// reliable visual shortcut from one track's email to the next).
-const RECAP_RIBBON_COLORS = { race: "#c99a2e", fullCard: "#4a6b8a" };
+// Quote/Race Recap/Full Card Recap colors — all three fixed, NOT
+// theme.accent. Design pass 2026-10-21 originally kept Quote in the track's
+// own accent color while fixing Race Recap (gold) and Full Card Recap
+// (steel blue); revised 2026-10-24 (real user-reported bug) because Quote's
+// ribbon then matched the race-tag badge directly above it (also
+// theme.accent), making the two blend together. Quote now gets its own
+// fixed indigo, consistent with the same "color = content type, not track"
+// reasoning already applied to the other two — a quote reads the same way
+// in every track's email, and never collides with that email's own race
+// tag again.
+const NOTE_TYPE_RIBBON_COLORS = { quote: "#5b4e8f", race: "#c99a2e", fullCard: "#4a6b8a" };
 
 function ribbonBlockHtml(hue, bodyTextColor, icon, label, badgeHtml, bodyHtml, bottomMargin) {
   return `
@@ -6881,7 +6883,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
           : "";
         const body = `${escapeHtmlForEmail(n.note)}
           <div style="font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:${theme.dim}; margin-top:5px;"><strong style="color:${theme.ink};">${escapeHtmlForEmail(speakerName)}</strong> (${roleLabel}) &middot; ${escapeHtmlForEmail(n.autoImported ? (n.source || "auto-imported") : "manual")}${siteTag}</div>`;
-        return ribbonBlockHtml(theme.accent, theme.ink, roleIcon, `QUOTE &mdash; ${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}`, newBadge, body, "10px");
+        return ribbonBlockHtml(NOTE_TYPE_RIBBON_COLORS.quote, theme.ink, roleIcon, `QUOTE &mdash; ${escapeHtmlForEmail(n.date ? formatEmailDateLabel(n.date) : "—")}`, newBadge, body, "10px");
       }).join("");
       // A FULL CARD RECAP box (when that date has one) sits right above its
       // matching RACE RECAP box, broad context before the specific race.
@@ -6905,7 +6907,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         // at the track this email is actually about.
         const originTrackTag = r.track && r.track !== track ? ` &middot; ${escapeHtmlForEmail(ENTRIES_TRACK_LABEL[r.track] || r.track)}` : "";
         const fullCardHtml = r.fullCardRecap
-          ? ribbonBlockHtml(RECAP_RIBBON_COLORS.fullCard, theme.ink, "&#128197;", `FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${originTrackTag}`, "", escapeHtmlForEmail(r.fullCardRecap), "6px")
+          ? ribbonBlockHtml(NOTE_TYPE_RIBBON_COLORS.fullCard, theme.ink, "&#128197;", `FULL CARD RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${originTrackTag}`, "", escapeHtmlForEmail(r.fullCardRecap), "6px")
           : "";
         // r.recap can now be empty — a horse indexed ONLY because that
         // day's full-card recap was written with no specific per-race
@@ -6913,7 +6915,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         // solid RACE RECAP box only renders when there's real per-race
         // text to put in it, not an empty box under a real recap's heading.
         const raceRecapHtml = r.recap
-          ? ribbonBlockHtml(RECAP_RIBBON_COLORS.race, theme.ink, "&#127937;", `RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}${originTrackTag}`, "", escapeHtmlForEmail(r.recap), "10px")
+          ? ribbonBlockHtml(NOTE_TYPE_RIBBON_COLORS.race, theme.ink, "&#127937;", `RACE RECAP &mdash; ${escapeHtmlForEmail(dateLabel)}${r.raceNumber ? ` RACE ${escapeHtmlForEmail(String(r.raceNumber))}` : ""}${originTrackTag}`, "", escapeHtmlForEmail(r.recap), "10px")
           : "";
         return `
         ${fullCardHtml}

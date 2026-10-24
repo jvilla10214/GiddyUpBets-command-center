@@ -25,11 +25,15 @@ BROWSER_UA = (
 # invented palette.
 THEME = {"accent": "#0d5c44", "bg": "#f6fbf8", "ink": "#123328", "dim": "#5c8274", "hairline": "#dcece4"}
 
-# Same fixed colors as RECAP_RIBBON_COLORS in workers/stable-tour-feed.js —
-# deliberately NOT theme.accent, so "gold = race recap" / "steel blue = full
-# card recap" stays a reliable shortcut across every track's email, BC's own
-# Keeneland-green included.
-RECAP_RIBBON_COLORS = {"race": "#c99a2e", "fullCard": "#4a6b8a"}
+# Same fixed colors as NOTE_TYPE_RIBBON_COLORS in workers/stable-tour-feed.js
+# — all three fixed, not THEME['accent'], so "indigo = quote / gold = race
+# recap / steel blue = full card recap" stays a reliable shortcut across
+# every track's email, BC's own Keeneland-green included. Quote was
+# originally THEME['accent'] here too (matching the Worker's own pre-2026-
+# 10-24 design) until a real user-reported bug: that made the QUOTE ribbon
+# the same color as the race-tag badge directly above it, so the two
+# blended together. Fixed alongside the Worker's own copy of this same bug.
+NOTE_TYPE_RIBBON_COLORS = {"quote": "#5b4e8f", "race": "#c99a2e", "fullCard": "#4a6b8a"}
 
 COUNTRY_SUFFIX_RE = re.compile(r"\s*\([a-zA-Z]{2,4}\)\s*$")
 
@@ -77,10 +81,11 @@ def note_card_html(n):
     role_label = "Trainer" if n.get("trainer") else "Jockey"
     speaker = n.get("trainer") or n.get("jockey") or ""
     source = n.get("source") or ("auto-imported" if n.get("autoImported") else "manual")
+    quote_hue = NOTE_TYPE_RIBBON_COLORS["quote"]
     return f"""
     <div style="border-radius:6px; overflow:hidden; margin:4px 0 8px;">
-      <div style="background:{THEME['accent']}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">{role_icon} QUOTE &mdash; {esc(n.get('date') or '—')}</div>
-      <div style="background:{THEME['accent']}12; padding:10px 12px; font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:{THEME['ink']};">
+      <div style="background:{quote_hue}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">{role_icon} QUOTE &mdash; {esc(n.get('date') or '—')}</div>
+      <div style="background:{quote_hue}12; padding:10px 12px; font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:{THEME['ink']};">
         {esc(n.get('note'))}
         <div style="font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:{THEME['dim']}; margin-top:5px;"><strong style="color:{THEME['ink']};">{esc(speaker)}</strong> ({role_label}) &middot; {esc(source)}</div>
       </div>
@@ -111,13 +116,13 @@ def recap_cards_html(entries):
         origin_tag = f" &middot; {esc(e['track'])}" if e.get("track") else ""
         if e.get("fullCardRecap"):
             parts.append(ribbon_block_html(
-                RECAP_RIBBON_COLORS["fullCard"], "&#128197;",
+                NOTE_TYPE_RIBBON_COLORS["fullCard"], "&#128197;",
                 f"FULL CARD RECAP &mdash; {esc(date_label)}{origin_tag}", esc(e["fullCardRecap"]),
             ))
         if e.get("recap"):
             race_tag = f" RACE {e['raceNumber']}" if e.get("raceNumber") else ""
             parts.append(ribbon_block_html(
-                RECAP_RIBBON_COLORS["race"], "&#127937;",
+                NOTE_TYPE_RIBBON_COLORS["race"], "&#127937;",
                 f"RACE RECAP &mdash; {esc(date_label)}{race_tag}{origin_tag}", esc(e["recap"]),
             ))
     return "".join(parts)
