@@ -2346,6 +2346,46 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
+    // index.html's News Wire used to bridge these 4 feeds (TDN, BloodHorse,
+    // ABR, HRN) through rss2json.com to get around the browser's own CORS
+    // wall (confirmed real: none of the 4 send an Access-Control-Allow-
+    // Origin header, so a direct browser fetch fails regardless of this
+    // Worker). Added 2026-10-26 after rss2json.com itself started sitting
+    // behind a Cloudflare bot-challenge page for every request, not just
+    // ours (confirmed with an unrelated feed URL — their whole free service
+    // is walled now, not a bug in this app). Fetching server-side sidesteps
+    // both problems at once: a Worker fetch isn't subject to browser CORS,
+    // and none of these 4 sites themselves block a plain server-side fetch
+    // with a real UA (confirmed directly, all 4 return 200). DRF stays a
+    // direct browser fetch in index.html — it already sends a permissive
+    // CORS header, so it never needed a bridge.
+    if (url.pathname === "/news-wire" && request.method === "GET") {
+      try {
+        const sources = [
+          { name: "TDN", url: "https://www.thoroughbreddailynews.com/feed/" },
+          { name: "BloodHorse", url: "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing" },
+          { name: "ABR", url: "https://www.americasbestracing.net/rss" },
+          { name: "HRN", url: "https://www.horseracingnation.com/rss/newsfeed.aspx" },
+        ];
+        const results = await Promise.all(sources.map(async (s) => {
+          try {
+            const res = await fetch(s.url, {
+              headers: { "User-Agent": BROWSER_UA },
+              cf: { cacheTtl: 600, cacheEverything: true },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const xml = await res.text();
+            return parseGenericRssItems(xml).map((it) => ({ ...it, source: s.name }));
+          } catch (err) {
+            return []; // one source failing shouldn't blank the whole wire
+          }
+        }));
+        return json({ items: results.flat() }, 200, { "Cache-Control": "no-store" });
+      } catch (err) {
+        return json({ error: `News Wire failed: ${err.message}` }, 500);
+      }
+    }
+
     // One-off: sends today's REAL matched Saratoga/Belmont/Del Mar horses
     // (same trainer/note matching as runEntryAlerts(), see
     // collectTodaysRaceGroupsForPreview()'s own comment) through
@@ -4684,6 +4724,33 @@ function decodeEntities(str) {
     .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)));
 }
 
+// Minimal RSS 2.0 <item> parser — used by GET /news-wire (see that route's
+// own comment for why this fetch moved server-side). Regex-based rather
+// than an XML DOM parser since Workers have no DOMParser; the same approach
+// runTdnMainImport() already uses successfully against this exact feed
+// shape. content:encoded (full body, when a feed publishes it) beats
+// description (usually just a teaser) for index.html's own trainer-mention
+// scan, same preference index.html's old client-side parser already had.
+function extractRssField(block, tag) {
+  const re = new RegExp(`<${tag}(?:\\s[^>]*)?>(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([\\s\\S]*?))<\\/${tag}>`);
+  const m = re.exec(block);
+  if (!m) return "";
+  return (m[1] ?? m[2] ?? "").trim();
+}
+function parseGenericRssItems(xml) {
+  const items = [];
+  for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const block = m[1];
+    const title = decodeEntities(extractRssField(block, "title"));
+    const link = decodeEntities(extractRssField(block, "link"));
+    const pubDate = extractRssField(block, "pubDate") || null;
+    const body = decodeEntities(extractRssField(block, "content:encoded") || extractRssField(block, "description"));
+    if (!title || !link) continue;
+    items.push({ title, link, pubDate, body });
+  }
+  return items;
+}
+
 // ---------- NYRA Track Trends parser ----------
 // This page's markup (verified directly, not guessed) is server-rendered,
 // static HTML — a plain regex walk is reliable here the same way it is for
@@ -6804,6 +6871,35 @@ const STYLED_DIGEST_TRACK_THEME = {
 const BREEDERS_CUP_2026_DATES = new Set(["2026-10-30", "2026-10-31"]);
 const BREEDERS_CUP_THEME = { accent: "#512d6d", bg: "#faf7fd", ink: "#201530", dim: "#7a6b8a", hairline: "#e6ddf0" };
 
+// Official stakes names, by date then race number — race numbers alone
+// aren't unique across the two days (both have a "Race 6", a different
+// race each day), so this keys on both. Copied from BREEDERS_CUP_2026 in
+// index.html (the same pre-entry data this project already verified
+// against the real condition book) rather than trusting SmartPony's entries
+// feed to carry the full sponsor-prefixed stakes name once the card is
+// drawn — regular tracks' entries data doesn't reliably have this at all,
+// which is why this is BC-specific rather than a generic "race name" field.
+const BREEDERS_CUP_RACE_NAMES = {
+  "2026-10-30": {
+    6: "Breeders' Cup Juvenile Turf Sprint",
+    7: "Breeders' Cup Juvenile Fillies",
+    8: "John Deere Breeders' Cup Juvenile Fillies Turf",
+    9: "FanDuel Breeders' Cup Juvenile",
+    10: "Brown Advisory Breeders' Cup Juvenile Turf",
+  },
+  "2026-10-31": {
+    4: "Breeders' Cup Filly & Mare Sprint",
+    5: "Prevagen Breeders' Cup Turf Sprint",
+    6: "Breeders' Cup Dirt Mile",
+    7: "Maker's Mark Breeders' Cup Filly & Mare Turf",
+    8: "Cygames Breeders' Cup Sprint",
+    9: "FanDuel Breeders' Cup Mile",
+    10: "Longines Breeders' Cup Distaff",
+    11: "Longines Breeders' Cup Turf",
+    12: "Longines Breeders' Cup Classic",
+  },
+};
+
 // Site-domain tag on a note (e.g. "drf.com") — derived from the note's own
 // stored link, same as index.html's stableNoteSiteLabel(). Only ever a
 // display addition; never stored, so it stays in sync automatically if a
@@ -6887,10 +6983,11 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
   // most useful on a big field like this one, where "so many quotes, so many
   // races" makes scrolling past everything to find one race painful.
   const raceAnchorId = (raceNumber) => `race-${raceNumber}`;
+  const bcRaceName = (raceNumber) => (isBreedersCupDay ? BREEDERS_CUP_RACE_NAMES[date]?.[raceNumber] : null) || null;
   const tocHtml = raceGroups.length > 1
     ? `<div style="padding:10px 30px 14px; text-align:center; border-bottom:1px solid ${theme.hairline};">
          <span style="display:block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:${theme.dim}; margin-bottom:6px;">Jump to a race</span>
-         ${raceGroups.map(({ race }) => `<a href="#${raceAnchorId(race.raceNumber)}" style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; color:${theme.accent}; background:${theme.hairline}; text-decoration:none; padding:3px 10px; border-radius:10px; margin:2px 3px;">R${escapeHtmlForEmail(String(race.raceNumber))}</a>`).join("")}
+         ${raceGroups.map(({ race }) => `<a href="#${raceAnchorId(race.raceNumber)}" title="${escapeHtmlForEmail(bcRaceName(race.raceNumber) || "")}" style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; color:${theme.accent}; background:${theme.hairline}; text-decoration:none; padding:3px 10px; border-radius:10px; margin:2px 3px;">R${escapeHtmlForEmail(String(race.raceNumber))}</a>`).join("")}
        </div>`
     : "";
   const racesHtml = raceGroups.map(({ race, horses }) => {
@@ -6898,6 +6995,9 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
     const distBits = [race.distanceLabel, race.surface].filter(Boolean).join(" · ");
     const raceTag = [`RACE ${race.raceNumber}`, postTime, conditionsBits, distBits].filter(Boolean).join(" · ");
+    const raceNameHtml = bcRaceName(race.raceNumber)
+      ? `<div style="font-family:Georgia,'Times New Roman',serif; font-weight:700; font-size:16px; color:${theme.accent}; margin-bottom:6px;">${escapeHtmlForEmail(bcRaceName(race.raceNumber))}</div>`
+      : "";
     const horsesHtml = horses.map(({ horse, notes, recaps }, horseIdx) => {
       const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition) : "";
       // Quote/Race Recap/Full Card Recap all share one "ribbon header + tinted
@@ -6985,6 +7085,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     }).join("");
     return `
       <div id="${raceAnchorId(race.raceNumber)}" style="padding:16px 30px; border-bottom:1px solid ${theme.hairline};">
+        ${raceNameHtml}
         <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; letter-spacing:0.06em; background:${theme.accent}; color:#ffffff; padding:3px 9px; border-radius:3px; margin-bottom:10px;">${escapeHtmlForEmail(raceTag)}</span>
         ${horsesHtml}
       </div>

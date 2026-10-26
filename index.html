@@ -13096,19 +13096,23 @@
   // Saratoga-only would leave the wire empty for long stretches outside major
   // local stories, so Saratoga-mentioning items are flagged instead of
   // filtering everything else out. DRF's feed exposes CORS directly
-  // (verified via curl); TDN and America's Best Racing don't, so those two
-  // route through rss2json.com (free, keyless) to be readable from the
-  // browser — a different situation from the Equibase/NYRA CORS walls
-  // elsewhere in this app, since RSS is explicitly published for outside
-  // programs to consume, not gated behind bot detection.
+  // (verified via curl), so that one stays a plain browser fetch. TDN,
+  // America's Best Racing, BloodHorse, and HRN don't send CORS headers, so
+  // those four are now fetched server-side by the Worker's own GET
+  // /news-wire route instead (added 2026-10-26) — they used to route
+  // through rss2json.com (free, keyless) to read around that same CORS gap,
+  // but rss2json.com itself started sitting behind a Cloudflare bot-
+  // challenge page for every request that day (confirmed real, not specific
+  // to these feeds — their whole free service is walled now), which is a
+  // different situation from the Equibase/NYRA bot walls elsewhere in this
+  // app, since RSS here is explicitly published for outside programs to
+  // consume, not gated behind bot detection — just no longer reachable
+  // through that particular free bridge.
   const NEWS_REFRESH_MS = 15 * 60 * 1000; // news moves slower than weather
   const NEWS_ITEM_CAP = 30;
   const NEWS_SOURCES = [
     { name: "DRF", kind: "direct", url: "https://www.drf.com/rss.xml" },
-    { name: "TDN", kind: "bridge", url: "https://www.thoroughbreddailynews.com/feed/" },
-    { name: "ABR", kind: "bridge", url: "https://www.americasbestracing.net/rss" },
-    { name: "BloodHorse", kind: "bridge", url: "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-racing" },
-    { name: "HRN", kind: "bridge", url: "https://www.horseracingnation.com/rss/newsfeed.aspx" },
+    { name: "Worker (TDN/ABR/BloodHorse/HRN)", kind: "worker" },
   ];
 
   function parseRssXml(xmlText){
@@ -13130,7 +13134,7 @@
     return Number.isNaN(ms) ? 0 : ms;
   }
 
-  // One source failing (rss2json hiccup, a feed going temporarily down) only
+  // One source failing (feed temporarily down, Worker unreachable) only
   // drops that source's items — it shouldn't blank the whole wire.
   async function fetchNewsSource(source){
     try{
@@ -13140,15 +13144,13 @@
         const xml = await res.text();
         return parseRssXml(xml).map(it => ({ ...it, source: source.name, ts: newsItemTimestamp(it.pubDate) }));
       }
-      const bridgeUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(source.url)}`;
-      const res = await fetch(bridgeUrl);
+      const res = await fetch(`${loadStableFeedUrl()}news-wire`);
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
-      if (data.status !== "ok") throw new Error("rss2json status: " + data.status);
       return (data.items ?? []).map(it => ({
         title: it.title, link: it.link, pubDate: it.pubDate,
-        source: source.name, ts: newsItemTimestamp(it.pubDate),
-        body: it.content || it.description || "",
+        source: it.source, ts: newsItemTimestamp(it.pubDate),
+        body: it.body || "",
       }));
     } catch(err){
       console.error(`News source ${source.name} failed`, err);
