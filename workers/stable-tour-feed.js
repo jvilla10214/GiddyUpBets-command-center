@@ -4144,7 +4144,14 @@ async function dedupeStableTourNotes(env) {
 // all, so entries[].scratched is the only consistently-available signal).
 const RACEDAY_LOOKUP_MAX_DAYS = 200;
 async function findPreviousStarts(env, horseNames, beforeDate) {
-  const wanted = new Set(horseNames.map((n) => (n || "").trim().toLowerCase()).filter(Boolean));
+  // Stripped the same way as every notes<->entries match in this file
+  // (horseMatchKey/normalizeHorseNameForRecap) — a foreign-bred horse's
+  // archived entry and its current one both carry the country suffix in
+  // practice, but a source/format change between the two snapshots is
+  // exactly the kind of mismatch that silently hid quotes elsewhere
+  // (confirmed real 2026-10-26); stripping here closes the same gap for
+  // class-movement/trainer-angle lookups.
+  const wanted = new Set(horseNames.map((n) => stripHorseCountrySuffix((n || "").trim().toLowerCase())).filter(Boolean));
   const found = new Map(); // lowercased horse name -> previous-start record
   if (!wanted.size) return {};
 
@@ -4168,7 +4175,7 @@ async function findPreviousStarts(env, horseNames, beforeDate) {
     for (const race of races) {
       const horses = Array.isArray(race.horses) ? race.horses : [];
       for (const h of horses) {
-        const key = (h.name || "").trim().toLowerCase();
+        const key = stripHorseCountrySuffix((h.name || "").trim().toLowerCase());
         if (!key || !wanted.has(key) || found.has(key) || h.scratched) continue;
         found.set(key, {
           track: c.track,
@@ -4186,7 +4193,7 @@ async function findPreviousStarts(env, horseNames, beforeDate) {
 
   const result = {};
   horseNames.forEach((n) => {
-    result[n] = found.get((n || "").trim().toLowerCase()) || null;
+    result[n] = found.get(stripHorseCountrySuffix((n || "").trim().toLowerCase())) || null;
   });
   return result;
 }
@@ -4238,11 +4245,11 @@ async function computeTrainerAngleStats(env) {
       let winnerKey = null;
       if (result && Array.isArray(result.finishOrder)) {
         const winner = result.finishOrder.find((f) => f.finishPosition === 1);
-        if (winner && winner.horseName) winnerKey = winner.horseName.trim().toLowerCase();
+        if (winner && winner.horseName) winnerKey = stripHorseCountrySuffix(winner.horseName.trim().toLowerCase());
       }
       for (const h of (race.horses || [])) {
         if (h.scratched || !h.name || !h.trainer) continue;
-        const horseKey = h.name.trim().toLowerCase();
+        const horseKey = stripHorseCountrySuffix(h.name.trim().toLowerCase());
         if (!byHorse.has(horseKey)) byHorse.set(horseKey, []);
         byHorse.get(horseKey).push({
           trainer: h.trainer.trim(), date: m[2], hasResult: !!result,
