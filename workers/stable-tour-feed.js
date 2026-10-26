@@ -6790,6 +6790,20 @@ const STYLED_DIGEST_TRACK_THEME = {
   parx: { accent: "#e22439", bg: "#fef7f7", ink: "#2e1418", dim: "#8a5c62", hairline: "#ecdbdd" },
 };
 
+// Breeders' Cup race days at Keeneland get the event's own purple branding
+// instead of Keeneland's house green once the real card is drawn and these
+// horses flow through the normal entry-alert pipeline — a global marquee
+// event, not "just another day at Keeneland." Accent sampled directly from
+// breederscup.com's own rendered page (#512d6d, the dominant real color
+// across its header/nav/links — not a generic invented purple); bg/ink/dim/
+// hairline reused from the Fair Grounds theme above, the only other theme
+// already in this same purple family, rather than hand-deriving a second
+// set. Hardcoded to the two actual 2026 dates — one-off per project
+// convention (BREEDERS_CUP_2026 in index.html, the pre-entry digest script),
+// not a generic "event override" system.
+const BREEDERS_CUP_2026_DATES = new Set(["2026-10-30", "2026-10-31"]);
+const BREEDERS_CUP_THEME = { accent: "#512d6d", bg: "#faf7fd", ink: "#201530", dim: "#7a6b8a", hairline: "#e6ddf0" };
+
 // Site-domain tag on a note (e.g. "drf.com") — derived from the note's own
 // stored link, same as index.html's stableNoteSiteLabel(). Only ever a
 // display addition; never stored, so it stays in sync automatically if a
@@ -6861,10 +6875,24 @@ function ribbonBlockHtml(hue, bodyTextColor, icon, label, badgeHtml, bodyHtml, b
 }
 
 function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTest = false, cardLabel = "today" } = {}) {
-  const theme = STYLED_DIGEST_TRACK_THEME[track] || STYLED_DIGEST_TRACK_THEME.saratoga;
+  const isBreedersCupDay = track === "keeneland" && BREEDERS_CUP_2026_DATES.has(date);
+  const theme = isBreedersCupDay ? BREEDERS_CUP_THEME : (STYLED_DIGEST_TRACK_THEME[track] || STYLED_DIGEST_TRACK_THEME.saratoga);
+  const displayLabel = isBreedersCupDay ? "Breeders' Cup" : trackLabel;
   const horseCount = raceGroups.reduce((sum, g) => sum + g.horses.length, 0);
   const dateLabel = formatEmailDateLabel(date);
-  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${trackLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} ${cardLabel} (${dateLabel})`;
+  const subject = `${isTest ? "TEST — " : ""}GiddyUpQuotes — ${displayLabel} Edition — ${horseCount} horse${horseCount === 1 ? "" : "s"} ${cardLabel} (${dateLabel})`;
+  // Jump-to-race nav — only worth the extra header real estate once there's
+  // more than one race to jump between; a single-race digest has nothing to
+  // jump to. Built for any track's digest (not Breeders'-Cup-specific), but
+  // most useful on a big field like this one, where "so many quotes, so many
+  // races" makes scrolling past everything to find one race painful.
+  const raceAnchorId = (raceNumber) => `race-${raceNumber}`;
+  const tocHtml = raceGroups.length > 1
+    ? `<div style="padding:10px 30px 14px; text-align:center; border-bottom:1px solid ${theme.hairline};">
+         <span style="display:block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:${theme.dim}; margin-bottom:6px;">Jump to a race</span>
+         ${raceGroups.map(({ race }) => `<a href="#${raceAnchorId(race.raceNumber)}" style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; color:${theme.accent}; background:${theme.hairline}; text-decoration:none; padding:3px 10px; border-radius:10px; margin:2px 3px;">R${escapeHtmlForEmail(String(race.raceNumber))}</a>`).join("")}
+       </div>`
+    : "";
   const racesHtml = raceGroups.map(({ race, horses }) => {
     const postTime = formatPostTimeLabelServer(race.postTimeIso) || race.mtpLabel || "—";
     const conditionsBits = [race.purse, race.raceType].filter(Boolean).join(" ");
@@ -6956,7 +6984,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
       `;
     }).join("");
     return `
-      <div style="padding:16px 30px; border-bottom:1px solid ${theme.hairline};">
+      <div id="${raceAnchorId(race.raceNumber)}" style="padding:16px 30px; border-bottom:1px solid ${theme.hairline};">
         <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; letter-spacing:0.06em; background:${theme.accent}; color:#ffffff; padding:3px 9px; border-radius:3px; margin-bottom:10px;">${escapeHtmlForEmail(raceTag)}</span>
         ${horsesHtml}
       </div>
@@ -6965,9 +6993,10 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
   const html = `
     <div style="background:${theme.bg}; color:${theme.ink}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
       <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double ${theme.accent};">
-        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:${theme.accent}; margin-bottom:6px;">GiddyUpQuotes &mdash; ${escapeHtmlForEmail(trackLabel)} Edition</div>
+        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:${theme.accent}; margin-bottom:6px;">GiddyUpQuotes &mdash; ${escapeHtmlForEmail(displayLabel)} Edition</div>
         <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:${theme.dim};">${isTest ? "TEST SEND &middot; " : ""}${escapeHtmlForEmail(dateLabel)} &middot; ${horseCount} tracked horse${horseCount === 1 ? "" : "s"} ${cardLabel}</div>
       </div>
+      ${tocHtml}
       ${racesHtml}
     </div>
   `;
