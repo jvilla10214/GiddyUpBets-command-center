@@ -10865,9 +10865,17 @@
 
   // Flat lowercase-keyed index of every pre-entered horse across both days,
   // built once (the dataset is static) — used to filter the shared
-  // stableNotes store down to just this weekend's field.
+  // stableNotes store down to just this weekend's field. Keyed by the
+  // country-suffix-stripped name (stripHorseCountrySuffix, defined below —
+  // hoisted, so the forward reference here is fine): the official entry
+  // reads "Forever Young (JPN)" but every Stable Tour quote for that horse
+  // is filed under the bare "Forever Young", with no suffix at all. Without
+  // stripping both sides the same way, every foreign-bred horse (JPN/IRE/
+  // FR/GB/etc. — a real chunk of a Breeders' Cup field) silently showed
+  // zero quotes here despite the notes genuinely existing (confirmed real
+  // 2026-10-26, caught via Forever Young specifically).
   const BC_HORSE_NAME_SET = new Set(
-    BREEDERS_CUP_2026.days.flatMap(d => d.races.flatMap(r => r.horses.map(h => h.name.trim().toLowerCase())))
+    BREEDERS_CUP_2026.days.flatMap(d => d.races.flatMap(r => r.horses.map(h => stripHorseCountrySuffix(h.name.trim().toLowerCase()))))
   );
 
   function renderBreedersCupDayTabs(){
@@ -10899,7 +10907,7 @@
         </div>
         <div class="entries-race-meta bc-race-conditions">${escapeHtml(race.dist)} ${escapeHtml(race.surf)} · ${escapeHtml(race.purse)} · ${escapeHtml(race.cond)}</div>
         <div class="bc-horse-grid">
-          ${race.horses.map(h => `<button type="button" class="bc-horse-chip" data-bc-horse-key="${escapeHtml(h.name.trim().toLowerCase())}">${escapeHtml(h.name)}</button>`).join("")}
+          ${race.horses.map(h => `<button type="button" class="bc-horse-chip" data-bc-horse-key="${escapeHtml(stripHorseCountrySuffix(h.name.trim().toLowerCase()))}">${escapeHtml(h.name)}</button>`).join("")}
         </div>
       </div>
     `).join("");
@@ -10932,8 +10940,9 @@
     for (const n of stableNotes){
       if (n.trainer && !trackedSet.has(n.trainer)) continue;
       const horse = (n.horse || "").trim();
-      if (!horse || !BC_HORSE_NAME_SET.has(horse.toLowerCase())) continue;
-      const key = horse.toLowerCase();
+      if (!horse) continue;
+      const key = stripHorseCountrySuffix(horse.toLowerCase());
+      if (!BC_HORSE_NAME_SET.has(key)) continue;
       if (!byHorse[key]) byHorse[key] = { display: horse, notes: [] };
       byHorse[key].notes.push(n);
     }

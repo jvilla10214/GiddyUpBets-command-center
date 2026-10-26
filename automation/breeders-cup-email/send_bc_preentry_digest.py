@@ -121,8 +121,15 @@ def note_age_badge_html(date_str):
 
 
 def notes_for_horse(all_notes, tracked_trainers, horse_name):
-    key = horse_name.strip().lower()
-    matches = [n for n in all_notes if (n.get("horse") or "").strip().lower() == key]
+    # normalize_horse_key strips the country suffix — the official entry
+    # reads "Forever Young (JPN)" but every Stable Tour quote for that horse
+    # is filed under the bare "Forever Young". Without stripping both sides
+    # the same way (recaps_for_horse already did; this one didn't), every
+    # foreign-bred horse (JPN/IRE/FR/GB/etc.) showed zero quotes in the real
+    # Sunday digest despite the notes genuinely existing (confirmed real
+    # 2026-10-26, caught via Forever Young specifically).
+    key = normalize_horse_key(horse_name)
+    matches = [n for n in all_notes if normalize_horse_key(n.get("horse")) == key]
     # Same rule the frontend's BC notes subsection uses: a trainer-less note
     # always shows; a note naming a trainer only shows once that trainer is
     # actually tracked.
