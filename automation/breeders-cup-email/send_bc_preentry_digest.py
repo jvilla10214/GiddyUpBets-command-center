@@ -53,6 +53,32 @@ TRACK_LABEL = {
     "woodbine": "Woodbine", "parx": "Parx",
 }
 
+# Official stakes names, by date then race number — race numbers alone
+# aren't unique across the two days (both have a "Race 6", a different race
+# each day). Same map as BREEDERS_CUP_RACE_NAMES in workers/stable-tour-
+# feed.js (ported there for the real drawn-card entry-alert email); kept
+# here too so this one-time pre-entry send shows the same race names.
+BREEDERS_CUP_RACE_NAMES = {
+    "2026-10-30": {
+        6: "Breeders' Cup Juvenile Turf Sprint",
+        7: "Breeders' Cup Juvenile Fillies",
+        8: "John Deere Breeders' Cup Juvenile Fillies Turf",
+        9: "FanDuel Breeders' Cup Juvenile",
+        10: "Brown Advisory Breeders' Cup Juvenile Turf",
+    },
+    "2026-10-31": {
+        4: "Breeders' Cup Filly & Mare Sprint",
+        5: "Prevagen Breeders' Cup Turf Sprint",
+        6: "Breeders' Cup Dirt Mile",
+        7: "Maker's Mark Breeders' Cup Filly & Mare Turf",
+        8: "Cygames Breeders' Cup Sprint",
+        9: "FanDuel Breeders' Cup Mile",
+        10: "Longines Breeders' Cup Distaff",
+        11: "Longines Breeders' Cup Turf",
+        12: "Longines Breeders' Cup Classic",
+    },
+}
+
 COUNTRY_SUFFIX_RE = re.compile(r"\s*\([a-zA-Z]{2,4}\)\s*$")
 
 
@@ -193,8 +219,17 @@ def recap_cards_html(entries):
     return "".join(parts)
 
 
-def race_html(race, all_notes, tracked_trainers, recap_index):
+def race_anchor_id(race_num):
+    return f"race-{race_num}"
+
+
+def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
     tag = f"RACE {race['num']} &middot; {esc(race['post'])} &middot; {esc(race['purse'])} {esc(race['cond'])} &middot; {esc(race['dist'])} {esc(race['surf'])}"
+    race_name = BREEDERS_CUP_RACE_NAMES.get(date_str, {}).get(race["num"])
+    race_name_html = (
+        f'<div style="font-family:Georgia,\'Times New Roman\',serif; font-weight:700; font-size:16px; color:{THEME["accent"]}; margin-bottom:6px;">{esc(race_name)}</div>'
+        if race_name else ""
+    )
     horses = sorted(race["horses"], key=lambda h: h["name"].lower())
     horses_html = []
     for idx, h in enumerate(horses):
@@ -210,22 +245,44 @@ def race_html(race, all_notes, tracked_trainers, recap_index):
         {recaps_html}
         {notes_html}""")
     return f"""
-      <div style="padding:16px 30px; border-bottom:1px solid {THEME['hairline']};">
+      <div id="{race_anchor_id(race['num'])}" style="padding:16px 30px; border-bottom:1px solid {THEME['hairline']};">
+        {race_name_html}
         <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; letter-spacing:0.06em; background:{THEME['accent']}; color:#ffffff; padding:3px 9px; border-radius:3px; margin-bottom:10px;">{tag}</span>
         {''.join(horses_html)}
       </div>"""
 
 
+def toc_html(day):
+    races = day["races"]
+    if len(races) < 2:
+        return ""
+    pills = []
+    for r in races:
+        name = BREEDERS_CUP_RACE_NAMES.get(day["date"], {}).get(r["num"], "")
+        pills.append(
+            f'<a href="#{race_anchor_id(r["num"])}" title="{esc(name)}" '
+            f'style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; '
+            f'color:{THEME["accent"]}; background:{THEME["hairline"]}; text-decoration:none; padding:3px 10px; '
+            f'border-radius:10px; margin:2px 3px;">R{r["num"]}</a>'
+        )
+    return f"""
+    <div style="padding:10px 30px 14px; text-align:center; border-bottom:1px solid {THEME['hairline']};">
+      <span style="display:block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:{THEME['dim']}; margin-bottom:6px;">Jump to a race</span>
+      {''.join(pills)}
+    </div>"""
+
+
 def build_day_email(day, all_notes, tracked_trainers, recap_index):
     horse_count = sum(len(r["horses"]) for r in day["races"])
     subject = f"GiddyUpQuotes — Breeders' Cup Pre-Entries — {day['label']} ({horse_count} horses, draw not yet made)"
-    races_html = "".join(race_html(r, all_notes, tracked_trainers, recap_index) for r in day["races"])
+    races_html = "".join(race_html(r, all_notes, tracked_trainers, recap_index, day["date"]) for r in day["races"])
     html_body = f"""
     <div style="background:{THEME['bg']}; color:{THEME['ink']}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
       <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double {THEME['accent']};">
         <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:{THEME['accent']}; margin-bottom:6px;">GiddyUpQuotes &mdash; Breeders' Cup Pre-Entries</div>
         <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:{THEME['dim']};">Keeneland &middot; {esc(day['label'])} &middot; {horse_count} pre-entered horses &middot; PRE-ENTRIES &mdash; DRAW NOT YET MADE</div>
       </div>
+      {toc_html(day)}
       {races_html}
     </div>"""
     return subject, html_body
