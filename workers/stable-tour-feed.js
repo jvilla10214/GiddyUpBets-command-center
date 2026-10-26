@@ -11574,7 +11574,11 @@ async function fetchSmartPonyQuotes(env) {
   // during that same audit. A track/event name in the article's own title
   // is a much more precise signal and was 100% consistent across every
   // confirmed-harness case found.
-  const HARNESS_SOURCE_RE = /\b(red mile|scioto|northfield|harrah'?s philadelphia|yonkers|woodbine mohawk|\bmohawk\b|dover downs|pocono downs|the meadows\b|freehold raceway|tioga downs|vernon downs|batavia downs|monticello raceway|breeders crown|hambletonian|little brown jug|grand circuit|\bharness\b)/i;
+  // breeders['’]?\s*crown (not a literal "breeders crown") — confirmed real
+  // 2026-10-26: this pattern never actually matched "Breeders' Crown" (the
+  // apostrophe always present in every real title/channel name) until now,
+  // so this specific signal had silently never fired since it was added.
+  const HARNESS_SOURCE_RE = /\b(red mile|scioto|northfield|harrah'?s philadelphia|yonkers|woodbine mohawk|\bmohawk\b|dover downs|pocono downs|the meadows\b|freehold raceway|tioga downs|vernon downs|batavia downs|monticello raceway|breeders['’]?\s*crown|hambletonian|little brown jug|grand circuit|\bharness\b)/i;
 
   const quotes = [];
   const resolveTracked = makeTrackedTrainerResolver(trainers);

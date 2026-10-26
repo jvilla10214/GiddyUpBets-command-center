@@ -12,6 +12,24 @@ import subprocess
 
 import config
 
+# "America's Day at the Races" occasionally includes crossover/simulcast
+# coverage of harness racing's own biggest event — NYRA is thoroughbred-
+# only, but a video literally titled "... - Breeders' Crown - Oct 24" turned
+# out to be real harness-racing content throughout (Standardbred drivers/
+# trainers — Scott Zeron, Dexter Dunn, Ron Burke, Todd McCarthy, etc. —
+# confirmed real 2026-10-26: 50 contaminating notes found in the live
+# thoroughbred-only Stable Tour store, some from this exact video, some
+# from an earlier unnoticed one). Same HARNESS_SOURCE_RE pattern already
+# used in workers/stable-tour-feed.js's article-import filter, ported here
+# since this is a separate (Python) codebase with no shared import path.
+HARNESS_TITLE_RE = re.compile(
+    r"\b(red mile|scioto|northfield|harrah'?s philadelphia|yonkers|woodbine mohawk|\bmohawk\b|"
+    r"dover downs|pocono downs|the meadows\b|freehold raceway|tioga downs|vernon downs|"
+    r"batavia downs|monticello raceway|breeders['’]?\s*crown|hambletonian|little brown jug|"
+    r"grand circuit|\bharness\b)",
+    re.IGNORECASE,
+)
+
 
 def load_json(path, default):
     if not os.path.exists(path):
@@ -54,6 +72,8 @@ def fetch_streams(playlist_end=40):
         d = json.loads(line)
         title = (d.get("title") or "").strip()
         if not title.startswith(config.TITLE_PREFIX):
+            continue
+        if HARNESS_TITLE_RE.search(title):
             continue
         duration = d.get("duration") or 0
         # A still-airing or just-posted stream can list with duration 0
