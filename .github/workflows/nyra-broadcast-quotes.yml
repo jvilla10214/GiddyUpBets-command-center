@@ -117,7 +117,18 @@ jobs:
             echo "Push rejected — merging state by id/key instead of rebasing, attempt $i"
             git fetch origin main
             python3 merge_state_on_conflict.py
-            git reset --soft origin/main
+            # --mixed (NOT --soft) — confirmed real bug 2026-10-26: --soft
+            # only moves HEAD, it never touches the index, so the index
+            # still held this job's OWN stale base commit (whatever main was
+            # when this run's trigger first fired, possibly hours earlier if
+            # it sat queued waiting for the runner). The re-commit below
+            # then inherited that stale tree for every file except the two
+            # explicitly re-added here, silently reverting unrelated same-day
+            # pushes (wiped out a same-day Worker change this way once
+            # already). --mixed actually resets the index to origin/main's
+            # tree first, so only the two explicitly re-added files differ
+            # from the real latest main.
+            git reset --mixed origin/main
             git add state/processed_video_ids.json state/dropped_quotes.json
             git commit -m "NYRA Broadcast quote pipeline: update processed-video state [skip ci]"
             sleep 2

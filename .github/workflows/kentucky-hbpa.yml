@@ -119,7 +119,14 @@ jobs:
             echo "Push rejected — merging state by id/key instead of rebasing, attempt $i"
             git fetch origin main
             python3 merge_state_on_conflict.py
-            git reset --soft origin/main
+            # --mixed (NOT --soft) — see nyra-broadcast-quotes.yml's
+            # identical step for the full reasoning: --soft never touches
+            # the index, so it silently reverted every file except the two
+            # re-added below back to whatever stale commit this job started
+            # from (confirmed real 2026-10-26 — wiped out a same-day Worker
+            # change this way). --mixed actually resets the index to
+            # origin/main's tree first.
+            git reset --mixed origin/main
             git add state/processed_video_ids.json state/dropped_quotes.json
             git commit -m "Kentucky HBPA quote pipeline: update processed-video state [skip ci]"
             sleep 2
