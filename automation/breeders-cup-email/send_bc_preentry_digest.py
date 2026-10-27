@@ -1,9 +1,19 @@
-"""One-off Breeders' Cup pre-entry digest emails — see README.md.
+"""One-off Breeders' Cup entries digest emails — see README.md.
 
 Not a recurring pipeline. Reads BREEDERS_CUP_2026 out of index.html, fetches live
 Stable Tour notes, builds two emails (Friday, Saturday), sends each through the
 Worker's /send-custom-email route. Standard library only, deliberately, so a
 fresh checkout can run this with no setup step.
+
+Updated 2026-10-27 for the real drawn card: BREEDERS_CUP_2026 now holds
+official SmartPony-sourced entries (real post positions, trainers, jockeys,
+morning-line odds, scratch status), not condition-book pre-entries. Scratched
+horses are excluded from the email entirely rather than shown struck-through
+— a scratched horse has nothing left to bet or watch for. Theme switched to
+Breeders' Cup's own real purple (matching BREEDERS_CUP_THEME in workers/
+stable-tour-feed.js, used for the real production entry-alert email once
+this same card is live there) now that it's an official card, not a
+Keeneland-green pre-entry placeholder.
 """
 import html
 import json
@@ -23,11 +33,13 @@ BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
-# Keeneland's real sampled theme color (from its own favicon, #0d5c44) — see
-# STYLED_DIGEST_TRACK_THEME in workers/stable-tour-feed.js. Breeders' Cup runs
-# at Keeneland this year, so this is the correct theme to reuse, not a new
-# invented palette.
-THEME = {"accent": "#0d5c44", "bg": "#f6fbf8", "ink": "#123328", "dim": "#5c8274", "hairline": "#dcece4"}
+# Breeders' Cup's own real purple (sampled directly from breederscup.com,
+# #512d6d — see BREEDERS_CUP_THEME in workers/stable-tour-feed.js, the same
+# accent used there once this card is live in the real production entry-
+# alert email). Was Keeneland's green while this was still a pre-entry
+# placeholder; now that it's the real drawn card, the event's own branding
+# is the correct theme, not the host track's.
+THEME = {"accent": "#512d6d", "bg": "#faf7fd", "ink": "#201530", "dim": "#7a6b8a", "hairline": "#e6ddf0"}
 
 # Same fixed colors as NOTE_TYPE_RIBBON_COLORS in workers/stable-tour-feed.js
 # — all three fixed, not THEME['accent'], so "indigo = quote / gold = race
@@ -242,18 +254,26 @@ def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
         f'<div style="font-family:Georgia,\'Times New Roman\',serif; font-weight:700; font-size:16px; color:{THEME["accent"]}; margin-bottom:6px;">{esc(race_name)}</div>'
         if race_name else ""
     )
-    horses = sorted(race["horses"], key=lambda h: h["name"].lower())
+    # Real post-position order now, not alphabetical — alphabetical was a
+    # pre-entry-only concession (no post positions existed yet to sort by).
+    # Scratched horses are dropped entirely, not shown struck-through —
+    # nothing left to bet or watch for once scratched, and "officially
+    # entered" per the user's own ask means the horses actually running.
+    horses = sorted((h for h in race["horses"] if not h.get("scratched")), key=lambda h: int(h["pgm"]))
     horses_html = []
     for idx, h in enumerate(horses):
         divider = f'<div style="border-top:1px dashed {THEME["hairline"]}; margin:14px 0 10px;"></div>' if idx > 0 else ""
         recaps_html = recap_cards_html(recaps_for_horse(recap_index, h["name"]))
         notes = notes_for_horse(all_notes, tracked_trainers, h["name"])
         notes_html = "".join(note_card_html(n) for n in notes)
+        jt_line = f"{h.get('trainer') or '—'} &middot; {h.get('jockey') or '—'}" + (f" &middot; {esc(h['mlOdds'])}" if h.get("mlOdds") else "")
         horses_html.append(f"""
         {divider}
         <div style="margin:10px 0 3px;">
-          <span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:{THEME['ink']};">{esc(h['name'])}</span>
+          <span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; border-radius:4px; background:{THEME['accent']}; color:#ffffff; font-family:'Courier New',monospace; font-weight:700; font-size:12px; vertical-align:middle; margin-right:8px;">{esc(h['pgm'])}</span>
+          <span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:{THEME['ink']}; vertical-align:middle;">{esc(h['name'])}</span>
         </div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:{THEME['dim']}; margin:0 0 6px 30px;">{jt_line}</div>
         {recaps_html}
         {notes_html}""")
     return f"""
@@ -306,14 +326,18 @@ def toc_html(day, page_url=None):
     </div>"""
 
 
+def active_horse_count(day):
+    return sum(1 for r in day["races"] for h in r["horses"] if not h.get("scratched"))
+
+
 def build_day_body(day, all_notes, tracked_trainers, recap_index, page_url=None):
-    horse_count = sum(len(r["horses"]) for r in day["races"])
+    horse_count = active_horse_count(day)
     races_html = "".join(race_html(r, all_notes, tracked_trainers, recap_index, day["date"]) for r in day["races"])
     return f"""
     <div style="background:{THEME['bg']}; color:{THEME['ink']}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
       <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double {THEME['accent']};">
-        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:{THEME['accent']}; margin-bottom:6px;">GiddyUpQuotes &mdash; Breeders' Cup Pre-Entries</div>
-        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:{THEME['dim']};">Keeneland &middot; {esc(day['label'])} &middot; {horse_count} pre-entered horses &middot; PRE-ENTRIES &mdash; DRAW NOT YET MADE</div>
+        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:{THEME['accent']}; margin-bottom:6px;">GiddyUpQuotes &mdash; Breeders' Cup</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:{THEME['dim']};">Keeneland &middot; {esc(day['label'])} &middot; {horse_count} entered horses &middot; OFFICIAL ENTRIES &mdash; POST POSITIONS DRAWN</div>
       </div>
       {toc_html(day, page_url)}
       {races_html}
@@ -321,8 +345,8 @@ def build_day_body(day, all_notes, tracked_trainers, recap_index, page_url=None)
 
 
 def build_day_email(day, all_notes, tracked_trainers, recap_index):
-    horse_count = sum(len(r["horses"]) for r in day["races"])
-    subject = f"GiddyUpQuotes — Breeders' Cup Pre-Entries — {day['label']} ({horse_count} horses, draw not yet made)"
+    horse_count = active_horse_count(day)
+    subject = f"GiddyUpQuotes — Breeders' Cup Official Entries — {day['label']} ({horse_count} horses)"
     page_url = f"{PAGES_BASE}/bc-digest/{page_filename(day)}"
     html_body = build_day_body(day, all_notes, tracked_trainers, recap_index, page_url=page_url)
     return subject, html_body
@@ -339,7 +363,7 @@ def build_day_page(day, all_notes, tracked_trainers, recap_index):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GiddyUpQuotes — Breeders' Cup Pre-Entries — {esc(day['label'])}</title>
+<title>GiddyUpQuotes — Breeders' Cup Official Entries — {esc(day['label'])}</title>
 </head>
 <body style="margin:0; padding:20px 0; background:{THEME['bg']};">
 {body}
