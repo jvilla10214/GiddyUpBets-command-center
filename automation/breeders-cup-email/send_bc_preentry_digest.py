@@ -222,16 +222,6 @@ def recap_cards_html(entries):
     return "".join(parts)
 
 
-# Confirmed real 2026-10-27: the "jump to a race" links didn't work in the
-# sent email even though the href/id pair is correct (verified by rendering
-# the exact same HTML in a plain browser — the scroll landed exactly right
-# there). Gmail sandboxes an email's body in a way that doesn't reliably
-# honor a bare `id` as an anchor target. The standard email-dev workaround
-# is an empty `<a name="...">` at the target spot — an older HTML4 anchor
-# convention most webmail clients (Gmail included) still honor for jump
-# links even though they don't treat a div's `id` the same way. Both are
-# emitted below: `name` for Gmail-style clients, `id` kept for clients that
-# do support it (desktop Outlook, Apple Mail).
 def race_anchor_id(race_num):
     return f"race-{race_num}"
 
@@ -259,7 +249,6 @@ def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
         {notes_html}""")
     return f"""
       <div id="{race_anchor_id(race['num'])}" style="padding:16px 30px; border-bottom:1px solid {THEME['hairline']};">
-        <a name="{race_anchor_id(race['num'])}"></a>
         {race_name_html}
         <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; letter-spacing:0.06em; background:{THEME['accent']}; color:#ffffff; padding:3px 9px; border-radius:3px; margin-bottom:10px;">{tag}</span>
         {''.join(horses_html)}
