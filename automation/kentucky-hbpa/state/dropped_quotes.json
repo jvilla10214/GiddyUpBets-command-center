@@ -2222,5 +2222,21 @@
     "error": null,
     "foundAt": "2026-10-27T13:51:17.163804+00:00",
     "reviewed": false
+  },
+  {
+    "key": "YFm4cGp39VY|00:00|Possiblemente",
+    "reason": "non_trainer_jockey_role",
+    "video": "Moral of Taylor Logan's Possiblemente story: \"Dream big, because it can happen\"",
+    "videoId": "YFm4cGp39VY",
+    "videoDate": "2026-10-27",
+    "speaker": "Taylor Logan",
+    "role": "owner",
+    "horse": "Possiblemente",
+    "quote": "Yes, it's been uh I mean it's crazy that this is actually happening. Like I don't we were saying yesterday we're like I don't feel like it's even going to feel real until he's like in the gate.",
+    "question": "Nothing's changed for you since he won at Kentucky Downs, this is your horse?",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-27T20:46:37.846958+00:00",
+    "reviewed": false
   }
 ]
