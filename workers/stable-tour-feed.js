@@ -6968,6 +6968,15 @@ function noteAgeBadgeHtml(dateStr) {
 // tag again.
 const NOTE_TYPE_RIBBON_COLORS = { quote: "#5b4e8f", race: "#c99a2e", fullCard: "#4a6b8a" };
 
+// Recurring non-trainer, non-jockey podcast guests whose quotes are stored
+// in the jockey field purely to reuse its existing "always show, no
+// tracked-list gating" display behavior (see write_episode_analyst_notes()
+// in automation/podcast-quotes/write_notes.py) — David Aragona is an
+// analyst/oddsmaker (ATR's own morning-line maker, also does NYRA's), not a
+// jockey, so his notes need their own icon/label rather than being
+// mislabeled "Jockey". Same set index.html's PODCAST_ANALYST_NAMES uses.
+const PODCAST_ANALYST_NAMES = new Set(["David Aragona"]);
+
 function ribbonBlockHtml(hue, bodyTextColor, icon, label, badgeHtml, bodyHtml, bottomMargin) {
   return `
         <div style="border-radius:6px; overflow:hidden; margin:4px 0 ${bottomMargin};">
@@ -7029,9 +7038,15 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         // Trainer vs. jockey gets a different icon so "who's talking" reads
         // at a glance, not just from the text below the quote — a note only
         // ever has one of these two fields set (see write_notes.py's own
-        // callers), never both, so this is an either/or, not a priority order.
-        const roleIcon = n.trainer ? "&#127908;" : "&#127943;";
-        const roleLabel = n.trainer ? "Trainer" : "Jockey";
+        // callers), never both, so this is an either/or, not a priority
+        // order. A recurring analyst guest (PODCAST_ANALYST_NAMES — stored
+        // in the jockey field purely to reuse its "always show" display
+        // behavior, see write_episode_analyst_notes() in automation/
+        // podcast-quotes/write_notes.py) gets its own icon/label instead of
+        // being mislabeled "Jockey".
+        const isAnalyst = n.jockey && PODCAST_ANALYST_NAMES.has(n.jockey);
+        const roleIcon = n.trainer ? "&#127908;" : isAnalyst ? "&#128202;" : "&#127943;";
+        const roleLabel = n.trainer ? "Trainer" : isAnalyst ? "Analyst" : "Jockey";
         const speakerName = n.trainer || n.jockey || "";
         // "NEW" means genuinely never sent in a real (non-test) digest
         // before — not just "newest by date" — n.digestedAt is set the

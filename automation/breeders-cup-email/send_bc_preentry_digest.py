@@ -169,9 +169,18 @@ def notes_for_horse(all_notes, tracked_trainers, horse_name):
     return matches
 
 
+# Recurring non-trainer, non-jockey podcast guests stored in the jockey
+# field purely to reuse its existing "always show" display behavior (see
+# write_episode_analyst_notes() in automation/podcast-quotes/write_notes.py)
+# — same set as PODCAST_ANALYST_NAMES in index.html/workers/stable-tour-
+# feed.js, kept here too so this script's own note cards don't mislabel him.
+PODCAST_ANALYST_NAMES = {"David Aragona"}
+
+
 def note_card_html(n):
-    role_icon = "&#127908;" if n.get("trainer") else "&#127943;"
-    role_label = "Trainer" if n.get("trainer") else "Jockey"
+    is_analyst = n.get("jockey") in PODCAST_ANALYST_NAMES
+    role_icon = "&#127908;" if n.get("trainer") else "&#128202;" if is_analyst else "&#127943;"
+    role_label = "Trainer" if n.get("trainer") else "Analyst" if is_analyst else "Jockey"
     speaker = n.get("trainer") or n.get("jockey") or ""
     source = n.get("source") or ("auto-imported" if n.get("autoImported") else "manual")
     quote_hue = NOTE_TYPE_RIBBON_COLORS["quote"]

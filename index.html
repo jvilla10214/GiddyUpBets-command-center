@@ -2355,6 +2355,7 @@
   .stable-note.type-trainer{ border-left: 3px solid var(--sky); }
   .stable-note.type-jockey{ border-left: 3px solid var(--rail-green); }
   .stable-note.type-paddock{ border-left: 3px solid var(--clay); }
+  .stable-note.type-analyst{ border-left: 3px solid var(--tote-amber); }
   .stable-notetype-badge{
     font-size: 9px; padding: 1px 5px; border-radius: 3px;
     text-transform: uppercase; letter-spacing: 0.5px;
@@ -2362,6 +2363,7 @@
   .stable-notetype-trainer{ color: var(--sky); background: rgba(111,168,201,0.12); }
   .stable-notetype-jockey{ color: var(--rail-green); background: rgba(76,175,125,0.12); }
   .stable-notetype-paddock{ color: var(--clay); background: rgba(192,120,48,0.12); }
+  .stable-notetype-analyst{ color: var(--tote-amber); background: rgba(240,180,41,0.12); }
   .stable-setup-section{ display:flex; flex-direction:column; gap:16px; margin-top: 18px; }
   .stable-auto-badge{
     font-size: 9px;
@@ -10622,13 +10624,22 @@
   // Trainer Angle, so it deliberately does NOT reuse this app's "hot"
   // amber/green/sky signal palette for all three — see the color choices
   // on .stable-note.type-* below for why only the border uses color at all.
+  // Recurring non-trainer, non-jockey podcast guests whose quotes are
+  // stored in the jockey field purely to reuse its existing "always show,
+  // no tracked-list gating" display behavior (see write_episode_analyst_
+  // notes() in automation/podcast-quotes/write_notes.py) — David Aragona is
+  // an analyst/oddsmaker (ATR's own morning-line maker, also does NYRA's),
+  // not a jockey, so he needs his own badge rather than being mislabeled.
+  const PODCAST_ANALYST_NAMES = new Set(["David Aragona"]);
+
   function stableNoteType(n){
+    if (n.jockey && PODCAST_ANALYST_NAMES.has(n.jockey)) return "analyst";
     if (n.jockey) return "jockey";
     if (/^(maggie|acacia|megan)'?s paddock notes\s*-/i.test((n.note || "").trim())) return "paddock";
     if (n.trainer) return "trainer";
     return null; // untracked (manually added, no person yet) — no badge, no special border
   }
-  const STABLE_NOTE_TYPE_LABEL = { trainer: "Trainer Quote", jockey: "Jockey Quote", paddock: "Paddock Read" };
+  const STABLE_NOTE_TYPE_LABEL = { trainer: "Trainer Quote", jockey: "Jockey Quote", paddock: "Paddock Read", analyst: "Analyst Quote" };
 
   // Note-age badge — only a quote old enough that the trainer's situation
   // may have moved on (claim, barn change, plans changed) gets flagged;
