@@ -1771,7 +1771,10 @@
     gap: 6px 10px;
   }
   .bc-horse-chip{
-    display: block;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    column-gap: 6px;
     width: 100%;
     text-align: left;
     font-size: 12.5px;
@@ -1782,7 +1785,24 @@
     padding: 4px 0;
     cursor: pointer;
   }
-  .bc-horse-chip:hover{ color: var(--tote-amber); text-decoration: underline; }
+  .bc-horse-chip:hover .bc-horse-name{ color: var(--tote-amber); text-decoration: underline; }
+  .bc-horse-pp{
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--parchment-dim);
+    background: rgba(169,164,150,0.14);
+    border-radius: 3px;
+    padding: 1px 5px;
+    flex-shrink: 0;
+  }
+  .bc-horse-jt{
+    flex-basis: 100%;
+    font-size: 10.5px;
+    color: var(--parchment-dim);
+  }
+  .bc-horse-scratched .bc-horse-name{ color: var(--parchment-dim); text-decoration: line-through; }
+  .bc-horse-scratched .bc-horse-pp{ opacity: 0.5; }
   .bc-jump-notes-btn{ margin-left: auto; }
   .entries-results-card{
     margin-bottom: 18px;
@@ -3861,11 +3881,11 @@
     <div class="panel">
       <div class="panel-title">
         Breeders' Cup 2026
-        <span class="tag">PRE-ENTRIES — DRAW NOT YET MADE</span>
+        <span class="tag">OFFICIAL ENTRIES — POST POSITIONS DRAWN</span>
       </div>
       <div class="bc-subhead">
-        Keeneland · Friday, October 30 &amp; Saturday, October 31, 2026 — fields below are pre-entries pulled
-        from the official PP documents. Post positions, scratches, and final fields aren't set until the draw.
+        Keeneland · Friday, October 30 &amp; Saturday, October 31, 2026 — official drawn fields, post positions,
+        trainers, jockeys, and morning-line odds, sourced the same way every other track's Entries tab is (SmartPony).
       </div>
       <div class="entries-date-picker" id="bcDayTabs"></div>
       <div id="bcRaceList"></div>
@@ -8988,122 +9008,146 @@
             "num": 6,
             "name": "Breeders' Cup Juvenile Turf Sprint",
             "post": "2:55 PM ET",
-            "dist": "5.5 Furlongs",
+            "dist": "5 1/2 Furlongs",
             "surf": "Turf",
             "purse": "$1,000,000",
-            "cond": "2yo",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 12,
-                "name": "Harper's Corner"
+                "pgm": "1",
+                "name": "Moonrise",
+                "trainer": "Andrew Balding",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Brickyard Belle"
+                "pgm": "2",
+                "name": "Good To Be King",
+                "trainer": "George R Ii Arnold",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 11,
-                "name": "Good to Be King"
+                "pgm": "3",
+                "name": "Libertango",
+                "trainer": "George Boughey",
+                "jockey": "Flavien Prat",
+                "mlOdds": "5-2",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "Go for Launch"
+                "pgm": "4",
+                "name": "Brickyard Belle",
+                "trainer": "Miguel Clement",
+                "jockey": "Manuel Franco",
+                "mlOdds": "3-1",
+                "scratched": false
               },
               {
-                "pgm": 18,
-                "name": "Mrs D"
+                "pgm": "5",
+                "name": "Mussab",
+                "trainer": "Peter Fahey",
+                "jockey": "Oisin Orr",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 26,
-                "name": "Seneca Park"
+                "pgm": "6",
+                "name": "Velozee",
+                "trainer": "Paddy Twomey",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Adonius (IRE)"
+                "pgm": "7",
+                "name": "Crownbreaker",
+                "trainer": "De Foy Kevin Philippart",
+                "jockey": "J R Velazquez",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 28,
-                "name": "Wood Island"
+                "pgm": "8",
+                "name": "Force Noir",
+                "trainer": "Robson De Aguiar",
+                "jockey": "David Egan",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 24,
-                "name": "Ruiva"
+                "pgm": "9",
+                "name": "Final Objective",
+                "trainer": "Jehani Hamad Al",
+                "jockey": "James Doyle",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Arctic Wolf"
+                "pgm": "10",
+                "name": "Harper's Corner",
+                "trainer": "Cathal Lynch",
+                "jockey": "Pascacio Lopez",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "Love a Warrior"
+                "pgm": "11",
+                "name": "Hell Of A Spin",
+                "trainer": "Adrian Paul Keatley",
+                "jockey": "Mikey Sheehy",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "Luminous Beauty"
+                "pgm": "12",
+                "name": "Primetime Emmy",
+                "trainer": "Francis - Henri Graffard",
+                "jockey": "Mickael Barzalona",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Fanshell Beach"
+                "pgm": "13",
+                "name": "Ruiva",
+                "trainer": "Wesley A Ward",
+                "jockey": "Juan J Hernandez",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 20,
-                "name": "My Kid's Said No"
+                "pgm": "14",
+                "name": "Wood Island",
+                "trainer": "George Weaver",
+                "jockey": "Flavien Prat",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 23,
-                "name": "Riyadh Way"
+                "pgm": "15",
+                "name": "Adonius",
+                "trainer": "Rebecca Menzies",
+                "jockey": "J R Velazquez",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 22,
-                "name": "Primetime Emmy (AUS)"
+                "pgm": "16",
+                "name": "Love A Warrior",
+                "trainer": "Steven M Asmussen",
+                "jockey": "Luis Saez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 19,
-                "name": "Mussab (GB)"
-              },
-              {
-                "pgm": 25,
-                "name": "Sale Shark (IRE)"
-              },
-              {
-                "pgm": 21,
-                "name": "Nabati (IRE)"
-              },
-              {
-                "pgm": 13,
-                "name": "Hell of A Spin (IRE)"
-              },
-              {
-                "pgm": 27,
-                "name": "Velozee (IRE)"
-              },
-              {
-                "pgm": 9,
-                "name": "Force Noir (IRE)"
-              },
-              {
-                "pgm": 14,
-                "name": "Libertango (IRE)"
-              },
-              {
-                "pgm": 17,
-                "name": "Moonrise (IRE)"
-              },
-              {
-                "pgm": 5,
-                "name": "Crownbreaker (IRE)"
-              },
-              {
-                "pgm": 4,
-                "name": "Carry The Flag (IRE)"
-              },
-              {
-                "pgm": 8,
-                "name": "Final Objective (IRE)"
-              },
-              {
-                "pgm": 6,
-                "name": "Drazinda (FR)"
+                "pgm": "17",
+                "name": "Fanshell Beach",
+                "trainer": "Wesley A Ward",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9111,62 +9155,106 @@
             "num": 7,
             "name": "Breeders' Cup Juvenile Fillies",
             "post": "3:35 PM ET",
-            "dist": "8.5 Furlongs",
+            "dist": "1 1/16 Miles",
             "surf": "Dirt",
             "purse": "$2,000,000",
-            "cond": "2yo Fillies",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 4,
-                "name": "Emphatic"
+                "pgm": "1",
+                "name": "Scarlett Begonia",
+                "trainer": "Brad H Cox",
+                "jockey": "Manuel Franco",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Manuka Honey"
+                "pgm": "2",
+                "name": "Domain Expansion",
+                "trainer": "Leonard Powell",
+                "jockey": "Adrian Escobedo",
+                "mlOdds": "6-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Lexi's Charm"
+                "pgm": "3",
+                "name": "Foxiest",
+                "trainer": "Brad H Cox",
+                "jockey": "Junior Alvarado",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Dotsy"
+                "pgm": "4",
+                "name": "Rum Twist",
+                "trainer": "Mark Hennig",
+                "jockey": "J R Velazquez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Scarlett Begonia"
+                "pgm": "5",
+                "name": "Miss Monica",
+                "trainer": "Bob Baffert",
+                "jockey": "Flavien Prat",
+                "mlOdds": "5-2",
+                "scratched": false
               },
               {
-                "pgm": 11,
-                "name": "Rum Twist"
+                "pgm": "6",
+                "name": "Revenge Of The Sis",
+                "trainer": "George Weaver",
+                "jockey": "Edgard J Zayas",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Miss Monica"
+                "pgm": "7",
+                "name": "Lexi's Charm",
+                "trainer": "Mark Casse",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Voyager"
+                "pgm": "8",
+                "name": "Manuka Honey",
+                "trainer": "Brian A Lynch",
+                "jockey": "Luis Saez",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Life Changing"
+                "pgm": "9",
+                "name": "Badittude",
+                "trainer": "Todd A Pletcher",
+                "jockey": "Joel Rosario",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Badittude"
+                "pgm": "10",
+                "name": "Emphatic",
+                "trainer": "Brendan P Walsh",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "9-5",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "Revenge of the Sis"
+                "pgm": "11",
+                "name": "Voyager",
+                "trainer": "Mark Casse",
+                "jockey": "J J Castellano",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Domain Expansion"
-              },
-              {
-                "pgm": 5,
-                "name": "Foxiest"
+                "pgm": "12",
+                "name": "Life Changing",
+                "trainer": "Todd A Pletcher",
+                "jockey": "Juan J Hernandez",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9174,102 +9262,146 @@
             "num": 8,
             "name": "John Deere Breeders' Cup Juvenile Fillies Turf",
             "post": "4:15 PM ET",
-            "dist": "8 Furlongs",
+            "dist": "1 Mile",
             "surf": "Turf",
             "purse": "$1,000,000",
-            "cond": "2yo Fillies",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 4,
-                "name": "Citrus Springs"
+                "pgm": "1",
+                "name": "Green Empress",
+                "trainer": "Joseph Patrick O'brien",
+                "jockey": "Dylan Browne Mcmonagle",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 17,
-                "name": "Seneca Park"
+                "pgm": "2",
+                "name": "Go For Launch",
+                "trainer": "Kevin Attard",
+                "jockey": "Pietro Moran",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 18,
-                "name": "Serenas Ghost"
+                "pgm": "3",
+                "name": "Curracloe",
+                "trainer": "John P Murtagh",
+                "jockey": "Ben Coen",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "Go for Launch"
+                "pgm": "4",
+                "name": "Serenas Ghost",
+                "trainer": "Joe Sharp",
+                "jockey": "Luis Saez",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Domestic Agenda"
+                "pgm": "5",
+                "name": "De La Renta",
+                "trainer": "Kevin Attard",
+                "jockey": "Kazushi Kimura",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 23,
-                "name": "Voyager"
+                "pgm": "6",
+                "name": "Alwaysanangel",
+                "trainer": "Joseph Patrick O'brien",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "De la Renta"
+                "pgm": "7",
+                "name": "Vanta",
+                "trainer": "Jeff Mullins",
+                "jockey": "Umberto Rispoli",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Luminous Beauty"
+                "pgm": "8",
+                "name": "Citrus Springs",
+                "trainer": "Miguel Clement",
+                "jockey": "Manuel Franco",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "Quibbler"
+                "pgm": "9",
+                "name": "Sun Goddess",
+                "trainer": "Aidan P O'brien",
+                "jockey": "Ryan L Moore",
+                "mlOdds": "6-5",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Hidden Overture"
+                "pgm": "10",
+                "name": "Amusingly",
+                "trainer": "Francis - Henri Graffard",
+                "jockey": "Colin T Keane",
+                "mlOdds": "7-2",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Domain Expansion"
+                "pgm": "11",
+                "name": "Scommessa Sicura",
+                "trainer": "Andrew Balding",
+                "jockey": "Billy Loughnane",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 22,
-                "name": "Vanta"
+                "pgm": "12",
+                "name": "Domestic Agenda",
+                "trainer": "Chad C Brown",
+                "jockey": "Flavien Prat",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Curracloe"
+                "pgm": "13",
+                "name": "Seneca Park",
+                "trainer": "Dallas Stewart",
+                "jockey": "B J Jr Hernandez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 20,
-                "name": "So Lovely"
+                "pgm": "14",
+                "name": "Ballinea Star",
+                "trainer": "Robson De Aguiar",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Amusingly (GB)"
+                "pgm": "15",
+                "name": "Silent Beauty",
+                "trainer": "De Foy Kevin Philippart",
+                "jockey": "David Egan",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Dee's Funny Girl (IRE)"
+                "pgm": "16",
+                "name": "Luminous Beauty",
+                "trainer": "Jena M Antonucci",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "Scommessa Sicura (IRE)"
-              },
-              {
-                "pgm": 3,
-                "name": "Ballinea Star (IRE)"
-              },
-              {
-                "pgm": 1,
-                "name": "Alwaysanangel (IRE)"
-              },
-              {
-                "pgm": 19,
-                "name": "Silent Beauty (IRE)"
-              },
-              {
-                "pgm": 11,
-                "name": "Green Empress (IRE)"
-              },
-              {
-                "pgm": 14,
-                "name": "Nuit d'Eclair (IRE)"
-              },
-              {
-                "pgm": 21,
-                "name": "Sun Goddess (IRE)"
+                "pgm": "17",
+                "name": "Quibbler",
+                "trainer": "Riley Mott",
+                "jockey": "Jaime A Torres",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9277,46 +9409,74 @@
             "num": 9,
             "name": "FanDuel Breeders' Cup Juvenile",
             "post": "4:55 PM ET",
-            "dist": "8.5 Furlongs",
+            "dist": "1 1/16 Miles",
             "surf": "Dirt",
             "purse": "$2,000,000",
-            "cond": "2yo Colts & Geldings",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 5,
-                "name": "Gaudreau"
+                "pgm": "1",
+                "name": "Damavand",
+                "trainer": "Todd A Pletcher",
+                "jockey": "Luis Saez",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Coach Pope"
+                "pgm": "2",
+                "name": "Gaudreau",
+                "trainer": "Chad C Brown",
+                "jockey": "Manuel Franco",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Salahudin"
+                "pgm": "3",
+                "name": "Salahudin",
+                "trainer": "Bob Baffert",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "6-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "American History"
+                "pgm": "4",
+                "name": "Earth Song",
+                "trainer": "Jorge Delgado",
+                "jockey": "Junior Alvarado",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "He Is No Lie"
+                "pgm": "5",
+                "name": "Hughes",
+                "trainer": "Bob Baffert",
+                "jockey": "Flavien Prat",
+                "mlOdds": "1-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Hughes"
+                "pgm": "6",
+                "name": "American History",
+                "trainer": "Todd A Pletcher",
+                "jockey": "J R Velazquez",
+                "mlOdds": "9-2",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Damavand"
+                "pgm": "7",
+                "name": "Coach Pope",
+                "trainer": "Kenneth G Mcpeek",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "4-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Earth Song"
-              },
-              {
-                "pgm": 8,
-                "name": "Net Par"
+                "pgm": "8",
+                "name": "He Is No Lie",
+                "trainer": "Doug O'neill",
+                "jockey": "Joel Rosario",
+                "mlOdds": "15-1",
+                "scratched": false
               }
             ]
           },
@@ -9324,110 +9484,130 @@
             "num": 10,
             "name": "Brown Advisory Breeders' Cup Juvenile Turf",
             "post": "5:35 PM ET",
-            "dist": "8 Furlongs",
+            "dist": "1 Mile",
             "surf": "Turf",
             "purse": "$1,000,000",
-            "cond": "2yo Colts & Geldings",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 12,
-                "name": "How's Al Today"
+                "pgm": "1",
+                "name": "Induction",
+                "trainer": "H Graham Motion",
+                "jockey": "Junior Alvarado",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Agate"
+                "pgm": "2",
+                "name": "Avec Toi",
+                "trainer": "Christopher Head",
+                "jockey": "Flavien Prat",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 23,
-                "name": "Real Goodbar"
+                "pgm": "3",
+                "name": "Florida Bay",
+                "trainer": "Aidan P O'brien",
+                "jockey": "W Lordan",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Bold Leadership"
+                "pgm": "4",
+                "name": "Haffner",
+                "trainer": "Aidan P O'brien",
+                "jockey": "C Soumillon",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Earth Song"
+                "pgm": "5",
+                "name": "How's Al Today",
+                "trainer": "Riley Mott",
+                "jockey": "B J Jr Hernandez",
+                "mlOdds": "3-1",
+                "scratched": false
               },
               {
-                "pgm": 22,
-                "name": "Popcorn"
+                "pgm": "6",
+                "name": "Pikachu",
+                "trainer": "Charlie Johnston",
+                "jockey": "David Egan",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "Liam's Law"
+                "pgm": "7",
+                "name": "Let Em Know",
+                "trainer": "D Whitworth Beckman",
+                "jockey": "Edgard J Zayas",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Canada"
+                "pgm": "8",
+                "name": "Liam's Law",
+                "trainer": "Todd A Pletcher",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 14,
-                "name": "Let Em Know"
+                "pgm": "9",
+                "name": "Sale Shark",
+                "trainer": "Hugo Palmer",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Al Hudaiba (GB)"
+                "pgm": "10",
+                "name": "Folsom Blues",
+                "trainer": "Joseph Patrick O'brien",
+                "jockey": "Dylan Browne Mcmonagle",
+                "mlOdds": "7-2",
+                "scratched": false
               },
               {
-                "pgm": 24,
-                "name": "Riyadh Way"
+                "pgm": "11",
+                "name": "Man's Best Friend",
+                "trainer": "Aidan P O'brien",
+                "jockey": "Colin T Keane",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 20,
-                "name": "Oscar"
+                "pgm": "12",
+                "name": "Oscar",
+                "trainer": "Miguel Clement",
+                "jockey": "William T Buick",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Induction"
+                "pgm": "13",
+                "name": "Agate",
+                "trainer": "Kelsey Danner",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 19,
-                "name": "Observed"
+                "pgm": "14",
+                "name": "Great Barrier Reef",
+                "trainer": "Aidan P O'brien",
+                "jockey": "Ryan L Moore",
+                "mlOdds": "4-1",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "Majik Mooney"
-              },
-              {
-                "pgm": 18,
-                "name": "Maxify"
-              },
-              {
-                "pgm": 11,
-                "name": "Haffner"
-              },
-              {
-                "pgm": 3,
-                "name": "Avec Toi"
-              },
-              {
-                "pgm": 8,
-                "name": "Folsom Blues (IRE)"
-              },
-              {
-                "pgm": 25,
-                "name": "Sale Shark (IRE)"
-              },
-              {
-                "pgm": 10,
-                "name": "Great Barrier Reef (IRE)"
-              },
-              {
-                "pgm": 7,
-                "name": "Florida Bay (IRE)"
-              },
-              {
-                "pgm": 17,
-                "name": "Man's Best Friend (IRE)"
-              },
-              {
-                "pgm": 9,
-                "name": "Force Noir (IRE)"
-              },
-              {
-                "pgm": 21,
-                "name": "Pikachu (GB)"
+                "pgm": "15",
+                "name": "Popcorn",
+                "trainer": "Jonathan Thomas",
+                "jockey": "Manuel Franco",
+                "mlOdds": "20-1",
+                "scratched": false
               }
             ]
           }
@@ -9444,63 +9624,111 @@
             "dist": "7 Furlongs",
             "surf": "Dirt",
             "purse": "$1,000,000",
-            "cond": "3yo+ Fillies & Mares",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 14,
-                "name": "Ways and Means"
+                "pgm": "1",
+                "name": "Look Forward",
+                "trainer": "Michael W Mccarthy",
+                "jockey": "Umberto Rispoli",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "R Disaster"
+                "pgm": "2",
+                "name": "Ways And Means",
+                "trainer": "Chad C Brown",
+                "jockey": "Flavien Prat",
+                "mlOdds": "7-5",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Splendora"
+                "pgm": "3",
+                "name": "Praying",
+                "trainer": "Robert Medina",
+                "jockey": "J R Velazquez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Foie Gras"
+                "pgm": "4",
+                "name": "R Disaster",
+                "trainer": "Saffie A Jr Joseph",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Explora"
+                "pgm": "5",
+                "name": "Foie Gras",
+                "trainer": "Michael J Maker",
+                "jockey": "Ricardo Jr Santana",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Sweet Azteca"
+                "pgm": "6",
+                "name": "Majestic Oops",
+                "trainer": "Philip Damato",
+                "jockey": "Francisco Arrieta",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Evanescence"
+                "pgm": "7",
+                "name": "Evanescence",
+                "trainer": "Eddie Kenneally",
+                "jockey": "Luis Saez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Kilwin"
+                "pgm": "8",
+                "name": "Kerry's Kiss",
+                "trainer": "Saffie A Jr Joseph",
+                "jockey": "Edwin Gonzalez",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Praying"
+                "pgm": "9",
+                "name": "Sweet Azteca",
+                "trainer": "Richard Baltas",
+                "jockey": "Juan J Hernandez",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Look Forward"
+                "pgm": "10",
+                "name": "Simply Joking",
+                "trainer": "Michael W Mccarthy",
+                "jockey": "Manuel Franco",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Nooni"
+                "pgm": "11",
+                "name": "Explora",
+                "trainer": "Bob Baffert",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "4-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Majestic Oops"
+                "pgm": "12",
+                "name": "Kilwin",
+                "trainer": "George R Ii Arnold",
+                "jockey": "J J Castellano",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Kerry's Kiss"
-              },
-              {
-                "pgm": 11,
-                "name": "Simply Joking"
+                "pgm": "13",
+                "name": "Nooni",
+                "trainer": "Bob Baffert",
+                "jockey": "Mario Gutierrez",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9508,114 +9736,154 @@
             "num": 5,
             "name": "Prevagen Breeders' Cup Turf Sprint",
             "post": "1:48 PM ET",
-            "dist": "5.5 Furlongs",
+            "dist": "5 1/2 Furlongs",
             "surf": "Turf",
             "purse": "$1,000,000",
-            "cond": "3yo+",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 10,
-                "name": "Joe Shiesty"
+                "pgm": "1",
+                "name": "John The Beer Man",
+                "trainer": "Rob Atras",
+                "jockey": "K Carmouche",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 19,
-                "name": "Possiblemente"
+                "pgm": "2",
+                "name": "Shisospicy",
+                "trainer": "Jose Francisco D'angelo",
+                "jockey": "Luis Saez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Golden Afternoon"
+                "pgm": "3",
+                "name": "Bacio",
+                "trainer": "Wesley A Ward",
+                "jockey": "Juan J Hernandez",
+                "mlOdds": "5-2",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "No Nay Hudson (IRE)"
+                "pgm": "4",
+                "name": "Roja",
+                "trainer": "H Graham Motion",
+                "jockey": "Manuel Franco",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 26,
-                "name": "Yellow Card"
+                "pgm": "5",
+                "name": "Time To Dazzle",
+                "trainer": "Mark Casse",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Doncho"
+                "pgm": "6",
+                "name": "Yellow Card",
+                "trainer": "Michael W Mccarthy",
+                "jockey": "Flavien Prat",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 25,
-                "name": "Victory Achieved"
+                "pgm": "7",
+                "name": "Comanche Brave",
+                "trainer": "Donnacha O'brien",
+                "jockey": "Billy Loughnane",
+                "mlOdds": "3-1",
+                "scratched": false
               },
               {
-                "pgm": 24,
-                "name": "Time to Dazzle"
+                "pgm": "8",
+                "name": "Possiblemente",
+                "trainer": "Joe Sharp",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 11,
-                "name": "John the Beer Man"
+                "pgm": "9",
+                "name": "In Our Time",
+                "trainer": "Saffie A Jr Joseph",
+                "jockey": "Micah J Husbands",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "In Our Time"
+                "pgm": "10",
+                "name": "Cy Fair",
+                "trainer": "George Weaver",
+                "jockey": "J R Velazquez",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "My Boy Prince"
+                "pgm": "11",
+                "name": "Joe Shiesty",
+                "trainer": "Eric Foster",
+                "jockey": "Fernando De La Cruz",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 17,
-                "name": "Nobals"
+                "pgm": "12",
+                "name": "Sorrento Sky",
+                "trainer": "Philip Damato",
+                "jockey": "Umberto Rispoli",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Kehoe Beach"
+                "pgm": "13",
+                "name": "Starlust",
+                "trainer": "Ralph Beckett",
+                "jockey": "Rossa Ryan",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 20,
-                "name": "Roja"
+                "pgm": "14",
+                "name": "Miss Yechance",
+                "trainer": "Karl Burke",
+                "jockey": "Jack Nicholls",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Cy Fair"
+                "pgm": "15",
+                "name": "Big Mojo",
+                "trainer": "Michael Appleby",
+                "jockey": "Tom Marquand",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 22,
-                "name": "Sorrento Sky (IRE)"
+                "pgm": "16",
+                "name": "No Nay Hudson",
+                "trainer": "Wesley A Ward",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 21,
-                "name": "Shisospicy"
+                "pgm": "17",
+                "name": "Doncho",
+                "trainer": "Michelle Lovell",
+                "jockey": "Ricardo Jr Santana",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 18,
-                "name": "Outfielder"
-              },
-              {
-                "pgm": 2,
-                "name": "Bacio"
-              },
-              {
-                "pgm": 1,
-                "name": "American Stage"
-              },
-              {
-                "pgm": 7,
-                "name": "Ecoro Reve"
-              },
-              {
-                "pgm": 4,
-                "name": "Comanche Brave (IRE)"
-              },
-              {
-                "pgm": 13,
-                "name": "Lugal (JPN)"
-              },
-              {
-                "pgm": 14,
-                "name": "Miss Yechance (IRE)"
-              },
-              {
-                "pgm": 23,
-                "name": "Starlust (GB)"
-              },
-              {
-                "pgm": 3,
-                "name": "Big Mojo (IRE)"
+                "pgm": "18",
+                "name": "Outfielder",
+                "trainer": "Wesley A Ward",
+                "jockey": "David Egan",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9623,74 +9891,98 @@
             "num": 6,
             "name": "Breeders' Cup Dirt Mile",
             "post": "2:26 PM ET",
-            "dist": "8 Furlongs",
+            "dist": "1 Mile",
             "surf": "Dirt",
             "purse": "$1,000,000",
-            "cond": "3yo+",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 10,
-                "name": "Knightsbridge"
+                "pgm": "1",
+                "name": "Further Ado",
+                "trainer": "Brad H Cox",
+                "jockey": "Flavien Prat",
+                "mlOdds": "2-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Coal Battle"
+                "pgm": "2",
+                "name": "T Kraft",
+                "trainer": "William I Mott",
+                "jockey": "Junior Alvarado",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Built"
+                "pgm": "3",
+                "name": "Full Serrano",
+                "trainer": "John W Sadler",
+                "jockey": "Joel Rosario",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Further Ado"
+                "pgm": "4",
+                "name": "Chunk Of Gold",
+                "trainer": "Ethan W West",
+                "jockey": "Jaime A Torres",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 14,
-                "name": "Owen Almighty"
+                "pgm": "5",
+                "name": "Coal Battle",
+                "trainer": "Lonnie Briley",
+                "jockey": "Juan P Vargas",
+                "mlOdds": "6-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Chunk of Gold"
+                "pgm": "6",
+                "name": "Lord Fons",
+                "trainer": "Shogo Yasuda",
+                "jockey": "Kazuo Yokoyama",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Bracket Buster"
+                "pgm": "7",
+                "name": "Bracket Buster",
+                "trainer": "Victoria Oliver",
+                "jockey": "J R Velazquez",
+                "mlOdds": "7-2",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Forged Steel"
+                "pgm": "8",
+                "name": "Moonlight",
+                "trainer": "Peter Miller",
+                "jockey": "Manuel Franco",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Hymn"
+                "pgm": "9",
+                "name": "Forged Steel",
+                "trainer": "Saffie A Jr Joseph",
+                "jockey": "Edwin Gonzalez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Napoleon Solo"
+                "pgm": "10",
+                "name": "Owen Almighty",
+                "trainer": "Brian A Lynch",
+                "jockey": "Luis Saez",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Full Serrano (ARG)"
-              },
-              {
-                "pgm": 15,
-                "name": "T Kraft"
-              },
-              {
-                "pgm": 9,
-                "name": "Iron Man Cal"
-              },
-              {
-                "pgm": 12,
-                "name": "Moonlight"
-              },
-              {
-                "pgm": 11,
-                "name": "Lord Fons (JPN)"
-              },
-              {
-                "pgm": 16,
-                "name": "T O Password (JPN)"
+                "pgm": "11",
+                "name": "Iron Man Cal",
+                "trainer": "Philip Damato",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "12-1",
+                "scratched": false
               }
             ]
           },
@@ -9698,78 +9990,130 @@
             "num": 7,
             "name": "Maker's Mark Breeders' Cup Filly & Mare Turf",
             "post": "3:04 PM ET",
-            "dist": "9.5 Furlongs",
+            "dist": "1 3/16 Miles",
             "surf": "Turf",
             "purse": "$2,000,000",
-            "cond": "3yo+ Fillies & Mares",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 3,
-                "name": "Classic Q"
+                "pgm": "1",
+                "name": "Gimme A Nother",
+                "trainer": "H Graham Motion",
+                "jockey": "J R Velazquez",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 11,
-                "name": "Lush Lips (GB)"
+                "pgm": "2",
+                "name": "Evershed",
+                "trainer": "Arnaud Delacour",
+                "jockey": "Mickael Barzalona",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Bless the Broken"
+                "pgm": "3",
+                "name": "Classic Q",
+                "trainer": "Mark Casse",
+                "jockey": "J J Castellano",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "Kathynmarissa"
+                "pgm": "4",
+                "name": "Red Letter",
+                "trainer": "Ger Lyons",
+                "jockey": "Dylan Browne Mcmonagle",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 17,
-                "name": "Vina Arana (IRE)"
+                "pgm": "5",
+                "name": "Kathynmarissa",
+                "trainer": "Chad C Brown",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "5-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Expensive Queen (IRE)"
+                "pgm": "6",
+                "name": "Thought Process",
+                "trainer": "Philip Damato",
+                "jockey": "Manuel Franco",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 14,
-                "name": "Stellify"
+                "pgm": "7",
+                "name": "Bless The Broken",
+                "trainer": "Brad H Cox",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "Thought Process"
+                "pgm": "8",
+                "name": "Jancis",
+                "trainer": "Willie Mccreery",
+                "jockey": "Billy Lee",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Gimme a Nother (SAF)"
+                "pgm": "9",
+                "name": "Eccentric",
+                "trainer": "Wesley A Ward",
+                "jockey": "Walter A Rodriguez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Evershed (IRE)"
+                "pgm": "10",
+                "name": "Expensive Queen",
+                "trainer": "Brendan P Walsh",
+                "jockey": "Luis Saez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "Survie (IRE)"
+                "pgm": "11",
+                "name": "Precise",
+                "trainer": "Aidan P O'brien",
+                "jockey": "Ryan L Moore",
+                "mlOdds": "7-2",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Jancis (IRE)"
+                "pgm": "12",
+                "name": "Blue Bolt",
+                "trainer": "Andrew Balding",
+                "jockey": "Colin T Keane",
+                "mlOdds": "5-2",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Red Letter (GB)"
+                "pgm": "13",
+                "name": "Lush Lips",
+                "trainer": "Brendan P Walsh",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Blue Bolt (IRE)"
+                "pgm": "14",
+                "name": "Stellify",
+                "trainer": "Brad H Cox",
+                "jockey": "Flavien Prat",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Diamond Necklace (IRE)"
-              },
-              {
-                "pgm": 12,
-                "name": "Precise (IRE)"
-              },
-              {
-                "pgm": 5,
-                "name": "Eccentric (CHI)"
+                "pgm": "15",
+                "name": "Vina Arana",
+                "trainer": "Jack Sisterson",
+                "jockey": "Adam Beschizza",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9780,83 +10124,111 @@
             "dist": "6 Furlongs",
             "surf": "Dirt",
             "purse": "$2,000,000",
-            "cond": "3yo+",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 5,
-                "name": "Englishman"
+                "pgm": "1",
+                "name": "Mad House",
+                "trainer": "David Vanwinkle",
+                "jockey": "Pascacio Lopez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 19,
-                "name": "T O Elvis"
+                "pgm": "2",
+                "name": "Dark Saffron",
+                "trainer": "Harmash Ahmad Bin",
+                "jockey": "Connor Beasley",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Built"
+                "pgm": "3",
+                "name": "Liam Smith",
+                "trainer": "Peter Miller",
+                "jockey": "Manuel Franco",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "Roll On Big Joe"
+                "pgm": "4",
+                "name": "Hymn",
+                "trainer": "Ronald E Moquett",
+                "jockey": "Ricardo Jr Santana",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Hymn"
+                "pgm": "5",
+                "name": "Listenupshance",
+                "trainer": "Doug O'neill",
+                "jockey": "E Jaramillo",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Listenupshance"
+                "pgm": "6",
+                "name": "American Stage",
+                "trainer": "Yoshito Yahagi",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Liam Smith"
+                "pgm": "7",
+                "name": "Built",
+                "trainer": "Wayne M Catalano",
+                "jockey": "Luis Saez",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Mad House"
+                "pgm": "8",
+                "name": "Little Thunder",
+                "trainer": "Timothy Hamm",
+                "jockey": "J R Velazquez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 14,
-                "name": "Nakatomi"
+                "pgm": "9",
+                "name": "Nakatomi",
+                "trainer": "Wesley A Ward",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 18,
-                "name": "T Kraft"
+                "pgm": "10",
+                "name": "Roll On Big Joe",
+                "trainer": "R B Jr Hess",
+                "jockey": "Julien R Leparoux",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "Little Thunder"
+                "pgm": "11",
+                "name": "T O Elvis",
+                "trainer": "Daisuke Takayanagi",
+                "jockey": "Ryusei Sakai",
+                "mlOdds": "7-2",
+                "scratched": false
               },
               {
-                "pgm": 17,
-                "name": "Stradale"
+                "pgm": "12",
+                "name": "Stradale",
+                "trainer": "Steven M Asmussen",
+                "jockey": "Flavien Prat",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "Praying"
-              },
-              {
-                "pgm": 7,
-                "name": "Iron Man Cal"
-              },
-              {
-                "pgm": 13,
-                "name": "Moonlight"
-              },
-              {
-                "pgm": 3,
-                "name": "Dark Saffron"
-              },
-              {
-                "pgm": 1,
-                "name": "American Stage"
-              },
-              {
-                "pgm": 4,
-                "name": "Ecoro Reve"
-              },
-              {
-                "pgm": 11,
-                "name": "Lord Fons (JPN)"
+                "pgm": "13",
+                "name": "Englishman",
+                "trainer": "Cherie Devaux",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "4-5",
+                "scratched": false
               }
             ]
           },
@@ -9864,102 +10236,130 @@
             "num": 9,
             "name": "FanDuel Breeders' Cup Mile",
             "post": "4:20 PM ET",
-            "dist": "8 Furlongs",
+            "dist": "1 Mile",
             "surf": "Turf",
             "purse": "$2,000,000",
-            "cond": "3yo+",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 15,
-                "name": "Notable Speech (GB)"
+                "pgm": "1",
+                "name": "Deterministic",
+                "trainer": "Miguel Clement",
+                "jockey": "K Carmouche",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Classic Q"
+                "pgm": "2",
+                "name": "Lake Forest",
+                "trainer": "William J Haggas",
+                "jockey": "Cieren Fallon",
+                "mlOdds": "6-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Deterministic"
+                "pgm": "3",
+                "name": "Facteur Cheval",
+                "trainer": "Mark Casse",
+                "jockey": "Manuel Franco",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 19,
-                "name": "Rhetorical"
+                "pgm": "4",
+                "name": "Cabo Spirit",
+                "trainer": "George Papaprodromou",
+                "jockey": "M E Smith",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 14,
-                "name": "Lush Lips (GB)"
+                "pgm": "5",
+                "name": "Ask Ikigomi",
+                "trainer": "Hideaki Fujiwara",
+                "jockey": "Ryusei Sakai",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Brilliant Berti"
+                "pgm": "6",
+                "name": "Zulu Kingdom",
+                "trainer": "Chad C Brown",
+                "jockey": "Flavien Prat",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 22,
-                "name": "Vina Arana (IRE)"
+                "pgm": "7",
+                "name": "Qirat",
+                "trainer": "Ralph Beckett",
+                "jockey": "Colin T Keane",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Lake Forest (GB)"
+                "pgm": "8",
+                "name": "Notable Speech",
+                "trainer": "Charles Appleby",
+                "jockey": "William T Buick",
+                "mlOdds": "7-5",
+                "scratched": false
               },
               {
-                "pgm": 23,
-                "name": "Zulu Kingdom (IRE)"
+                "pgm": "9",
+                "name": "Rhetorical",
+                "trainer": "William Walden",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Facteur Cheval (IRE)"
+                "pgm": "10",
+                "name": "Lugal",
+                "trainer": "Haruki Sugiyama",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Formidable Man"
+                "pgm": "11",
+                "name": "Formidable Man",
+                "trainer": "Michael W Mccarthy",
+                "jockey": "J R Velazquez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Cabo Spirit"
+                "pgm": "12",
+                "name": "True Love",
+                "trainer": "Aidan P O'brien",
+                "jockey": "W Lordan",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 20,
-                "name": "Ten Bob Tony (IRE)"
+                "pgm": "13",
+                "name": "Brilliant Berti",
+                "trainer": "Cherie Devaux",
+                "jockey": "B J Jr Hernandez",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Blue Bolt (IRE)"
+                "pgm": "14",
+                "name": "Puerto Rico",
+                "trainer": "Aidan P O'brien",
+                "jockey": "Ryan L Moore",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Lugal (JPN)"
-              },
-              {
-                "pgm": 17,
-                "name": "Puerto Rico (IRE)"
-              },
-              {
-                "pgm": 1,
-                "name": "Ask Ikigomi (JPN)"
-              },
-              {
-                "pgm": 16,
-                "name": "Power Blue (IRE)"
-              },
-              {
-                "pgm": 6,
-                "name": "Constitution River (FR)"
-              },
-              {
-                "pgm": 11,
-                "name": "Hotazhell (GB)"
-              },
-              {
-                "pgm": 10,
-                "name": "Gstaad (GB)"
-              },
-              {
-                "pgm": 21,
-                "name": "True Love (IRE)"
-              },
-              {
-                "pgm": 18,
-                "name": "Qirat (GB)"
+                "pgm": "15",
+                "name": "Vina Arana",
+                "trainer": "Jack Sisterson",
+                "jockey": "Adam Beschizza",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -9967,46 +10367,82 @@
             "num": 10,
             "name": "Longines Breeders' Cup Distaff",
             "post": "4:58 PM ET",
-            "dist": "9 Furlongs",
+            "dist": "1 1/8 Miles",
             "surf": "Dirt",
             "purse": "$2,000,000",
-            "cond": "3yo+ Fillies & Mares",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 5,
-                "name": "Nitrogen"
+                "pgm": "1",
+                "name": "Immersive",
+                "trainer": "Brad H Cox",
+                "jockey": "Junior Alvarado",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Splendora"
+                "pgm": "2",
+                "name": "Nitrogen",
+                "trainer": "Mark Casse",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "6-5",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Regaled"
+                "pgm": "3",
+                "name": "Regaled",
+                "trainer": "D Whitworth Beckman",
+                "jockey": "Joseph D Ramos",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Fully Subscribed"
+                "pgm": "4",
+                "name": "Fully Subscribed",
+                "trainer": "Chad C Brown",
+                "jockey": "Flavien Prat",
+                "mlOdds": "8-5",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Super Corredora"
+                "pgm": "5",
+                "name": "Scottish Lassie",
+                "trainer": "Jorge R Abreu",
+                "jockey": "Luis Saez",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Scottish Lassie"
+                "pgm": "6",
+                "name": "Measure",
+                "trainer": "Mark Casse",
+                "jockey": "Manuel Franco",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Eunomia"
+                "pgm": "7",
+                "name": "Super Corredora",
+                "trainer": "John W Sadler",
+                "jockey": "Joel Rosario",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Immersive"
+                "pgm": "8",
+                "name": "Splendora",
+                "trainer": "Bob Baffert",
+                "jockey": "Tyler Gaffalione",
+                "mlOdds": "9-2",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Measure"
+                "pgm": "9",
+                "name": "Eunomia",
+                "trainer": "Saffie A Jr Joseph",
+                "jockey": "Micah J Husbands",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -10014,98 +10450,138 @@
             "num": 11,
             "name": "Longines Breeders' Cup Turf",
             "post": "5:36 PM ET",
-            "dist": "12 Furlongs",
+            "dist": "1 1/2 Miles",
             "surf": "Turf",
             "purse": "$5,000,000",
-            "cond": "3yo+",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 1,
-                "name": "Almaqam (GB)"
+                "pgm": "1",
+                "name": "Ethical Diamond",
+                "trainer": "William P Mullins",
+                "jockey": "Dylan Browne Mcmonagle",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Bay City Roller (IRE)"
+                "pgm": "2",
+                "name": "Benvenuto Cellini",
+                "trainer": "Aidan P O'brien",
+                "jockey": "Ryan L Moore",
+                "mlOdds": "6-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Benvenuto Cellini (IRE)"
+                "pgm": "3",
+                "name": "Minaret Station",
+                "trainer": "William Walden",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 4,
-                "name": "Burnham Square"
+                "pgm": "4",
+                "name": "Far Bridge",
+                "trainer": "Miguel Clement",
+                "jockey": "J R Velazquez",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 5,
-                "name": "Deep Monster (JPN)"
+                "pgm": "5",
+                "name": "El Cordobes",
+                "trainer": "Charles Appleby",
+                "jockey": "William T Buick",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 6,
-                "name": "Diamond Necklace (IRE)"
+                "pgm": "6",
+                "name": "Burnham Square",
+                "trainer": "Ian R Wilkes",
+                "jockey": "B J Jr Hernandez",
+                "mlOdds": "8-1",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Eccentric (CHI)"
+                "pgm": "7",
+                "name": "Hotazhell",
+                "trainer": "Jessica Harrington",
+                "jockey": "Shane Foley",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "El Cordobes (IRE)"
+                "pgm": "8",
+                "name": "Test Score",
+                "trainer": "H Graham Motion",
+                "jockey": "Manuel Franco",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Ethical Diamond (IRE)"
+                "pgm": "9",
+                "name": "Johanna Walsh",
+                "trainer": "Joseph Patrick O'brien",
+                "jockey": "Mickael Barzalona",
+                "mlOdds": "12-1",
+                "scratched": false
               },
               {
-                "pgm": 10,
-                "name": "Far Bridge"
+                "pgm": "10",
+                "name": "Tiffany",
+                "trainer": "Sir Mark Prescott",
+                "jockey": "Luke Morris",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 11,
-                "name": "Gold Phoenix (IRE)"
+                "pgm": "11",
+                "name": "Survie",
+                "trainer": "George Boughey",
+                "jockey": "Flavien Prat",
+                "mlOdds": "15-1",
+                "scratched": false
               },
               {
-                "pgm": 12,
-                "name": "Hotazhell (GB)"
+                "pgm": "12",
+                "name": "Diamond Necklace",
+                "trainer": "Aidan P O'brien",
+                "jockey": "C Soumillon",
+                "mlOdds": "3-1",
+                "scratched": false
               },
               {
-                "pgm": 13,
-                "name": "Johanna Walsh (IRE)"
+                "pgm": "13",
+                "name": "Bay City Roller",
+                "trainer": "George Scott",
+                "jockey": "Oisin Murphy",
+                "mlOdds": "5-1",
+                "scratched": false
               },
               {
-                "pgm": 14,
-                "name": "Lambourn (IRE)"
+                "pgm": "14",
+                "name": "Deep Monster",
+                "trainer": "Yasutoshi Ikee",
+                "jockey": "Tom Marquand",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 15,
-                "name": "Map of Stars (GB)"
+                "pgm": "15",
+                "name": "Map Of Stars",
+                "trainer": "Francis - Henri Graffard",
+                "jockey": "James Doyle",
+                "mlOdds": "20-1",
+                "scratched": false
               },
               {
-                "pgm": 16,
-                "name": "Minaret Station"
-              },
-              {
-                "pgm": 17,
-                "name": "Minnie Hauk (IRE)"
-              },
-              {
-                "pgm": 18,
-                "name": "Ombudsman (IRE)"
-              },
-              {
-                "pgm": 19,
-                "name": "Survie (IRE)"
-              },
-              {
-                "pgm": 20,
-                "name": "Telescopic"
-              },
-              {
-                "pgm": 21,
-                "name": "Test Score"
-              },
-              {
-                "pgm": 22,
-                "name": "Tiffany (IRE)"
+                "pgm": "16",
+                "name": "Telescopic",
+                "trainer": "Victoria Oliver",
+                "jockey": "Luis Saez",
+                "mlOdds": "30-1",
+                "scratched": false
               }
             ]
           },
@@ -10113,54 +10589,74 @@
             "num": 12,
             "name": "Longines Breeders' Cup Classic",
             "post": "6:16 PM ET",
-            "dist": "10 Furlongs",
+            "dist": "1 1/4 Miles",
             "surf": "Dirt",
             "purse": "$7,000,000",
-            "cond": "3yo+",
+            "cond": "Grade 1",
             "horses": [
               {
-                "pgm": 5,
-                "name": "Knightsbridge"
+                "pgm": "1",
+                "name": "T O Password",
+                "trainer": "Daisuke Takayanagi",
+                "jockey": "Kazushi Kimura",
+                "mlOdds": "30-1",
+                "scratched": false
               },
               {
-                "pgm": 9,
-                "name": "Sovereignty"
+                "pgm": "2",
+                "name": "Sovereignty",
+                "trainer": "William I Mott",
+                "jockey": "Junior Alvarado",
+                "mlOdds": "5-2",
+                "scratched": false
               },
               {
-                "pgm": 1,
-                "name": "Forever Young (JPN)"
+                "pgm": "3",
+                "name": "Golden Tempo",
+                "trainer": "Cherie Devaux",
+                "jockey": "Jose L Ortiz",
+                "mlOdds": "5-1",
+                "scratched": false
               },
               {
-                "pgm": 11,
-                "name": "The Puma"
+                "pgm": "4",
+                "name": "The Puma",
+                "trainer": "Gustavo Delgado",
+                "jockey": "J J Castellano",
+                "mlOdds": "10-1",
+                "scratched": false
               },
               {
-                "pgm": 2,
-                "name": "Forged Steel"
+                "pgm": "5",
+                "name": "Forever Young",
+                "trainer": "Yoshito Yahagi",
+                "jockey": "Ryusei Sakai",
+                "mlOdds": "2-1",
+                "scratched": false
               },
               {
-                "pgm": 3,
-                "name": "Further Ado"
+                "pgm": "6",
+                "name": "Magnitude",
+                "trainer": "Steven M Asmussen",
+                "jockey": "Flavien Prat",
+                "mlOdds": "6-1",
+                "scratched": false
               },
               {
-                "pgm": 8,
-                "name": "Phileas Fogg"
+                "pgm": "7",
+                "name": "Knightsbridge",
+                "trainer": "William I Mott",
+                "jockey": "Luis Saez",
+                "mlOdds": "9-2",
+                "scratched": false
               },
               {
-                "pgm": 7,
-                "name": "Napoleon Solo"
-              },
-              {
-                "pgm": 6,
-                "name": "Magnitude"
-              },
-              {
-                "pgm": 4,
-                "name": "Golden Tempo"
-              },
-              {
-                "pgm": 10,
-                "name": "T O Password (JPN)"
+                "pgm": "8",
+                "name": "Napoleon Solo",
+                "trainer": "Chad Summers",
+                "jockey": "J R Velazquez",
+                "mlOdds": "15-1",
+                "scratched": false
               }
             ]
           }
@@ -10918,7 +11414,12 @@
         </div>
         <div class="entries-race-meta bc-race-conditions">${escapeHtml(race.dist)} ${escapeHtml(race.surf)} · ${escapeHtml(race.purse)} · ${escapeHtml(race.cond)}</div>
         <div class="bc-horse-grid">
-          ${race.horses.map(h => `<button type="button" class="bc-horse-chip" data-bc-horse-key="${escapeHtml(stripHorseCountrySuffix(h.name.trim().toLowerCase()))}">${escapeHtml(h.name)}</button>`).join("")}
+          ${race.horses.map(h => `
+            <button type="button" class="bc-horse-chip${h.scratched ? " bc-horse-scratched" : ""}" data-bc-horse-key="${escapeHtml(stripHorseCountrySuffix(h.name.trim().toLowerCase()))}">
+              <span class="bc-horse-pp">${escapeHtml(h.pgm)}</span>
+              <span class="bc-horse-name">${escapeHtml(h.name)}${h.scratched ? " (SCR)" : ""}</span>
+              <span class="bc-horse-jt">${escapeHtml(h.trainer)} &middot; ${escapeHtml(h.jockey)}${h.mlOdds ? ` &middot; ${escapeHtml(h.mlOdds)}` : ""}</span>
+            </button>`).join("")}
         </div>
       </div>
     `).join("");
