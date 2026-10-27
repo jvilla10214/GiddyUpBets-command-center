@@ -6989,6 +6989,13 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
   // jump to. Built for any track's digest (not Breeders'-Cup-specific), but
   // most useful on a big field like this one, where "so many quotes, so many
   // races" makes scrolling past everything to find one race painful.
+  // Confirmed real 2026-10-27: a bare `id` target didn't actually work once
+  // sent through Gmail (verified the href/id pair was correct — the exact
+  // same HTML scrolled exactly right in a plain browser), because Gmail
+  // sandboxes an email body in a way that doesn't reliably honor `id` as an
+  // anchor target. The fix each race block below also emits is an empty
+  // `<a name="...">` — the older HTML4 anchor convention most webmail
+  // clients (Gmail included) still honor for jump links.
   const raceAnchorId = (raceNumber) => `race-${raceNumber}`;
   const bcRaceName = (raceNumber) => (isBreedersCupDay ? BREEDERS_CUP_RACE_NAMES[date]?.[raceNumber] : null) || null;
   const tocHtml = raceGroups.length > 1
@@ -7092,6 +7099,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
     }).join("");
     return `
       <div id="${raceAnchorId(race.raceNumber)}" style="padding:16px 30px; border-bottom:1px solid ${theme.hairline};">
+        <a name="${raceAnchorId(race.raceNumber)}"></a>
         ${raceNameHtml}
         <span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; letter-spacing:0.06em; background:${theme.accent}; color:#ffffff; padding:3px 9px; border-radius:3px; margin-bottom:10px;">${escapeHtmlForEmail(raceTag)}</span>
         ${horsesHtml}
