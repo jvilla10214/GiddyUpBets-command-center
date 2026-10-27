@@ -51,6 +51,47 @@ THEME = {"accent": "#512d6d", "bg": "#faf7fd", "ink": "#201530", "dim": "#7a6b8a
 # blended together. Fixed alongside the Worker's own copy of this same bug.
 NOTE_TYPE_RIBBON_COLORS = {"quote": "#5b4e8f", "race": "#c99a2e", "fullCard": "#4a6b8a"}
 
+# Same NTRA-standard saddlecloth colors as index.html's SADDLECLOTH_COLORS /
+# the worker's SADDLECLOTH_COLORS_EMAIL — ported here rather than shared
+# since this is a separate one-off Python script. Posts 13-24 (BC-size AE
+# fields) reuse the 1-12 colors with a white diagonal sash (rendered as a
+# two-tone gradient) rather than inventing a 13th-24th flat color.
+SADDLECLOTH_COLORS = {
+    1: {"bg": "#e21f26", "fg": "#ffffff"}, 2: {"bg": "#ffffff", "fg": "#000000"},
+    3: {"bg": "#1c4faa", "fg": "#ffffff"}, 4: {"bg": "#ffd400", "fg": "#000000"},
+    5: {"bg": "#1a7a3c", "fg": "#ffffff"}, 6: {"bg": "#000000", "fg": "#ffd400"},
+    7: {"bg": "#f7941d", "fg": "#000000"}, 8: {"bg": "#f2a7c3", "fg": "#000000"},
+    9: {"bg": "#40e0d0", "fg": "#000000"}, 10: {"bg": "#7b2d8e", "fg": "#ffffff"},
+    11: {"bg": "#9a9a9a", "fg": "#c1272d"}, 12: {"bg": "#9acd32", "fg": "#000000"},
+}
+
+
+def pp_badge_html(pgm, also_eligible=False):
+    try:
+        n = int(pgm)
+    except (TypeError, ValueError):
+        n = None
+    ae_tag = (
+        f' <span style="display:inline-block; padding:1px 4px; border-radius:3px; '
+        f'font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:9.5px; '
+        f'letter-spacing:0.03em; color:#8a6400; background:rgba(240,180,41,0.18); '
+        f'vertical-align:middle;">AE</span>'
+        if also_eligible else ""
+    )
+    colors = SADDLECLOTH_COLORS.get(n) if n else None
+    border = ""
+    if not colors and n and 13 <= n <= 24:
+        base = SADDLECLOTH_COLORS[((n - 1) % 12) + 1]
+        colors = {"bg": f"linear-gradient(135deg, {base['bg']} 50%, #ffffff 50%)", "fg": "#000000"}
+        border = " border:1px solid rgba(0,0,0,0.45);"
+    if not colors:
+        return f'<span style="display:inline-block; font-family:\'Courier New\',monospace; font-weight:700; font-size:12px; margin-right:8px;">{esc(pgm)}</span>{ae_tag}'
+    return (
+        f'<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; '
+        f'border-radius:4px;{border} background:{colors["bg"]}; color:{colors["fg"]}; '
+        f'font-family:\'Courier New\',monospace; font-weight:700; font-size:12px; vertical-align:middle; margin-right:8px;">{n}</span>{ae_tag}'
+    )
+
 # A recap's "track" field is the raw lowercase track id (see
 # readAllRecapIndexes() in workers/stable-tour-feed.js) — fine as a key, but
 # "belmont"/"saratoga" shown as-is next to a recap date reads badly. Same
@@ -270,7 +311,7 @@ def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
         horses_html.append(f"""
         {divider}
         <div style="margin:10px 0 3px;">
-          <span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; border-radius:4px; background:{THEME['accent']}; color:#ffffff; font-family:'Courier New',monospace; font-weight:700; font-size:12px; vertical-align:middle; margin-right:8px;">{esc(h['pgm'])}</span>
+          {pp_badge_html(h['pgm'], h.get('alsoEligible'))}
           <span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:{THEME['ink']}; vertical-align:middle;">{esc(h['name'])}</span>
         </div>
         <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:{THEME['dim']}; margin:0 0 6px 30px;">{jt_line}</div>

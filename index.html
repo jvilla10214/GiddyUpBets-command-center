@@ -1967,6 +1967,18 @@
     vertical-align: middle;
   }
   .entries-scr-tag{ color: #e05252; background: rgba(224,82,82,0.12); }
+  .entries-ae-tag{
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--tote-amber);
+    background: rgba(240,180,41,0.14);
+    vertical-align: middle;
+  }
   .entries-owner{ display: block; margin-top: 2px; font-size: 11.5px; color: var(--parchment-dim); }
   /* When rendered as a button (owner has other runners today), reset the
      default button chrome so it still reads as the same plain owner label
@@ -6357,10 +6369,12 @@
   // Standard North American saddlecloth colors by post position (the
   // NTRA-standard chart virtually every US track uses) — bg/fg pairs
   // verified against the official color+number combinations, not just
-  // guessed hex values. Posts past 12 (rare, but real on a big Kentucky
-  // Downs-size field) fall back to plain text in ppBadgeHtml() below
-  // rather than guessing a color — tracks generally use dedicated striped
-  // patterns past 12 that a flat color swatch can't represent honestly.
+  // guessed hex values. Posts 13-24 (big full fields — Breeders' Cup AE
+  // lists, Derby-size fields) really do carry the same 1-12 colors again,
+  // just with a white diagonal sash added, since a flat swatch can't
+  // represent a sash honestly — ppBadgeHtml() below renders that as a
+  // diagonal two-tone gradient rather than inventing a 13th-24th color.
+  // Posts past 24 (vanishingly rare) fall back to plain text.
   const SADDLECLOTH_COLORS = {
     1: { bg: "#e21f26", fg: "#ffffff" },  // red / white
     2: { bg: "#ffffff", fg: "#000000" },  // white / black
@@ -6375,11 +6389,23 @@
     11: { bg: "#9a9a9a", fg: "#c1272d" }, // gray / red
     12: { bg: "#9acd32", fg: "#000000" }, // lime / black
   };
-  function ppBadgeHtml(postPosition){
+  // alsoEligible draws an "AE" tag next to the badge — a real, source-backed
+  // flag (SmartPony's race_entries.entry_condition === "Also Eligible", not
+  // guessed from a high program number) meaning the horse only gets into the
+  // field if a spot opens via scratch. See fetchSmartPonyEntriesDay() comment
+  // on the worker side for where this is read.
+  function ppBadgeHtml(postPosition, alsoEligible){
     const n = parseInt(postPosition, 10);
-    const colors = SADDLECLOTH_COLORS[n];
-    if (!colors) return escapeHtml(postPosition || "—");
-    return `<span class="pp-badge" style="background:${colors.bg}; color:${colors.fg};">${n}</span>`;
+    const aeTag = alsoEligible ? `<span class="entries-ae-tag" title="Also Eligible — only runs if a spot opens via scratch">AE</span>` : "";
+    let colors = SADDLECLOTH_COLORS[n];
+    let striped = false;
+    if (!colors && n >= 13 && n <= 24){
+      const base = SADDLECLOTH_COLORS[((n - 1) % 12) + 1];
+      colors = { bg: `linear-gradient(135deg, ${base.bg} 50%, #ffffff 50%)`, fg: "#000000" };
+      striped = true;
+    }
+    if (!colors) return `${escapeHtml(postPosition || "—")}${aeTag}`;
+    return `<span class="pp-badge" style="background:${colors.bg}; color:${colors.fg};${striped ? " border:1px solid rgba(0,0,0,0.45);" : ""}">${n}</span>${aeTag}`;
   }
 
   // UK/International (Sporting Life) tracks only — silksUrl comes from a
@@ -6814,7 +6840,7 @@
         : escapeHtml(h.jockey || "—");
       return `
       <tr class="${h.scratched ? "entries-scratched" : ""}">
-        <td>${ppBadgeHtml(h.postPosition)}${entriesSilkHtml(h.silksUrl, h.name)}</td>
+        <td>${ppBadgeHtml(h.postPosition, h.alsoEligible)}${entriesSilkHtml(h.silksUrl, h.name)}</td>
         <td>${escapeHtml(h.name || "—")}${entriesLayoffBadgeHtml(h.name)}${entriesNoteIndicatorHtml(h.trainer, h.name)}${entriesAddNoteHtml(h.trainer, h.name)}</td>
         <td>${jockeyHtml} &bull; ${escapeHtml(h.trainer || "—")}${entriesOwnerHtml(h.owner, race.raceNumber, h.name)}</td>
         <td>${escapeHtml(h.weight || "—")}</td>
@@ -9115,7 +9141,8 @@
                 "trainer": "Wesley A Ward",
                 "jockey": "Juan J Hernandez",
                 "mlOdds": "12-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "14",
@@ -9123,7 +9150,8 @@
                 "trainer": "George Weaver",
                 "jockey": "Flavien Prat",
                 "mlOdds": "15-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "15",
@@ -9131,7 +9159,8 @@
                 "trainer": "Rebecca Menzies",
                 "jockey": "J R Velazquez",
                 "mlOdds": "12-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "16",
@@ -9139,7 +9168,8 @@
                 "trainer": "Steven M Asmussen",
                 "jockey": "Luis Saez",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "17",
@@ -9147,7 +9177,8 @@
                 "trainer": "Wesley A Ward",
                 "jockey": "Jose L Ortiz",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           },
@@ -9385,7 +9416,8 @@
                 "trainer": "De Foy Kevin Philippart",
                 "jockey": "David Egan",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "16",
@@ -9393,7 +9425,8 @@
                 "trainer": "Jena M Antonucci",
                 "jockey": "Tyler Gaffalione",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "17",
@@ -9401,7 +9434,8 @@
                 "trainer": "Riley Mott",
                 "jockey": "Jaime A Torres",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           },
@@ -9607,7 +9641,8 @@
                 "trainer": "Jonathan Thomas",
                 "jockey": "Manuel Franco",
                 "mlOdds": "20-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           }
@@ -9859,7 +9894,8 @@
                 "trainer": "Michael Appleby",
                 "jockey": "Tom Marquand",
                 "mlOdds": "20-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "16",
@@ -9867,7 +9903,8 @@
                 "trainer": "Wesley A Ward",
                 "jockey": "Jose L Ortiz",
                 "mlOdds": "15-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "17",
@@ -9875,7 +9912,8 @@
                 "trainer": "Michelle Lovell",
                 "jockey": "Ricardo Jr Santana",
                 "mlOdds": "20-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "18",
@@ -9883,7 +9921,8 @@
                 "trainer": "Wesley A Ward",
                 "jockey": "David Egan",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           },
@@ -10113,7 +10152,8 @@
                 "trainer": "Jack Sisterson",
                 "jockey": "Adam Beschizza",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           },
@@ -10359,7 +10399,8 @@
                 "trainer": "Jack Sisterson",
                 "jockey": "Adam Beschizza",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           },
@@ -10573,7 +10614,8 @@
                 "trainer": "Francis - Henri Graffard",
                 "jockey": "James Doyle",
                 "mlOdds": "20-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               },
               {
                 "pgm": "16",
@@ -10581,7 +10623,8 @@
                 "trainer": "Victoria Oliver",
                 "jockey": "Luis Saez",
                 "mlOdds": "30-1",
-                "scratched": false
+                "scratched": false,
+                "alsoEligible": true
               }
             ]
           },
@@ -11416,7 +11459,7 @@
         <div class="bc-horse-grid">
           ${race.horses.map(h => `
             <button type="button" class="bc-horse-chip${h.scratched ? " bc-horse-scratched" : ""}" data-bc-horse-key="${escapeHtml(stripHorseCountrySuffix(h.name.trim().toLowerCase()))}">
-              <span class="bc-horse-pp">${escapeHtml(h.pgm)}</span>
+              <span class="bc-horse-pp">${ppBadgeHtml(h.pgm, h.alsoEligible)}</span>
               <span class="bc-horse-name">${escapeHtml(h.name)}${h.scratched ? " (SCR)" : ""}</span>
               <span class="bc-horse-jt">${escapeHtml(h.trainer)} &middot; ${escapeHtml(h.jockey)}${h.mlOdds ? ` &middot; ${escapeHtml(h.mlOdds)}` : ""}</span>
             </button>`).join("")}

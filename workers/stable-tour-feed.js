@@ -6734,13 +6734,29 @@ const SADDLECLOTH_COLORS_EMAIL = {
   9: { bg: "#40e0d0", fg: "#000000" }, 10: { bg: "#7b2d8e", fg: "#ffffff" },
   11: { bg: "#9a9a9a", fg: "#c1272d" }, 12: { bg: "#9acd32", fg: "#000000" },
 };
-function ppBadgeHtmlEmail(postPosition) {
+// alsoEligible draws a small "AE" tag next to the badge — a real flag from
+// SmartPony's entry_condition field (see fetchSmartPonyEntriesDay() above),
+// not inferred from a high program number.
+function ppBadgeHtmlEmail(postPosition, alsoEligible) {
   const n = parseInt(postPosition, 10);
-  const colors = SADDLECLOTH_COLORS_EMAIL[n];
-  if (!colors) {
-    return `<span style="display:inline-block; font-family:'Courier New',Courier,monospace; font-weight:700; font-size:12px;">${escapeHtmlForEmail(postPosition || "—")}</span>`;
+  const aeTag = alsoEligible
+    ? ` <span style="display:inline-block; padding:1px 4px; border-radius:3px; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:9.5px; letter-spacing:0.03em; color:#8a6400; background:rgba(240,180,41,0.18); vertical-align:middle;">AE</span>`
+    : "";
+  let colors = SADDLECLOTH_COLORS_EMAIL[n];
+  let striped = false;
+  // Posts 13-24 (full BC/AE-size fields) really do reuse the 1-12 colors
+  // with a white diagonal sash added — rendered as a two-tone gradient
+  // rather than inventing a 13th-24th flat color (same reasoning as
+  // index.html's client-side ppBadgeHtml()).
+  if (!colors && n >= 13 && n <= 24) {
+    const base = SADDLECLOTH_COLORS_EMAIL[((n - 1) % 12) + 1];
+    colors = { bg: `linear-gradient(135deg, ${base.bg} 50%, #ffffff 50%)`, fg: "#000000" };
+    striped = true;
   }
-  return `<span style="display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:4px; border:1px solid rgba(0,0,0,0.35); background:${colors.bg}; color:${colors.fg}; font-family:'Courier New',Courier,monospace; font-weight:700; font-size:12px; vertical-align:middle;">${n}</span>`;
+  if (!colors) {
+    return `<span style="display:inline-block; font-family:'Courier New',Courier,monospace; font-weight:700; font-size:12px;">${escapeHtmlForEmail(postPosition || "—")}</span>${aeTag}`;
+  }
+  return `<span style="display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:4px; border:1px solid rgba(0,0,0,0.35); background:${colors.bg}; color:${colors.fg}; font-family:'Courier New',Courier,monospace; font-weight:700; font-size:12px; vertical-align:middle;">${n}</span>${aeTag}`;
 }
 
 // Rebuilds today's real matched horses (same trainer/note matching
@@ -7022,7 +7038,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
       ? `<div style="font-family:Georgia,'Times New Roman',serif; font-weight:700; font-size:16px; color:${theme.accent}; margin-bottom:6px;">${escapeHtmlForEmail(bcRaceName(race.raceNumber))}</div>`
       : "";
     const horsesHtml = horses.map(({ horse, notes, recaps }, horseIdx) => {
-      const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition) : "";
+      const badge = horse.postPosition ? ppBadgeHtmlEmail(horse.postPosition, horse.alsoEligible) : "";
       // Quote/Race Recap/Full Card Recap all share one "ribbon header + tinted
       // body" shape, color-coded by type (not by track theme) so the three
       // read as distinct at a glance regardless of which track's accent is
@@ -12013,7 +12029,7 @@ async function fetchSmartPonyEntriesDay(track, date) {
   const timeZone = SMARTPONY_TRACK_TIMEZONE[track] || "America/New_York";
 
   const entriesRes = await fetch(
-    `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?select=race_id,post_position,program_number,jockey,trainer,owner,weight,medication,ml_odds,is_scratched,` +
+    `${SMARTPONY_SUPABASE_URL}/rest/v1/race_entries?select=race_id,post_position,program_number,jockey,trainer,owner,weight,medication,ml_odds,is_scratched,entry_condition,` +
       `horses!fk_race_entries_horse_id(horse_name,sex,birth_year),` +
       `races!fk_race_entries_race_id!inner(id,race_num,distance_yards,surface,race_class,purse,post_time_utc,is_hurdle_race)` +
       `&races.track=eq.${code}&races.race_date=eq.${date}&order=post_position.asc`,
@@ -12042,6 +12058,10 @@ async function fetchSmartPonyEntriesDay(track, date) {
       scratched: !!e.is_scratched,
       currentOdds: null, // SmartPony has no live tote feed, only morning line
       mlOdds: formatSmartPonyMlOdds(e.ml_odds),
+      // Real flag, not inferred from a high program number — SmartPony's
+      // entry_condition also carries "Main Track Only" (a turf-course
+      // condition, unrelated to AE status), so only this exact value counts.
+      alsoEligible: e.entry_condition === "Also Eligible",
     });
   }
 
