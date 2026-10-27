@@ -172,5 +172,85 @@ def write_episode_notes(episode, entries, trainer_hint):
     }
 
 
+def post_analyst_note(speaker, horse, note_text, link, date, source):
+    body = {
+        "jockey": speaker,  # reuses the jockey field's existing "always
+        # show regardless of tracking" display behavior (notesForHorse()/
+        # renderBreedersCupNotes() only ever gate on n.trainer, never
+        # n.jockey) rather than forcing a non-trainer analyst onto the
+        # tracked-trainers list just to make his notes visible.
+        "horse": horse,
+        "note": note_text,
+        "link": link,
+        "date": date,
+        "source": source,
+        "autoImported": True,
+        "importedVia": "steve-byk-podcast",
+    }
+    r = requests.post(NOTES_URL, json=body, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def post_analyst_note_verified(speaker, horse, note_text, link, date, source, max_attempts=5):
+    """Same verify-and-retry dance as post_note_verified() — see that
+    function's own comment for why a bare POST isn't trustworthy on its
+    own."""
+    last_note = None
+    for attempt in range(max_attempts):
+        result = post_analyst_note(speaker, horse, note_text, link, date, source)
+        last_note = result["note"]
+        if result.get("duplicate") and attempt > 0:
+            return last_note, "confirmed_after_retry"
+        data = fetch_data()
+        if any(n["id"] == last_note["id"] for n in data.get("notes", [])):
+            return last_note, "duplicate" if result.get("duplicate") else "confirmed"
+        time.sleep(3 * (attempt + 1))
+    return last_note, "lost"
+
+
+def write_episode_analyst_notes(episode, entries, speaker):
+    """Same shape as write_episode_notes() but for a recurring non-trainer
+    guest (config.ALWAYS_TRACK_GUESTS) — no tracked-trainer resolution step
+    since the jockey-field write path doesn't need one."""
+    date_str = rss_pubdate_to_date_str(episode.get("pub_date"))
+    confirmed, duplicates, lost, failed, skipped = [], [], [], [], []
+
+    for entry in entries:
+        horse = (entry.get("horse") or "").strip()
+        if not horse or "unclear" in horse.lower() or "/" in horse:
+            skipped.append(entry)
+            continue
+        note_text = entry["quote"].strip()
+        ts_suffix = entry["timestamp"].replace(":", "")
+        link = f"{episode['audio_url']}#t={ts_suffix}"
+        try:
+            note, status = post_analyst_note_verified(
+                speaker=speaker,
+                horse=horse,
+                note_text=note_text,
+                link=link,
+                date=date_str,
+                source=f"At the Races with Steve Byk — {episode['title']}",
+            )
+            if status == "lost":
+                lost.append({"entry": entry, "note": note})
+            elif status == "duplicate":
+                duplicates.append(note)
+            else:
+                confirmed.append(note)
+        except requests.HTTPError as e:
+            failed.append({"entry": entry, "error": str(e)})
+        time.sleep(0.6)
+
+    return {
+        "confirmed": confirmed,
+        "missing": lost,
+        "failed": failed,
+        "duplicates": duplicates,
+        "skipped": skipped,
+    }
+
+
 if __name__ == "__main__":
     print("This module is meant to be called from run.py with real extracted entries.")

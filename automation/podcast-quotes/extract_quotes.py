@@ -141,6 +141,72 @@ def extract_quotes(transcript_text, guest_names, trainer_names):
     return {"raw": raw, "entries": entries, "unparsed": unparsed}
 
 
+# Separate prompt/parser for a recurring analyst guest (config.
+# ALWAYS_TRACK_GUESTS, e.g. David Aragona, the show's own morning-line
+# oddsmaker) — the trainer Q&A prompt above assumes the guest is answering
+# about THEIR OWN horses, which doesn't fit an oddsmaker giving per-horse
+# odds/analysis across many different trainers' horses in one segment.
+# Confirmed real shape 2026-10-27 against a real Breeders' Cup morning-line
+# episode: no "question" field at all, just one analysis point per horse,
+# often several per horse across a long segment.
+ANALYST_EXTRACTION_PROMPT_TEMPLATE = """This is a timestamped but NOT speaker-labeled transcript of an episode of \
+"At the Races with Steve Byk," a horse racing interview podcast. Steve Byk is the host. This \
+segment features {guest_name}, the show's own morning-line oddsmaker, giving his odds/analysis \
+on multiple horses.
+
+Because the transcript has no speaker labels, infer who is talking from context — Byk usually \
+asks about a specific horse/race, and {guest_name} answers in first person giving his own odds \
+read or analysis. Use "unclear" for anything you can't confidently attribute — don't guess.
+
+For {guest_name} ONLY (ignore any other guest on this episode), extract every distinct horse he \
+gives analysis/odds commentary on, with the nearest preceding timestamp marker. Output as plain \
+text only, no tables, no markdown formatting — one entry per bullet, in this exact shape:
+
+- [HH:MM:SS] Horse: <horse name, exactly as stated> — A: "<direct quote of his analysis>"
+
+If he discusses a horse more than once, give one bullet per distinct point made. If a horse's \
+name is never clearly stated, say "unclear" for the horse rather than guessing.
+
+TRANSCRIPT:
+{transcript}
+"""
+
+ANALYST_BULLET_RE = re.compile(
+    r"^-\s*\[(?P<ts>[\d:]+)\]\s*Horse:\s*(?P<horse>.*?)\s*—\s*A:\s*\"(?P<quote>.*)\"\s*$"
+)
+
+
+def build_analyst_prompt(transcript_text, guest_name):
+    return ANALYST_EXTRACTION_PROMPT_TEMPLATE.format(guest_name=guest_name, transcript=transcript_text)
+
+
+def parse_analyst_bullets(raw_text):
+    entries = []
+    unparsed = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("-"):
+            continue
+        m = ANALYST_BULLET_RE.match(line)
+        if m:
+            entries.append({
+                "timestamp": m.group("ts"),
+                "question": "",
+                "horse": normalize_horse_field(m.group("horse")),
+                "quote": m.group("quote").strip(),
+            })
+        else:
+            unparsed.append(line)
+    return entries, unparsed
+
+
+def extract_analyst_quotes(transcript_text, guest_name):
+    prompt = build_analyst_prompt(transcript_text, guest_name)
+    raw = call_claude(prompt)
+    entries, unparsed = parse_analyst_bullets(raw)
+    return {"raw": raw, "entries": entries, "unparsed": unparsed}
+
+
 if __name__ == "__main__":
     import sys
 

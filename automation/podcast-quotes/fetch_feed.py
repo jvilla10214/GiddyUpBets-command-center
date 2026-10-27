@@ -89,6 +89,17 @@ def fetch_feed_items():
     return items
 
 
+def match_always_track_guests(title):
+    """Separate from the tracked-trainer matcher — config.ALWAYS_TRACK_GUESTS
+    are recurring analyst-type guests (currently just David Aragona) who
+    aren't trainers and shouldn't be forced onto that list just to get
+    matched. Simple substring match (first+last name) is enough here since
+    these are a short, hand-maintained list, not hundreds of trainer names
+    needing the stricter token-boundary logic build_matcher() uses."""
+    tl = title.lower()
+    return sorted(g for g in config.ALWAYS_TRACK_GUESTS if g.lower() in tl)
+
+
 def get_new_matching_episodes():
     """Returns (episodes_to_process, is_first_run).
 
@@ -118,8 +129,10 @@ def get_new_matching_episodes():
         if it["guid"] in seen:
             continue
         matched = matcher(it["title"])
-        if matched:
+        matched_guests = match_always_track_guests(it["title"])
+        if matched or matched_guests:
             it["matched_trainers"] = matched
+            it["matched_guests"] = matched_guests
             to_process.append(it)
 
     return to_process, False

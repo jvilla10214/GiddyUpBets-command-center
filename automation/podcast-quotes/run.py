@@ -71,11 +71,45 @@ def process_episode(episode, dropped_quotes):
     summary = {"episode": episode["title"], "trainers": {}}
 
     try:
+        guest_hints = episode["matched_trainers"] + episode.get("matched_guests", [])
         log(f"  transcribing ({episode.get('audio_length', 0) // (1024*1024)}MB)...")
         transcript = transcribe.transcribe_episode(
-            episode["audio_url"], work_dir, guest_names=episode["matched_trainers"]
+            episode["audio_url"], work_dir, guest_names=guest_hints
         )
         log(f"  transcribed: {len(transcript['segments'])} segments")
+
+        for guest in episode.get("matched_guests", []):
+            log(f"  extracting analyst quotes for {guest}...")
+            result = extract_quotes.extract_analyst_quotes(transcript["text"], guest)
+            log(f"    {len(result['entries'])} entries, {len(result['unparsed'])} unparsed")
+
+            if not result["entries"]:
+                summary["trainers"][guest] = {"entries": 0}
+                continue
+
+            write_result = write_notes.write_episode_analyst_notes(episode, result["entries"], guest)
+            log(
+                f"    wrote {len(write_result['confirmed'])} confirmed, "
+                f"{len(write_result['duplicates'])} already existed, "
+                f"{len(write_result['skipped'])} skipped (no clear horse), "
+                f"{len(write_result['missing'])} missing after verify, "
+                f"{len(write_result['failed'])} failed"
+            )
+            for entry in write_result["skipped"]:
+                record_dropped(dropped_quotes, episode, guest, "no_clear_horse", entry)
+            for item in write_result["missing"]:
+                record_dropped(dropped_quotes, episode, guest, "lost_after_verify", item["entry"])
+            for item in write_result["failed"]:
+                record_dropped(dropped_quotes, episode, guest, "write_failed", item["entry"], error=item["error"])
+            summary["trainers"][guest] = {
+                "entries": len(result["entries"]),
+                "confirmed": len(write_result["confirmed"]),
+                "duplicates": len(write_result["duplicates"]),
+                "skipped": len(write_result["skipped"]),
+                "missing": len(write_result["missing"]),
+                "failed": len(write_result["failed"]),
+                "unparsed": result["unparsed"],
+            }
 
         for trainer in episode["matched_trainers"]:
             log(f"  extracting quotes for {trainer}...")
@@ -152,7 +186,12 @@ def main():
     dropped_quotes = load_dropped_quotes()
     all_summaries = []
     for ep in episodes:
-        log(f"- {ep['title']}  (trainers: {', '.join(ep['matched_trainers'])})")
+        bits = []
+        if ep["matched_trainers"]:
+            bits.append(f"trainers: {', '.join(ep['matched_trainers'])}")
+        if ep.get("matched_guests"):
+            bits.append(f"guests: {', '.join(ep['matched_guests'])}")
+        log(f"- {ep['title']}  ({'; '.join(bits)})")
         all_summaries.append(process_episode(ep, dropped_quotes))
     save_dropped_quotes(dropped_quotes)
 

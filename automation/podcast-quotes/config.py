@@ -51,3 +51,15 @@ GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 ANTHROPIC_MODEL = "claude-sonnet-5"
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+
+# Recurring non-trainer guests to always extract, regardless of whether the
+# episode title also matches a tracked trainer — David Aragona is the show's
+# own morning-line oddsmaker and appears on most "TwinSpires Wknd Prvw"
+# episodes giving per-horse odds/analysis across many different trainers'
+# horses, not just his own, so the trainer-name title-matcher never catches
+# these (confirmed real 2026-10-27: a manually-requested episode of his
+# yielded 29 real per-horse Breeders' Cup quotes that the normal pipeline
+# would have skipped entirely). Handled as its own path in fetch_feed.py/
+# run.py/write_notes.py — a trainer Q&A prompt doesn't fit his analyst-style
+# commentary, and he isn't (and shouldn't be forced to be) a tracked trainer.
+ALWAYS_TRACK_GUESTS = ["David Aragona"]
