@@ -15,6 +15,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKER_BASE = "https://stable-tour-feed.jvilla10214.workers.dev"
+# GitHub Pages' own real base URL (same site index.html deploys to) — see
+# PAGES_BASE's own usage in toc_html()/main() for why this exists at all.
+PAGES_BASE = "https://jvilla10214.github.io/GiddyUpBets-command-center"
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -263,40 +266,87 @@ def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
       </div>"""
 
 
-def toc_html(day):
+def page_filename(day):
+    return f"{day['date']}.html"
+
+
+# Confirmed real 2026-10-27: even the "name" anchor trick doesn't actually
+# make Gmail jump within the email body — Gmail (web and app) simply
+# doesn't support in-message anchor navigation at all, a documented email-
+# client limitation, not something fixable with different HTML. The real
+# fix newsletter platforms use for exactly this is a "view in browser" page:
+# link each race pill to a REAL hosted copy of this same email (same
+# GitHub Pages site index.html already deploys to) with the race's anchor
+# in the URL — clicking it from Gmail opens a real browser tab, where the
+# anchor-scroll already confirmed to work correctly takes over. page_url is
+# None while building the *hosted page itself* (it doesn't need to link to
+# itself) and the real URL when building the actual *email*.
+def toc_html(day, page_url=None):
     races = day["races"]
     if len(races) < 2:
         return ""
     pills = []
     for r in races:
         name = BREEDERS_CUP_RACE_NAMES.get(day["date"], {}).get(r["num"], "")
+        href = f"{page_url}#{race_anchor_id(r['num'])}" if page_url else f"#{race_anchor_id(r['num'])}"
         pills.append(
-            f'<a href="#{race_anchor_id(r["num"])}" title="{esc(name)}" '
+            f'<a href="{esc(href)}" title="{esc(name)}" '
             f'style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:11px; '
             f'color:{THEME["accent"]}; background:{THEME["hairline"]}; text-decoration:none; padding:3px 10px; '
             f'border-radius:10px; margin:2px 3px;">R{r["num"]}</a>'
         )
+    note = (
+        f'<div style="font-family:Arial,Helvetica,sans-serif; font-size:9.5px; color:{THEME["dim"]}; margin-top:6px;">'
+        f"Opens the web version of this email, scrolled to that race &mdash; Gmail itself can't jump within a message.</div>"
+        if page_url else ""
+    )
     return f"""
     <div style="padding:10px 30px 14px; text-align:center; border-bottom:1px solid {THEME['hairline']};">
       <span style="display:block; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:{THEME['dim']}; margin-bottom:6px;">Jump to a race</span>
       {''.join(pills)}
+      {note}
+    </div>"""
+
+
+def build_day_body(day, all_notes, tracked_trainers, recap_index, page_url=None):
+    horse_count = sum(len(r["horses"]) for r in day["races"])
+    races_html = "".join(race_html(r, all_notes, tracked_trainers, recap_index, day["date"]) for r in day["races"])
+    return f"""
+    <div style="background:{THEME['bg']}; color:{THEME['ink']}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
+      <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double {THEME['accent']};">
+        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:{THEME['accent']}; margin-bottom:6px;">GiddyUpQuotes &mdash; Breeders' Cup Pre-Entries</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:{THEME['dim']};">Keeneland &middot; {esc(day['label'])} &middot; {horse_count} pre-entered horses &middot; PRE-ENTRIES &mdash; DRAW NOT YET MADE</div>
+      </div>
+      {toc_html(day, page_url)}
+      {races_html}
     </div>"""
 
 
 def build_day_email(day, all_notes, tracked_trainers, recap_index):
     horse_count = sum(len(r["horses"]) for r in day["races"])
     subject = f"GiddyUpQuotes — Breeders' Cup Pre-Entries — {day['label']} ({horse_count} horses, draw not yet made)"
-    races_html = "".join(race_html(r, all_notes, tracked_trainers, recap_index, day["date"]) for r in day["races"])
-    html_body = f"""
-    <div style="background:{THEME['bg']}; color:{THEME['ink']}; font-family:Georgia,'Times New Roman',serif; max-width:640px; margin:0 auto;">
-      <div style="padding:26px 30px 20px; text-align:center; border-bottom:3px double {THEME['accent']};">
-        <div style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:22px; color:{THEME['accent']}; margin-bottom:6px;">GiddyUpQuotes &mdash; Breeders' Cup Pre-Entries</div>
-        <div style="font-family:'Courier New',Courier,monospace; font-size:11px; color:{THEME['dim']};">Keeneland &middot; {esc(day['label'])} &middot; {horse_count} pre-entered horses &middot; PRE-ENTRIES &mdash; DRAW NOT YET MADE</div>
-      </div>
-      {toc_html(day)}
-      {races_html}
-    </div>"""
+    page_url = f"{PAGES_BASE}/bc-digest/{page_filename(day)}"
+    html_body = build_day_body(day, all_notes, tracked_trainers, recap_index, page_url=page_url)
     return subject, html_body
+
+
+def build_day_page(day, all_notes, tracked_trainers, recap_index):
+    """The hosted 'view in browser' copy — same content as the email, just
+    without its own page_url (no point linking to itself), wrapped as a
+    real standalone document so a browser (not Gmail) renders it and the
+    anchor-scroll toc_html() points at actually works."""
+    body = build_day_body(day, all_notes, tracked_trainers, recap_index, page_url=None)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GiddyUpQuotes — Breeders' Cup Pre-Entries — {esc(day['label'])}</title>
+</head>
+<body style="margin:0; padding:20px 0; background:{THEME['bg']};">
+{body}
+</body>
+</html>"""
 
 
 def main():
@@ -305,6 +355,14 @@ def main():
     all_notes = data.get("notes", [])
     tracked_trainers = set(data.get("trainers", []))
     recap_index = fetch_url(f"{WORKER_BASE}/recap-index").get("byHorse", {})
+
+    pages_dir = REPO_ROOT / "bc-digest"
+    pages_dir.mkdir(exist_ok=True)
+
+    for day in bc_data["days"]:
+        page_html = build_day_page(day, all_notes, tracked_trainers, recap_index)
+        (pages_dir / page_filename(day)).write_text(page_html, encoding="utf-8")
+        print(f"{day['label']}: wrote {pages_dir / page_filename(day)}", flush=True)
 
     for day in bc_data["days"]:
         subject, html_body = build_day_email(day, all_notes, tracked_trainers, recap_index)
