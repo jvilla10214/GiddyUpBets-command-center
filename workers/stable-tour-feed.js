@@ -2721,15 +2721,25 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (url.pathname === "/debug-clear-race-notify" && request.method === "GET") {
+      // Optional ?track=...&date=YYYY-MM-DD scopes the wipe to one
+      // track+date (e.g. undoing an early manual send's dedup keys so the
+      // real scheduled cron still sends in full on its normal day) instead
+      // of resetting every dedup record in the system — added 2026-10-28.
+      // Both query params omitted keeps the original full-wipe behavior.
+      const scopeTrack = url.searchParams.get("track");
+      const scopeDate = url.searchParams.get("date");
+      const prefix = scopeTrack
+        ? `racenotify:${scopeTrack.replace(/[^a-z0-9_-]/gi, "").slice(0, 40)}:${scopeDate ? scopeDate + ":" : ""}`
+        : "racenotify:";
       let cursor;
       let cleared = 0;
       do {
-        const listed = await env.STABLE_KV.list({ prefix: "racenotify:", cursor });
+        const listed = await env.STABLE_KV.list({ prefix, cursor });
         await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
         cleared += listed.keys.length;
         cursor = listed.list_complete ? undefined : listed.cursor;
       } while (cursor);
-      return json({ cleared }, 200, { "Cache-Control": "no-store" });
+      return json({ cleared, prefix }, 200, { "Cache-Control": "no-store" });
     }
 
     // Generic version of the same idea, for any "{source}:seen:*" prefix —
