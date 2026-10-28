@@ -2238,5 +2238,37 @@
     "error": null,
     "foundAt": "2026-10-27T20:47:44.811078+00:00",
     "reviewed": false
+  },
+  {
+    "key": "vuYVv6rluck|00:00|Sovereignty",
+    "reason": "no_clear_speaker",
+    "video": "Mott shoots for third Breeders' Cup Classic - with Sovereignty and Knightsbridge",
+    "videoId": "vuYVv6rluck",
+    "videoDate": "2026-10-27",
+    "speaker": "unclear",
+    "role": "trainer",
+    "horse": "Sovereignty",
+    "quote": "Well, I mean, they had the post position draw and I don't, you know, I was asked the question whether it made any difference about the post, but I think going a mile and a quarter, I think you're, you know, with the long run down to the first turn, I think everybody has time to sort themselves out and find their position.",
+    "question": "Talk about Sovereignty and Knightsbridge in the Breeders' Cup Classic post position draw",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-28T12:59:16.743489+00:00",
+    "reviewed": false
+  },
+  {
+    "key": "vuYVv6rluck|00:00|Knightsbridge",
+    "reason": "no_clear_speaker",
+    "video": "Mott shoots for third Breeders' Cup Classic - with Sovereignty and Knightsbridge",
+    "videoId": "vuYVv6rluck",
+    "videoDate": "2026-10-27",
+    "speaker": "unclear",
+    "role": "trainer",
+    "horse": "Knightsbridge",
+    "quote": "I went back and forth. I mean, I was I was, you know, back and forth to the mile to the mile and a quarter. What should we do? Naturally, as a trainer, you'd like to take a chance at winning two races as well as one.",
+    "question": "Why run Knightsbridge in the Classic as well since he's won at a mile and a quarter?",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-28T12:59:16.744863+00:00",
+    "reviewed": false
   }
 ]
