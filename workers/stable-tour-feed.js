@@ -6991,7 +6991,7 @@ const NOTE_TYPE_RIBBON_COLORS = { quote: "#5b4e8f", race: "#c99a2e", fullCard: "
 // analyst/oddsmaker (ATR's own morning-line maker, also does NYRA's), not a
 // jockey, so his notes need their own icon/label rather than being
 // mislabeled "Jockey". Same set index.html's PODCAST_ANALYST_NAMES uses.
-const PODCAST_ANALYST_NAMES = new Set(["David Aragona"]);
+const PODCAST_ANALYST_NAMES = new Set(["David Aragona", "Steve Andersen", "ITM Staff"]);
 
 function ribbonBlockHtml(hue, bodyTextColor, icon, label, badgeHtml, bodyHtml, bottomMargin) {
   return `

@@ -11169,7 +11169,7 @@
   // notes() in automation/podcast-quotes/write_notes.py) — David Aragona is
   // an analyst/oddsmaker (ATR's own morning-line maker, also does NYRA's),
   // not a jockey, so he needs his own badge rather than being mislabeled.
-  const PODCAST_ANALYST_NAMES = new Set(["David Aragona"]);
+  const PODCAST_ANALYST_NAMES = new Set(["David Aragona", "Steve Andersen", "ITM Staff"]);
 
   function stableNoteType(n){
     if (n.jockey && PODCAST_ANALYST_NAMES.has(n.jockey)) return "analyst";

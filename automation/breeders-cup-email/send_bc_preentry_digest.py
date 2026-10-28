@@ -227,7 +227,7 @@ def notes_for_horse(all_notes, tracked_trainers, horse_name):
 # write_episode_analyst_notes() in automation/podcast-quotes/write_notes.py)
 # — same set as PODCAST_ANALYST_NAMES in index.html/workers/stable-tour-
 # feed.js, kept here too so this script's own note cards don't mislabel him.
-PODCAST_ANALYST_NAMES = {"David Aragona"}
+PODCAST_ANALYST_NAMES = {"David Aragona", "Steve Andersen", "ITM Staff"}
 
 
 def note_card_html(n):
