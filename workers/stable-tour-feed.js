@@ -2110,8 +2110,21 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === "/debug-run-scheduled" && request.method === "GET") {
       // ?mode=evening added 2026-09-17 to test the new day-before send
       // on-demand without waiting for the real 4pm Eastern trigger.
+      // ?dayOffset=N added 2026-10-28 for firing an early send further out
+      // than tomorrow (e.g. a Friday/Saturday Breeders' Cup card checked
+      // from the Tuesday before) — takes priority over ?mode when present.
+      // Still a real send: dedup keys off the real computed date, so this
+      // doesn't double-send anything the normal 0/1-day cron later covers.
+      const explicitOffset = url.searchParams.get("dayOffset");
       const isEvening = url.searchParams.get("mode") === "evening";
-      const alertOptions = isEvening ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
+      const alertOptions = explicitOffset !== null
+        ? { dayOffset: parseInt(explicitOffset, 10) || 0, runLabel: "manual" }
+        : isEvening ? { dayOffset: 1, runLabel: "eve" } : { dayOffset: 0, runLabel: "am" };
+      // ?track=belmont (comma-separated for more than one) scopes a manual
+      // run to specific tracks instead of the real run's full ALERT_TRACKS
+      // sweep — see runEntryAlerts()'s tracksOverride param.
+      const trackParam = url.searchParams.get("track");
+      if (trackParam) alertOptions.tracksOverride = trackParam.split(",").map((t) => t.trim()).filter(Boolean);
       let result;
       try {
         result = await runEntryAlerts(env, "manual", alertOptions);
@@ -6595,6 +6608,15 @@ function entryAlertTodayDate() {
   return entryAlertDateForOffset(0);
 }
 
+// "Friday"/"Saturday"/etc for an ISO date string — used by runEntryAlerts()'s
+// cardLabel when a manual /debug-run-scheduled run is fired for a date
+// further out than tomorrow (today/tomorrow still use those exact words).
+function weekdayNameForDate(isoDate) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return names[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
 // Direct port of index.html's findHorseStableNotes() — trainer match reuses
 // this file's own lastNameKey() (same forgiving last-name-only comparison,
 // for the same reason: Entries' trainer field comes from NYRA's own scraped
@@ -7193,7 +7215,7 @@ async function sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to)
 // calendar date's card to check (0 = today, 1 = tomorrow), runLabel keeps
 // the two sends' dedup state independent (see raceNotifyKvKey()) and tags
 // which run's outcome this is in /debug-last-run (see recordEntryAlertsRun()).
-async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel = "am" } = {}) {
+async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel = "am", tracksOverride = null } = {}) {
   // Whole body wrapped in one try/catch so a mid-run crash still leaves a
   // record behind — confirmed real gap: before this, an exception anywhere
   // in the per-horse loop would skip the final recordEntryAlertsRun() call
@@ -7220,7 +7242,13 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
     }
     const trackedLastNames = new Set(state.trainers.map(lastNameKey));
     const date = entryAlertDateForOffset(dayOffset);
-    const cardLabel = dayOffset === 0 ? "today" : "tomorrow";
+    // The real Cron Trigger only ever uses dayOffset 0 or 1 (the 7am
+    // same-day/day-before checks), so "today"/"tomorrow" covered every
+    // real case until /debug-run-scheduled gained support for an explicit
+    // dayOffset — manually firing a card several days out (e.g. an early
+    // Breeders' Cup send) needs a real relative label instead of a wrong
+    // "tomorrow" sitting next to a date that's clearly days away.
+    const cardLabel = dayOffset === 0 ? "today" : dayOffset === 1 ? "tomorrow" : weekdayNameForDate(date);
     // Per-track outcome for this run — confirmed real gap 2026-09-05:
     // Kentucky Downs' entries fetch failed silently on a real cron run (a
     // transient SmartPony hiccup, not a code bug — a manual re-run minutes
@@ -7251,7 +7279,12 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
     // see that constant's own comment on why), dispatched to the same
     // per-source fetcher the /entries route uses so this never drifts out
     // of sync with which parser a track actually needs.
-    for (const track of ALERT_TRACKS) {
+    // tracksOverride lets a manual /debug-run-scheduled?track=... call scope
+    // itself to one track (e.g. an early Belmont-only send ahead of the real
+    // cron) instead of the real run's full ALERT_TRACKS sweep — every other
+    // caller (the real Cron Trigger, the plain manual trigger) passes null
+    // and keeps checking every track, same as before this existed.
+    for (const track of tracksOverride || ALERT_TRACKS) {
       const sourceType = ENTRIES_SOURCE_BY_TRACK[track];
       const fetchEntries = () => {
         if (sourceType === "nyra") return fetchNyraEntriesDay(track, date);
