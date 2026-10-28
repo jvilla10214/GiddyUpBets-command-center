@@ -1365,6 +1365,13 @@ async function handleRequest(request, env, ctx) {
         if (typeof p.jockey === "string") note.jockey = p.jockey;
         if (typeof p.horse === "string") note.horse = p.horse;
         if (typeof p.date === "string") note.date = p.date;
+        // Lets the one-off Breeders' Cup digest script (automation/
+        // breeders-cup-email/send_bc_preentry_digest.py) mark a note
+        // "digested" the same way runEntryAlerts() does for the real daily
+        // entry-alert emails, so the "NEW" badge (see ribbon-building code
+        // near PODCAST_ANALYST_NAMES) only shows a quote once, ever,
+        // regardless of which of the two email paths sent it first.
+        if (typeof p.digestedAt === "string") note.digestedAt = p.digestedAt;
         patched++;
       }
       await env.STABLE_KV.put("notes", JSON.stringify(notes));

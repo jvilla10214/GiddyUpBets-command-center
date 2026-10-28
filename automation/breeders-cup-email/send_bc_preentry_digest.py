@@ -20,7 +20,7 @@ import json
 import re
 import sys
 import urllib.request
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -230,6 +230,22 @@ def notes_for_horse(all_notes, tracked_trainers, horse_name):
 PODCAST_ANALYST_NAMES = {"David Aragona", "Steve Andersen", "ITM Staff"}
 
 
+# "NEW" means genuinely never sent in a real (non-test) digest before — not
+# just "newest by date" — n.digestedAt is set the first time a REAL send
+# succeeds for this note, same field and same meaning as the Worker's
+# runEntryAlerts()/buildStyledEntryDigestEmail() path, so a quote only ever
+# shows NEW once across either email pipeline, never both. See main()'s
+# post-send loop, which PATCHes digestedAt via /notes/bulk-cleanup.
+def new_badge_html(n):
+    if n.get("digestedAt"):
+        return ""
+    return (
+        f'<span style="display:inline-block; background:#ffffff; color:{THEME["accent"]}; font-weight:700; '
+        f'font-size:9px; letter-spacing:0.04em; padding:1px 6px; border-radius:8px; margin-left:7px; '
+        f'vertical-align:middle;">NEW</span>'
+    )
+
+
 def note_card_html(n):
     is_analyst = n.get("jockey") in PODCAST_ANALYST_NAMES
     role_icon = "&#127908;" if n.get("trainer") else "&#128202;" if is_analyst else "&#127943;"
@@ -237,10 +253,11 @@ def note_card_html(n):
     speaker = n.get("trainer") or n.get("jockey") or ""
     source = n.get("source") or ("auto-imported" if n.get("autoImported") else "manual")
     quote_hue = NOTE_TYPE_RIBBON_COLORS["quote"]
+    new_badge = new_badge_html(n)
     age_badge = note_age_badge_html(n.get("date"))
     return f"""
     <div style="border-radius:6px; overflow:hidden; margin:4px 0 8px;">
-      <div style="background:{quote_hue}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">{role_icon} QUOTE &mdash; {esc(format_date_label(n.get('date')))}{age_badge}</div>
+      <div style="background:{quote_hue}; color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:10.5px; letter-spacing:0.05em; padding:6px 12px;">{role_icon} QUOTE &mdash; {esc(format_date_label(n.get('date')))}{new_badge}{age_badge}</div>
       <div style="background:{quote_hue}12; padding:10px 12px; font-family:Georgia,'Times New Roman',serif; font-size:13.5px; line-height:1.5; color:{THEME['ink']};">
         {esc(n.get('note'))}
         <div style="font-family:Arial,Helvetica,sans-serif; font-size:10.5px; color:{THEME['dim']}; margin-top:5px;"><strong style="color:{THEME['ink']};">{esc(speaker)}</strong> ({role_label}) &middot; {esc(source)}</div>
@@ -427,10 +444,30 @@ def main():
         (pages_dir / page_filename(day)).write_text(page_html, encoding="utf-8")
         print(f"{day['label']}: wrote {pages_dir / page_filename(day)}", flush=True)
 
+    sent_note_ids = set()
     for day in bc_data["days"]:
         subject, html_body = build_day_email(day, all_notes, tracked_trainers, recap_index)
         result = fetch_url(f"{WORKER_BASE}/send-custom-email", method="POST", body={"subject": subject, "html": html_body})
         print(f"{day['label']}: sent -> {result}", flush=True)
+        for race in day["races"]:
+            for h in race["horses"]:
+                if h.get("scratched"):
+                    continue
+                for n in notes_for_horse(all_notes, tracked_trainers, h["name"]):
+                    sent_note_ids.add(n["id"])
+
+    # Mark every note just sent as "digested" — same field/meaning as the
+    # Worker's runEntryAlerts() uses for the real production entry-alert
+    # emails — so the "NEW" badge only ever shows a quote once, across
+    # either email pipeline. Only patches notes that don't already have
+    # digestedAt set (a note already sent via the real daily pipeline
+    # shouldn't re-show as NEW here just because this script saw it first).
+    to_patch = [n["id"] for n in all_notes if n["id"] in sent_note_ids and not n.get("digestedAt")]
+    if to_patch:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        patches = [{"id": nid, "digestedAt": now} for nid in to_patch]
+        result = fetch_url(f"{WORKER_BASE}/notes/bulk-cleanup", method="POST", body={"deleteIds": [], "patches": patches})
+        print(f"Marked {result.get('patched', 0)} notes as digested (NEW badge will clear next send).", flush=True)
 
 
 if __name__ == "__main__":
