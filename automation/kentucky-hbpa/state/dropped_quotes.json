@@ -2270,5 +2270,21 @@
     "error": null,
     "foundAt": "2026-10-28T12:59:16.744863+00:00",
     "reviewed": false
+  },
+  {
+    "key": "MbddkFwjbr8|00:00|unclear",
+    "reason": "no_clear_horse",
+    "video": "Baffert on his Breeders' Cup six pack, including unbeaten 2-year-olds Hughes, Salahudin",
+    "videoId": "MbddkFwjbr8",
+    "videoDate": "2026-10-28",
+    "speaker": "Bob Baffert",
+    "role": "trainer",
+    "horse": "unclear",
+    "quote": "Yeah, I mean that's it, but they're doing it the right way, you know, they're they're they're winning by a lot. So, um it's I feel good about them, you know, coming in here",
+    "question": "Now your two-year-olds, you told me the other day they've been very impressive, but you don't know what they've beaten",
+    "timestamp": "00:00",
+    "error": null,
+    "foundAt": "2026-10-30T13:23:22.628399+00:00",
+    "reviewed": false
   }
 ]
