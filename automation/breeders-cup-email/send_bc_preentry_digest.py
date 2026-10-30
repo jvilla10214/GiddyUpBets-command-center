@@ -279,26 +279,46 @@ def recaps_for_horse(recap_index, horse_name):
     return sorted(entries, key=lambda e: e.get("date") or "", reverse=True)
 
 
-def recap_cards_html(entries):
-    """Full Card Recap box (when present) sits above its matching Race Recap
-    box, broad context before the specific race — same order and same fixed
-    colors as buildStyledEntryDigestEmail() in workers/stable-tour-feed.js."""
-    parts = []
+def recap_timeline_items(entries):
+    """Returns (date, type_priority, tiebreak, html) tuples for every Full
+    Card Recap / Race Recap box, one item per box rather than one per date —
+    a date with both gets two items. type_priority breaks ties against
+    quotes sharing the same date (see horse_timeline_html): full card above
+    race recap above quote, matching the reading order the entries have
+    always had when just the two of them shared a date."""
+    items = []
     for e in entries:
         date_label = format_date_label(e.get("date"))
         origin_tag = f" &middot; {esc(TRACK_LABEL.get(e['track'], e['track']))}" if e.get("track") else ""
         if e.get("fullCardRecap"):
-            parts.append(ribbon_block_html(
+            html_block = ribbon_block_html(
                 NOTE_TYPE_RIBBON_COLORS["fullCard"], "&#128197;",
                 f"FULL CARD RECAP &mdash; {esc(date_label)}{origin_tag}", esc(e["fullCardRecap"]),
-            ))
+            )
+            items.append((e.get("date") or "", 2, "", html_block))
         if e.get("recap"):
             race_tag = f" RACE {e['raceNumber']}" if e.get("raceNumber") else ""
-            parts.append(ribbon_block_html(
+            html_block = ribbon_block_html(
                 NOTE_TYPE_RIBBON_COLORS["race"], "&#127937;",
                 f"RACE RECAP &mdash; {esc(date_label)}{race_tag}{origin_tag}", esc(e["recap"]),
-            ))
-    return "".join(parts)
+            )
+            items.append((e.get("date") or "", 1, "", html_block))
+    return items
+
+
+def horse_timeline_html(all_notes, tracked_trainers, recap_index, horse_name):
+    """Quotes, race recaps, and full card recaps all merged into ONE list,
+    newest date first top-to-bottom — user request 2026-10-30, replacing the
+    old layout that showed every recap first (as its own already-sorted
+    block) and every quote after (as a separate already-sorted block), which
+    read as two separately-chronological groups instead of one real
+    timeline. Same-date ties fall back to recap-type priority (full card,
+    then race recap, then quote) and, among quotes themselves, capturedAt."""
+    items = list(recap_timeline_items(recaps_for_horse(recap_index, horse_name)))
+    for n in notes_for_horse(all_notes, tracked_trainers, horse_name):
+        items.append((n.get("date") or "", 0, n.get("capturedAt") or "", note_card_html(n)))
+    items.sort(key=lambda it: (it[0], it[1], it[2]), reverse=True)
+    return "".join(it[3] for it in items)
 
 
 def race_anchor_id(race_num):
@@ -321,9 +341,7 @@ def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
     horses_html = []
     for idx, h in enumerate(horses):
         divider = f'<div style="border-top:1px dashed {THEME["hairline"]}; margin:14px 0 10px;"></div>' if idx > 0 else ""
-        recaps_html = recap_cards_html(recaps_for_horse(recap_index, h["name"]))
-        notes = notes_for_horse(all_notes, tracked_trainers, h["name"])
-        notes_html = "".join(note_card_html(n) for n in notes)
+        timeline_html = horse_timeline_html(all_notes, tracked_trainers, recap_index, h["name"])
         jt_line = f"{h.get('trainer') or '—'} &middot; {h.get('jockey') or '—'}" + (f" &middot; {esc(h['mlOdds'])}" if h.get("mlOdds") else "")
         horses_html.append(f"""
         {divider}
@@ -332,8 +350,7 @@ def race_html(race, all_notes, tracked_trainers, recap_index, date_str):
           <span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:{THEME['ink']}; vertical-align:middle;">{esc(h['name'])}</span>
         </div>
         <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:{THEME['dim']}; margin:0 0 6px 30px;">{jt_line}</div>
-        {recaps_html}
-        {notes_html}""")
+        {timeline_html}""")
     return f"""
       <div id="{race_anchor_id(race['num'])}" style="padding:16px 30px; border-bottom:1px solid {THEME['hairline']};">
         {race_name_html}
@@ -430,6 +447,14 @@ def build_day_page(day, all_notes, tracked_trainers, recap_index):
 
 
 def main():
+    # --pages-only: regenerate the hosted "view in browser" pages (bc-digest/
+    # *.html) from current data without sending a real email or re-running
+    # /notes/bulk-cleanup — added 2026-10-30 so a stale page (e.g. one that
+    # predates notes getting digestedAt set by the real production entry-
+    # alert pipeline, which is what made every quote wrongly show NEW) can be
+    # refreshed on its own, separate from the "send real mail" side effect.
+    pages_only = "--pages-only" in sys.argv
+
     bc_data = load_bc_data()
     data = fetch_url(f"{WORKER_BASE}/data")
     all_notes = data.get("notes", [])
@@ -443,6 +468,10 @@ def main():
         page_html = build_day_page(day, all_notes, tracked_trainers, recap_index)
         (pages_dir / page_filename(day)).write_text(page_html, encoding="utf-8")
         print(f"{day['label']}: wrote {pages_dir / page_filename(day)}", flush=True)
+
+    if pages_only:
+        print("--pages-only: skipped email send and digestedAt patching.", flush=True)
+        return
 
     sent_note_ids = set()
     for day in bc_data["days"]:
