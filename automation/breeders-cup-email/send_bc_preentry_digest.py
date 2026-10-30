@@ -159,6 +159,60 @@ def load_bc_data():
     return json.loads(m.group(1))
 
 
+POST_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})")
+
+
+def format_post_time(iso):
+    m = POST_TIME_RE.match(iso or "")
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), m.group(2)
+    period = "AM" if hour < 12 else "PM"
+    hour12 = hour % 12 or 12
+    return f"{hour12}:{minute} {period} ET"
+
+
+# BREEDERS_CUP_2026 (index.html) only holds the day's actual Breeders' Cup
+# stakes races — it was hand-curated as a pre-entry placeholder before the
+# real card existed. The real Keeneland cards those two days also run their
+# own regular undercard races, which belong in the digest too since they're
+# part of the same card a reader is following — user request 2026-10-30. The
+# Worker's own /entries route (same SmartPony feed every other track in this
+# app uses) already has the full card, so missing race numbers are pulled
+# from there and formatted to match BREEDERS_CUP_2026's own race/horse shape.
+def fetch_full_card_extra_races(date_str, existing_race_nums):
+    try:
+        full_card = fetch_url(f"{WORKER_BASE}/entries?track=keeneland&date={date_str}")
+    except Exception as err:  # best-effort — a day's digest still works with just its BC races
+        print(f"Warning: couldn't fetch full Keeneland card for {date_str}: {err}", flush=True)
+        return []
+    extra = []
+    for r in full_card.get("races", []):
+        if r["raceNumber"] in existing_race_nums:
+            continue
+        extra.append({
+            "num": r["raceNumber"],
+            "post": format_post_time(r.get("postTimeIso")) or "—",
+            "dist": r.get("distanceLabel") or "—",
+            "surf": r.get("surface") or "—",
+            "purse": r.get("purse") or "—",
+            "cond": r.get("raceType") or "—",
+            "horses": [
+                {
+                    "pgm": h.get("postPosition") or "",
+                    "name": h.get("name") or "Unknown",
+                    "trainer": h.get("trainer"),
+                    "jockey": h.get("jockey"),
+                    "mlOdds": h.get("mlOdds"),
+                    "alsoEligible": h.get("alsoEligible", False),
+                    "scratched": h.get("scratched", False),
+                }
+                for h in r.get("horses", [])
+            ],
+        })
+    return extra
+
+
 def esc(s):
     return html.escape(s or "", quote=False)
 
@@ -460,6 +514,13 @@ def main():
     all_notes = data.get("notes", [])
     tracked_trainers = set(data.get("trainers", []))
     recap_index = fetch_url(f"{WORKER_BASE}/recap-index").get("byHorse", {})
+
+    for day in bc_data["days"]:
+        existing_nums = {r["num"] for r in day["races"]}
+        extra_races = fetch_full_card_extra_races(day["date"], existing_nums)
+        if extra_races:
+            day["races"] = sorted(day["races"] + extra_races, key=lambda r: r["num"])
+            print(f"{day['label']}: added {len(extra_races)} non-Breeders'-Cup race(s) from the full card", flush=True)
 
     pages_dir = REPO_ROOT / "bc-digest"
     pages_dir.mkdir(exist_ok=True)
