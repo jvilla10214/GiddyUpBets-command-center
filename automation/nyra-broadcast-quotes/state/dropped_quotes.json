@@ -568,5 +568,35 @@
     "error": null,
     "foundAt": "2026-10-27T20:43:59.159192+00:00",
     "reviewed": false
+  },
+  {
+    "key": "4j-ztRPxX8Q|01:55:39|unclear",
+    "reason": "no_clear_horse",
+    "video": "America's Day at the Races - Wednesday October 28, 2026",
+    "videoId": "4j-ztRPxX8Q",
+    "videoDate": "2026-10-28",
+    "horse": "unclear",
+    "speaker": "Richie Migliore",
+    "role": "jockey",
+    "content": "What was your biggest takeaway from that veterinary protocol conversation? Well, I just love that the all the protocols that are put in place to ensure that only the healthiest horses are going to compete.",
+    "timestamp": "01:55:39",
+    "error": null,
+    "foundAt": "2026-10-30T13:58:06.026277+00:00",
+    "reviewed": false
+  },
+  {
+    "key": "4j-ztRPxX8Q|02:54:33|unclear",
+    "reason": "no_clear_horse",
+    "video": "America's Day at the Races - Wednesday October 28, 2026",
+    "videoId": "4j-ztRPxX8Q",
+    "videoDate": "2026-10-28",
+    "horse": "unclear",
+    "speaker": "Edgard (Edgard Zayas)",
+    "role": "jockey",
+    "content": "Asked about the horse's chances stepping up in class this weekend I think you know he has a really good shot of hopefully hitting the board and if we can't even win the race.",
+    "timestamp": "02:54:33",
+    "error": null,
+    "foundAt": "2026-10-30T13:58:06.027288+00:00",
+    "reviewed": false
   }
 ]
