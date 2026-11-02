@@ -8863,9 +8863,15 @@ function nyraLexiconRe(names) {
       if (w.length === 1) return h.length >= 5 && count.get(h) >= 2 && !NYRA_NOT_HORSE_WORDS.has(h.toLowerCase()) && !NYRA_PLACE_OR_RACE_RE.test(h);
       return !NYRA_PLACE_OR_RACE_RE.test(h);
     }).sort((a, b) => b.length - a.length);
-    const byNorm = new Map(ok.map((h) => [nyraNorm(h), h]));
+    // Keyed lowercase (not just apostrophe-normalized) and matched
+    // case-insensitively ("i" flag, added 2026-11-02) — confirmed real
+    // miss: a manually pasted article can name a horse in ALL CAPS (e.g. a
+    // bullet-list summary email's own house style, "* PENTATHLON (Forty
+    // Niner, G3, won): ..."), which a case-sensitive match against the
+    // Title Case spelling stored on every note would silently never find.
+    const byNorm = new Map(ok.map((h) => [nyraNorm(h).toLowerCase(), h]));
     const pat = ok.map((h) => nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "['’]"));
-    c = { re: pat.length ? new RegExp(`(?<![A-Za-z’'])(?:${pat.join("|")})(?![A-Za-z])`, "g") : /$^/g, byNorm };
+    c = { re: pat.length ? new RegExp(`(?<![A-Za-z’'])(?:${pat.join("|")})(?![A-Za-z])`, "gi") : /$^/g, byNorm };
     nyraLexiconCache.set(names, c);
   }
   return c;
@@ -9010,7 +9016,7 @@ function nyraHorsesInArticle(blocks, people, extraKnown, why, tracked = {}) {
       // A one-word name glued to another capitalized word is part of a
       // longer proper noun ("Finger Lakes"), not the horse.
       if (!/\s/.test(m[0]) && (/^\s+[A-Z]/.test(after) || /[A-Z][\w’'-]*\s+$/.test(joined.slice(Math.max(0, m.index - 20), m.index)))) continue;
-      if (lex.byNorm.has(nyraNorm(m[0]))) add(m[0], true, true); // the article's own spelling
+      if (lex.byNorm.has(nyraNorm(m[0]).toLowerCase())) add(m[0], true, true); // the article's own spelling
     }
   }
   const accepted = new Map(strong);
@@ -10147,7 +10153,7 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers, knownHorseNames
     if (lex) {
       const matches = new Set();
       for (const m of nyraNorm(para).matchAll(lex.re)) {
-        const display = lex.byNorm.get(m[0]);
+        const display = lex.byNorm.get(m[0].toLowerCase());
         if (display) matches.add(display);
       }
       if (matches.size === 1) horseGuess = [...matches][0];
