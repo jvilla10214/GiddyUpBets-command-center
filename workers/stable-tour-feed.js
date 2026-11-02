@@ -8850,8 +8850,23 @@ const nyraEsc = (x) => nyraNorm(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Known-horse lexicon regex, compiled once per name list (see
 // nyraHorsesInArticle()). Matches the prose spelling with either apostrophe.
 const nyraLexiconCache = new WeakMap();
-function nyraLexiconRe(names) {
-  let c = nyraLexiconCache.get(names);
+// minOneWordCount: how many stored notes a one-word name needs before it's
+// trusted (default 2 — a single stray note, e.g. an owner once filed as a
+// horse, isn't enough for the NYRA News extractor's own horse-discovery
+// use). The manual-paste horse-guess feature passes 1 instead — confirmed
+// real miss 2026-11-02: "Pentathlon" and "Shockletz" are each real, already-
+// known one-word horse names with exactly one note on file (quotes added
+// earlier that same day), so the default 2+ threshold silently excluded
+// them from the lexicon and the horse field never got guessed despite the
+// name being right there in the text. A wrong one-word guess is still only
+// a false positive the human corrects before saving, same bar every other
+// guess in this app already accepts.
+function nyraLexiconRe(names, minOneWordCount = 2) {
+  // Cache is keyed purely on the names array's identity, not this
+  // parameter — only safe because every real caller always passes its own
+  // fresh array with its own fixed threshold. Skip the cache entirely for a
+  // non-default threshold instead of risking a stale cross-caller hit.
+  let c = minOneWordCount === 2 ? nyraLexiconCache.get(names) : null;
   if (!c) {
     const count = new Map();
     for (const n of names) count.set(n, (count.get(n) || 0) + 1);
@@ -8868,10 +8883,10 @@ function nyraLexiconRe(names) {
       // one distinctive word ("I Can See That" keeps "see"/"that" — only
       // "that" is common, so it still passes).
       if (w.every((word) => NYRA_NOT_HORSE_WORDS.has(word.toLowerCase()))) return false;
-      // One-word names: 5+ letters, not a common capitalized word, and on 2+
-      // stored notes (a single stray note — e.g. an owner once filed as a
-      // horse — isn't enough to trust it).
-      if (w.length === 1) return h.length >= 5 && count.get(h) >= 2 && !NYRA_NOT_HORSE_WORDS.has(h.toLowerCase()) && !NYRA_PLACE_OR_RACE_RE.test(h);
+      // One-word names: 5+ letters, not a common capitalized word, and seen
+      // on enough stored notes to trust (caller-controlled — see
+      // minOneWordCount's own comment).
+      if (w.length === 1) return h.length >= 5 && count.get(h) >= minOneWordCount && !NYRA_NOT_HORSE_WORDS.has(h.toLowerCase()) && !NYRA_PLACE_OR_RACE_RE.test(h);
       return !NYRA_PLACE_OR_RACE_RE.test(h);
     }).sort((a, b) => b.length - a.length);
     // Keyed lowercase (not just apostrophe-normalized) and matched
@@ -8883,7 +8898,7 @@ function nyraLexiconRe(names) {
     const byNorm = new Map(ok.map((h) => [nyraNorm(h).toLowerCase(), h]));
     const pat = ok.map((h) => nyraNorm(h).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "['’]"));
     c = { re: pat.length ? new RegExp(`(?<![A-Za-z’'])(?:${pat.join("|")})(?![A-Za-z])`, "gi") : /$^/g, byNorm };
-    nyraLexiconCache.set(names, c);
+    if (minOneWordCount === 2) nyraLexiconCache.set(names, c);
   }
   return c;
 }
@@ -10133,7 +10148,7 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers, knownHorseNames
   // trusted when exactly one distinct known horse turns up in that
   // paragraph — same "no guess beats a wrong guess" rule used everywhere
   // else in this app's auto-extraction.
-  const lex = knownHorseNames.length ? nyraLexiconRe(knownHorseNames) : null;
+  const lex = knownHorseNames.length ? nyraLexiconRe(knownHorseNames, 1) : null;
   const NAME = "[A-Z][A-Za-z.’'-]+(?:\\s[A-Z][A-Za-z.’'-]+){0,2}";
   const VERB = "(?:said|noted|added|wrote|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
   const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*(${NAME})\\s+${VERB}\\b`, "g");
