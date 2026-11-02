@@ -1480,45 +1480,6 @@ async function handleRequest(request, env, ctx) {
       }, 200, { "Cache-Control": "no-store" });
     }
 
-    // One-time (safe to re-run) cleanup for the tracked trainers roster
-    // itself — confirmed real 2026-11-02: two unguarded pushes in
-    // runSmartPonyImport()/runSmartPonyFullSweep() (fixed alongside this
-    // route) let the same person accumulate dozens of duplicate roster
-    // entries ("Aidan O'Brien" reached ~30 copies, mixing straight and
-    // curly-apostrophe spellings), which broke resolveTrackedTrainer()'s
-    // "exactly one match" check and made resolution WORSE the more it ran.
-    // Groups by normalized spelling (same stripDiacritics+lowercase key
-    // resolveTrackedTrainer()'s own dedupeBySpelling() uses), keeps the
-    // alphabetically-first real spelling per person (arbitrary but stable),
-    // and merges every kept/discarded name's trainerMeta (earliest addedAt
-    // wins, real provenance over a later duplicate's guess).
-    if (url.pathname === "/debug-dedupe-trainers" && request.method === "GET") {
-      const state = await readTrainersAndMeta(env);
-      const groups = new Map();
-      for (const t of state.trainers) {
-        const key = stripDiacritics(t).toLowerCase();
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(t);
-      }
-      let removed = 0;
-      const keptTrainers = [];
-      const newMeta = {};
-      for (const names of groups.values()) {
-        const canonical = [...names].sort()[0];
-        keptTrainers.push(canonical);
-        removed += names.length - 1;
-        const metas = names.map((n) => state.trainerMeta[n]).filter(Boolean);
-        newMeta[canonical] = metas.sort((a, b) => (a.addedAt || "").localeCompare(b.addedAt || ""))[0] || state.trainerMeta[canonical];
-      }
-      keptTrainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
-      if (removed) {
-        await env.STABLE_KV.put("trainers", JSON.stringify(keptTrainers));
-        await env.STABLE_KV.put("trainerMeta", JSON.stringify(newMeta));
-        await bumpDataVersion(env);
-      }
-      return json({ before: state.trainers.length, after: keptTrainers.length, removed }, 200, { "Cache-Control": "no-store" });
-    }
-
     if (url.pathname === "/weatherlog" && request.method === "GET") {
       const track = (url.searchParams.get("track") || "").trim();
       if (!track) return json({ error: "Missing track" }, 400);
