@@ -1480,6 +1480,45 @@ async function handleRequest(request, env, ctx) {
       }, 200, { "Cache-Control": "no-store" });
     }
 
+    // One-time (safe to re-run) cleanup for the tracked trainers roster
+    // itself — confirmed real 2026-11-02: two unguarded pushes in
+    // runSmartPonyImport()/runSmartPonyFullSweep() (fixed alongside this
+    // route) let the same person accumulate dozens of duplicate roster
+    // entries ("Aidan O'Brien" reached ~30 copies, mixing straight and
+    // curly-apostrophe spellings), which broke resolveTrackedTrainer()'s
+    // "exactly one match" check and made resolution WORSE the more it ran.
+    // Groups by normalized spelling (same stripDiacritics+lowercase key
+    // resolveTrackedTrainer()'s own dedupeBySpelling() uses), keeps the
+    // alphabetically-first real spelling per person (arbitrary but stable),
+    // and merges every kept/discarded name's trainerMeta (earliest addedAt
+    // wins, real provenance over a later duplicate's guess).
+    if (url.pathname === "/debug-dedupe-trainers" && request.method === "GET") {
+      const state = await readTrainersAndMeta(env);
+      const groups = new Map();
+      for (const t of state.trainers) {
+        const key = stripDiacritics(t).toLowerCase();
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(t);
+      }
+      let removed = 0;
+      const keptTrainers = [];
+      const newMeta = {};
+      for (const names of groups.values()) {
+        const canonical = [...names].sort()[0];
+        keptTrainers.push(canonical);
+        removed += names.length - 1;
+        const metas = names.map((n) => state.trainerMeta[n]).filter(Boolean);
+        newMeta[canonical] = metas.sort((a, b) => (a.addedAt || "").localeCompare(b.addedAt || ""))[0] || state.trainerMeta[canonical];
+      }
+      keptTrainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+      if (removed) {
+        await env.STABLE_KV.put("trainers", JSON.stringify(keptTrainers));
+        await env.STABLE_KV.put("trainerMeta", JSON.stringify(newMeta));
+        await bumpDataVersion(env);
+      }
+      return json({ before: state.trainers.length, after: keptTrainers.length, removed }, 200, { "Cache-Control": "no-store" });
+    }
+
     if (url.pathname === "/weatherlog" && request.method === "GET") {
       const track = (url.searchParams.get("track") || "").trim();
       if (!track) return json({ error: "Missing track" }, 400);
@@ -3140,6 +3179,26 @@ const TRAINER_SUCCESSORS = {
 };
 // useSuccessors=false when matching people who aren't trainers (jockeys):
 // TRAINER_SUCCESSORS only ever points at a trainer.
+// Dedupes by normalized spelling (apostrophe style, case) rather than exact
+// string — confirmed real 2026-11-02: the tracked trainers roster had
+// accumulated dozens of duplicate entries for the same person (e.g. "Aidan
+// O'Brien" x~25 plus a curly-apostrophe "Aidan O’Brien" x~5 — see the two
+// unguarded trackedList.push() calls in runSmartPonyImport()/
+// runSmartPonyFullSweep() this was traced to), which broke resolution
+// entirely: the "exactly one match" checks below saw N>1 candidates for a
+// real, unambiguous person and returned null, which in turn triggered
+// auto-adding ANOTHER duplicate on the next run — a self-reinforcing loop.
+// Deduping here makes resolution robust to dirty roster data going forward,
+// independent of also cleaning up (or guarding against re-creating) the
+// duplicates themselves.
+function dedupeBySpelling(list) {
+  const seen = new Map();
+  for (const t of list) {
+    const k = stripDiacritics(t).toLowerCase();
+    if (!seen.has(k)) seen.set(k, t);
+  }
+  return [...seen.values()];
+}
 function resolveTrackedTrainer(sourceName, trackedList, useSuccessors = true) {
   if (!sourceName) return null;
   const successor = useSuccessors && TRAINER_SUCCESSORS[`${firstNameKey(sourceName)}|${lastNameKey(sourceName)}`];
@@ -3148,10 +3207,13 @@ function resolveTrackedTrainer(sourceName, trackedList, useSuccessors = true) {
   const candidates = trackedList.filter((t) => lastNameKey(t) === wantLast);
   if (!candidates.length) return null;
   const parts = sourceName.trim().split(/\s+/);
-  if (parts.length < 2) return candidates.length === 1 ? candidates[0] : null;
+  if (parts.length < 2) {
+    const uniq = dedupeBySpelling(candidates);
+    return uniq.length === 1 ? uniq[0] : null;
+  }
   const wantFirst = firstNameKey(sourceName);
-  const firstNameMatches = candidates.filter((t) =>
-    stripDiacritics(t).trim().split(/\s+/).some((tok) => normalizeNameToken(tok) === wantFirst));
+  const firstNameMatches = dedupeBySpelling(candidates.filter((t) =>
+    stripDiacritics(t).trim().split(/\s+/).some((tok) => normalizeNameToken(tok) === wantFirst)));
   if (firstNameMatches.length === 0 && wantFirst.length === 1) return resolveByInitial(parts, wantFirst, wantLast, candidates);
   return firstNameMatches.length === 1 ? firstNameMatches[0] : null;
 }
@@ -11143,9 +11205,13 @@ async function runSmartPonyImport(env) {
         if (!jockey) {
           if (!q.jockeyFromRaceEntries) continue; // can't happen today (roster-only matches are already tracked), kept as the guard
           jockey = q.jockeyName;
-          jockeyState.jockeys.push(jockey);
-          jockeyState.jockeyMeta[jockey] = { source: "smartpony", addedAt: new Date().toISOString() };
-          resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+          // Same unguarded-push bug as the trainer branch below — see its
+          // own comment.
+          if (!jockeyState.jockeys.some((j) => stripDiacritics(j).toLowerCase() === stripDiacritics(jockey).toLowerCase())) {
+            jockeyState.jockeys.push(jockey);
+            jockeyState.jockeyMeta[jockey] = { source: "smartpony", addedAt: new Date().toISOString() };
+            resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+          }
           jockeysAdded++;
         }
         const key = noteKey("", jockey, q.horseName, q.text);
@@ -11186,13 +11252,25 @@ async function runSmartPonyImport(env) {
         // so the Sunday audit can filter straight to the riskier ones
         // instead of re-checking everything blind.
         matchedTrainer = q.trainerName;
-        state.trainers.push(matchedTrainer);
-        state.trainerMeta[matchedTrainer] = {
-          source: q.entriesConfirmedTrainer ? "smartpony-auto-confirmed" : "smartpony-auto-unverified",
-          addedAt: new Date().toISOString(),
-        };
-        state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
-        resolveTracked = makeTrackedTrainerResolver(state.trainers);
+        // Confirmed real bug 2026-11-02: this push had NO existence check at
+        // all — resolveTracked() returning null here doesn't mean the name
+        // is truly new, it can also mean the roster already has enough
+        // duplicate/misspelled copies of this exact person that resolution
+        // itself broke (see resolveTrackedTrainer()'s own dedupeBySpelling
+        // comment). Pushing unconditionally in that case just adds ANOTHER
+        // duplicate, making the next run's resolution worse, not better —
+        // "Aidan O'Brien" alone reached ~30 copies this way. Guard with the
+        // same normalized-spelling check so a dirty roster can't keep
+        // growing dirtier.
+        if (!state.trainers.some((t) => stripDiacritics(t).toLowerCase() === stripDiacritics(matchedTrainer).toLowerCase())) {
+          state.trainers.push(matchedTrainer);
+          state.trainerMeta[matchedTrainer] = {
+            source: q.entriesConfirmedTrainer ? "smartpony-auto-confirmed" : "smartpony-auto-unverified",
+            addedAt: new Date().toISOString(),
+          };
+          state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+          resolveTracked = makeTrackedTrainerResolver(state.trainers);
+        }
         trainersAdded++;
         trainersChanged = true;
       }
@@ -11329,9 +11407,13 @@ async function runSmartPonyFullSweep(env, { reset = false } = {}) {
         if (!jockey) {
           if (!q.jockeyFromRaceEntries) continue;
           jockey = q.jockeyName;
-          jockeyState.jockeys.push(jockey);
-          jockeyState.jockeyMeta[jockey] = { source: "smartpony", addedAt: new Date().toISOString() };
-          resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+          // Same unguarded-push bug as the trainer branch below — see its
+          // own comment.
+          if (!jockeyState.jockeys.some((j) => stripDiacritics(j).toLowerCase() === stripDiacritics(jockey).toLowerCase())) {
+            jockeyState.jockeys.push(jockey);
+            jockeyState.jockeyMeta[jockey] = { source: "smartpony", addedAt: new Date().toISOString() };
+            resolveJockey = makeTrackedTrainerResolver(jockeyState.jockeys, false);
+          }
           jockeysAdded++;
         }
         const key = noteKey("", jockey, q.horseName, q.text);
@@ -11365,13 +11447,25 @@ async function runSmartPonyFullSweep(env, { reset = false } = {}) {
         // the whole point of running this. See autoTrackUnverifiedSection()
         // and runSmartPonyImport()'s own comment for the full reasoning.
         matchedTrainer = q.trainerName;
-        state.trainers.push(matchedTrainer);
-        state.trainerMeta[matchedTrainer] = {
-          source: q.entriesConfirmedTrainer ? "smartpony-auto-confirmed" : "smartpony-auto-unverified",
-          addedAt: new Date().toISOString(),
-        };
-        state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
-        resolveTracked = makeTrackedTrainerResolver(state.trainers);
+        // Confirmed real bug 2026-11-02: this push had NO existence check at
+        // all — resolveTracked() returning null here doesn't mean the name
+        // is truly new, it can also mean the roster already has enough
+        // duplicate/misspelled copies of this exact person that resolution
+        // itself broke (see resolveTrackedTrainer()'s own dedupeBySpelling
+        // comment). Pushing unconditionally in that case just adds ANOTHER
+        // duplicate, making the next run's resolution worse, not better —
+        // "Aidan O'Brien" alone reached ~30 copies this way. Guard with the
+        // same normalized-spelling check so a dirty roster can't keep
+        // growing dirtier.
+        if (!state.trainers.some((t) => stripDiacritics(t).toLowerCase() === stripDiacritics(matchedTrainer).toLowerCase())) {
+          state.trainers.push(matchedTrainer);
+          state.trainerMeta[matchedTrainer] = {
+            source: q.entriesConfirmedTrainer ? "smartpony-auto-confirmed" : "smartpony-auto-unverified",
+            addedAt: new Date().toISOString(),
+          };
+          state.trainers.sort((a, b) => lastNameKey(a).localeCompare(lastNameKey(b)) || a.localeCompare(b));
+          resolveTracked = makeTrackedTrainerResolver(state.trainers);
+        }
         trainersAdded++;
         trainersChanged = true;
       }
