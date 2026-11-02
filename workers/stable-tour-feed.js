@@ -8678,6 +8678,7 @@ const NYRA_NOT_HORSE_WORDS = new Set([
   "when", "while", "after", "before", "as", "if", "with", "also", "both", "so", "but", "and", "or", "of", "from", "his", "then",
   "yet", "still", "however", "meanwhile", "later", "early", "one", "two", "three", "each", "every", "all", "many", "some", "other", "others",
   "another", "there", "here", "today", "yesterday", "tomorrow", "it’s", "it's", "inc", "inc.", "jr.", "sr.", "jr", "sr", "mr.", "mrs.", "dr.",
+  "i", "can",
 ]);
 const NYRA_PLACE_OR_RACE_RE = /\b(?:Park|Course|Downs|Racetrack|Racing Association|Stakes|Handicap|Derby|Oaks|Cup|Mile|Classic|Futurity|Sale|Grade|Group|Beyer|Juvenile|Championship|Showcase|Invitational|Turf Sprint|Turf Classic|Bowl|Big A|Spa|Award|Eclipse|Day|Works|Stable|Stables|Farm|Racing|Thoroughbreds)\b/;
 
@@ -8857,6 +8858,16 @@ function nyraLexiconRe(names) {
     const ok = [...count.keys()].filter((h) => {
       const w = h.trim().split(/\s+/);
       if (!/^[A-Z0-9]/.test(h)) return false;
+      // A real (if unfortunately-named) horse whose EVERY word is also a
+      // common word ("I Can") reads as an ordinary sentence fragment
+      // ("...I can never understand...") in free prose — confirmed real
+      // false match 2026-11-02 in a manually pasted email. One-word names
+      // already got this scrutiny; applying it regardless of word count
+      // catches a short multi-word name made entirely of common words too,
+      // without touching a legitimate multi-word name that mixes in even
+      // one distinctive word ("I Can See That" keeps "see"/"that" — only
+      // "that" is common, so it still passes).
+      if (w.every((word) => NYRA_NOT_HORSE_WORDS.has(word.toLowerCase()))) return false;
       // One-word names: 5+ letters, not a common capitalized word, and on 2+
       // stored notes (a single stray note — e.g. an owner once filed as a
       // horse — isn't enough to trust it).
