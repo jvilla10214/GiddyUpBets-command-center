@@ -10083,16 +10083,46 @@ function autoTrackUnverifiedSection(state, section, sourceTag) {
 // (and fix the trainer, if it didn't resolve) before saving — same
 // "human confirms, no guess beats a wrong guess" backstop the paste-and-
 // extract workflow already uses for its own horse field.
+// Widened 2026-11-02 — confirmed real misses: the original two patterns only
+// caught "said/noted/added/wrote" directly next to the name, so a LOT of
+// real press-quote styles this app's own sources actually use (interview
+// transcripts, Q&A-style notebooks, a straight "Name: "Quote"" attribution
+// with no verb at all, "told [outlet]", "explained", "continued",
+// "commented", an em-dash byline after the quote, the inverted AP-style
+// "Quote," said Name) silently produced zero candidates even when the
+// pasted text obviously had quotes in it. Five patterns now, covering:
+// verb-attribution in both name-first and name-last order (verb list
+// expanded), colon-attribution with no verb, and quote-then-em-dash-name.
+// Still just generates editable candidate cards for a human to confirm/
+// discard — a looser regex here is low-risk, not a direct-to-storage write.
 function extractManualQuoteCandidates(bodyText, trackedTrainers) {
   const paragraphs = bodyText.split(/\n+/).map((p) => p.trim()).filter(Boolean);
-  const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added|wrote)\b/g;
-  const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added|wrote)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
+  const NAME = "[A-Z][A-Za-z.’'-]+(?:\\s[A-Z][A-Za-z.’'-]+){0,2}";
+  const VERB = "(?:said|noted|added|wrote|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
+  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*(${NAME})\\s+${VERB}\\b`, "g");
+  const nameFirstRe = new RegExp(`\\b(${NAME})\\s+${VERB}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  // "Name: "Quote"" — no verb at all, the plain interview-transcript/
+  // notebook style this app's own Kentucky HBPA/NYRA Broadcast pipelines
+  // already produce (see e.g. the Brad Cox Q&A notes) and that a human
+  // pasting a similar transcript runs into constantly.
+  const colonRe = new RegExp(`\\b(${NAME}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  // "Quote" — Name — a trailing em/en-dash byline, common in pull-quotes
+  // and some wire-style copy.
+  const dashFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*(${NAME})\\b`, "g");
+  // "Quote," said Name — the inverted AP-style order (verb BEFORE the name,
+  // itself right after the quote) that plain name-first/quote-first
+  // attribution misses entirely since those both expect the verb right
+  // next to the name, not between the quote and the name.
+  const invertedRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s+(?:said|added|noted|explained|continued|commented|stated)\\s+(${NAME})\\b`, "g");
   const candidates = [];
-  const seenSpans = new Set(); // dedupe a quote matched by BOTH regexes (rare but possible on ambiguous punctuation)
+  const seenSpans = new Set(); // dedupe a quote matched by more than one pattern (rare but possible on ambiguous punctuation)
   for (const para of paragraphs) {
     const found = [];
     for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), rawName: m[1].trim() });
+    for (const m of para.matchAll(colonRe)) found.push({ quote: m[2].trim(), rawName: m[1].trim() });
+    for (const m of para.matchAll(dashFirstRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
+    for (const m of para.matchAll(invertedRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
     for (const { quote, rawName } of found) {
       const dedupeKey = `${quote}|${rawName}`;
       if (seenSpans.has(dedupeKey)) continue;
