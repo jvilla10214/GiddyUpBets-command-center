@@ -24,7 +24,7 @@ import config
 # since this is a separate (Python) codebase with no shared import path.
 HARNESS_TITLE_RE = re.compile(
     r"\b(red mile|scioto|northfield|harrah'?s philadelphia|yonkers|woodbine mohawk|\bmohawk\b|"
-    r"dover downs|pocono downs|the meadows\b|freehold raceway|tioga downs|vernon downs|"
+    r"dover downs|pocono downs|the meadows\b|\bmeadowlands\b|freehold raceway|tioga downs|vernon downs|"
     r"batavia downs|monticello raceway|breeders['’]?\s*crown|hambletonian|little brown jug|"
     r"grand circuit|\bharness\b)",
     re.IGNORECASE,
