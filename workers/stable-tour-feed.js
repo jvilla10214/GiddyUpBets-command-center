@@ -2406,14 +2406,13 @@ async function handleRequest(request, env, ctx) {
       }
     }
 
-    // One-off: sends today's REAL matched Saratoga/Belmont/Del Mar horses
-    // (same trainer/note matching as runEntryAlerts(), see
-    // collectTodaysRaceGroupsForPreview()'s own comment) through
-    // buildStyledEntryDigestEmail() with { isTest: true } — a "TEST — "
-    // subject prefix and body label, otherwise byte-for-byte the same
-    // production template — so a template tweak can be previewed against
-    // today's real content without waiting for the Cron Trigger. Never
-    // touches raceNotifyKvKey() dedup state.
+    // One-off: sends today's REAL Saratoga/Belmont/Del Mar card (every
+    // non-scratched horse, see collectTodaysRaceGroupsForPreview()'s own
+    // comment) through buildStyledEntryDigestEmail() with { isTest: true }
+    // — a "TEST — " subject prefix and body label, otherwise byte-for-byte
+    // the same production template — so a template tweak can be previewed
+    // against today's real content without waiting for the Cron Trigger.
+    // Never touches raceNotifyKvKey() dedup state.
     if (url.pathname === "/debug-send-styled-test-email" && request.method === "GET") {
       const track = url.searchParams.get("track") || "saratoga";
       const date = url.searchParams.get("date") || entryAlertTodayDate();
@@ -2421,7 +2420,7 @@ async function handleRequest(request, env, ctx) {
       try {
         const raceGroups = await collectTodaysRaceGroupsForPreview(env, track, date);
         if (!raceGroups.length) {
-          return json({ sent: false, reason: "No tracked-trainer horses with notes matched for that track/date." }, 200, { "Cache-Control": "no-store" });
+          return json({ sent: false, reason: "No entries found for that track/date." }, 200, { "Cache-Control": "no-store" });
         }
         const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
         const result = await sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to);
@@ -2449,10 +2448,6 @@ async function handleRequest(request, env, ctx) {
       const to = url.searchParams.get("to") ? [url.searchParams.get("to")] : NOTIFY_EMAILS;
       try {
         const state = await readNotesAndTrainers(env);
-        const trackedLastNames = new Set(state.trainers.map(lastNameKey));
-        const untrackedHorseNames = new Set(
-          state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
-        );
         // Cross-track recap lookup, same as runEntryAlerts() — see
         // readAllRecapIndexes()'s own comment.
         const recapIndex = await readAllRecapIndexes(env);
@@ -2470,23 +2465,20 @@ async function handleRequest(request, env, ctx) {
           const matchedHorses = [];
           for (const horse of race.horses || []) {
             // No scratch filter — the one deliberate difference from every
-            // other matching path in this file.
-            const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
-            const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
+            // other matching path in this file. Every horse is listed
+            // regardless of tracked-trainer/note/recap status (2026-11-02).
             const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
             const recaps = [];
             for (const r of recapsRaw) {
               recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, r.track, r.date, fullCardRecapCache) });
             }
-            if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
             const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-            if (!notes.length && !recaps.length) continue;
             matchedHorses.push({ horse, notes, recaps });
           }
           if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
         }
         if (!raceGroups.length) {
-          return json({ sent: false, reason: "No matches (tracked trainer, note, or recap) for that track/date, scratched or not." }, 200, { "Cache-Control": "no-store" });
+          return json({ sent: false, reason: "No entries found for that track/date." }, 200, { "Cache-Control": "no-store" });
         }
         const trackLabel = ENTRIES_TRACK_LABEL[track] || track;
         const sendResult = await sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to);
@@ -2512,13 +2504,14 @@ async function handleRequest(request, env, ctx) {
       return json({ track, horseCount: Object.keys(index).length, index }, 200, { "Cache-Control": "no-store" });
     }
 
-    // Read-only dry run of the EXACT entry-alert matching logic (same
-    // trainerTracked/hasUntrackedNote/recaps/notes computation
-    // runEntryAlerts() uses) for one track+date, returned as JSON per
-    // horse instead of building/sending an email — no dedup keys written,
-    // nothing sent. Exists specifically so "why didn't horse X's quotes
-    // show up" can be checked against the real live deploy without
-    // triggering another real send to find out.
+    // Read-only dry run for one track+date, returned as JSON per horse
+    // instead of building/sending an email — no dedup keys written, nothing
+    // sent. Every horse is listed (trainerTracked/hasUntrackedNote/
+    // recapsCount/notesCount reported as diagnostic info, not as a filter —
+    // see runEntryAlerts()'s own comment on the 2026-11-02 change). Exists
+    // specifically so "why didn't horse X's quotes show up" can be checked
+    // against the real live deploy without triggering another real send to
+    // find out.
     if (url.pathname === "/debug-match-dry-run" && request.method === "GET") {
       const track = url.searchParams.get("track");
       const date = url.searchParams.get("date");
@@ -2542,12 +2535,14 @@ async function handleRequest(request, env, ctx) {
         for (const race of result.races || []) {
           for (const horse of race.horses || []) {
             if (horse.scratched) continue;
+            // No longer filters anything out — every horse is listed in the
+            // real pipeline now (2026-11-02) — but trainerTracked/
+            // hasUntrackedNote are still reported below since they're
+            // useful diagnostic signal for "why didn't X have a note".
             const trainerTracked = !!(horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer)));
             const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
             const recaps = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
             const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-            if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
-            if (!notes.length && !recaps.length) continue;
             horses.push({
               race: race.raceNumber, name: horse.name, trainer: horse.trainer,
               trainerTracked, hasUntrackedNote, notesCount: notes.length, recapsCount: recaps.length,
@@ -6806,15 +6801,13 @@ function ppBadgeHtmlEmail(postPosition, alsoEligible) {
 // path.
 async function collectTodaysRaceGroupsForPreview(env, track, date) {
   const state = await readNotesAndTrainers(env); // trainerMeta isn't used anywhere in this function
-  const trackedLastNames = new Set(state.trainers.map(lastNameKey));
-  const untrackedHorseNames = new Set(
-    state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
-  );
   // Kept in sync with runEntryAlerts()'s own matching rules by hand — this
   // is a preview/test path (no dedup writes, no real send unless the caller
   // asks), not the real scheduled one, so it can't just call that function
   // directly, but the matching logic itself (including job #22's recap
   // trigger) needs to stay identical or a test send stops meaning anything.
+  // Every non-scratched horse is included regardless of tracked-trainer/
+  // note/recap status (2026-11-02) — see runEntryAlerts()'s own comment.
   // Cross-track recap lookup, same as runEntryAlerts() — see
   // readAllRecapIndexes()'s own comment.
   const recapIndex = await readAllRecapIndexes(env);
@@ -6832,16 +6825,12 @@ async function collectTodaysRaceGroupsForPreview(env, track, date) {
     const matchedHorses = [];
     for (const horse of race.horses || []) {
       if (horse.scratched) continue;
-      const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
-      const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
       const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
       const recaps = [];
       for (const r of recapsRaw) {
         recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, r.track, r.date, fullCardRecapCache) });
       }
-      if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
       const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-      if (!notes.length && !recaps.length) continue;
       matchedHorses.push({ horse, notes, recaps });
     }
     if (matchedHorses.length) raceGroups.push({ race, horses: matchedHorses });
@@ -7162,7 +7151,7 @@ function buildStyledEntryDigestEmail(track, trackLabel, date, raceGroups, { isTe
         <div style="margin:10px 0 3px;">
           ${badge ? `${badge}<span style="display:inline-block; width:6px;">&nbsp;</span>` : ""}<span style="font-family:Arial,Helvetica,sans-serif; font-weight:700; font-size:15px; color:${theme.ink}; vertical-align:middle;">${escapeHtmlForEmail(horse.name || "Horse")}</span>
         </div>
-        <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:#000000; margin-bottom:5px;">${escapeHtmlForEmail(horse.trainer || "—")}${horse.jockey ? ` &middot; ${escapeHtmlForEmail(horse.jockey)}` : ""}</div>
+        <div style="font-family:'Courier New',Courier,monospace; font-size:10.5px; color:#000000; margin-bottom:5px;">${escapeHtmlForEmail(horse.trainer || "—")}${horse.jockey ? ` &middot; ${escapeHtmlForEmail(horse.jockey)}` : ""}${horse.mlOdds ? ` &middot; ${escapeHtmlForEmail(horse.mlOdds)}` : ""}</div>
         ${recapsHtml}
         ${notesHtml}
       `;
@@ -7201,10 +7190,14 @@ async function sendStyledTestEmail(env, track, trackLabel, date, raceGroups, to)
 }
 
 // The actual job: scans every track in ENTRIES_SOURCE_BY_TRACK for
-// entryAlertTodayDate(), and for every non-scratched horse whose trainer is
-// tracked, bundles it (at most once per horse+race — see raceNotifyKvKey())
-// into that track's single daily digest email, grouped by race, with each
-// horse's when/where/conditions plus every matching stable note. Called from
+// entryAlertTodayDate(), and for every non-scratched horse on that day's
+// card — tracked trainer or not — bundles it (at most once per horse+race,
+// see raceNotifyKvKey()) into that track's single daily digest email,
+// grouped by race, with each horse's when/where/conditions plus any
+// matching stable note or recap layered on top (2026-11-02: every horse
+// gets listed with its saddlecloth/name/trainer/jockey/odds regardless of
+// whether a note or recap exists for it — used to skip a horse entirely
+// when nothing matched). Called from
 // both the real Cron Trigger (scheduled(), below) and the manual
 // /debug-run-scheduled route, so this is the one place the actual logic
 // lives.
@@ -7237,20 +7230,10 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
   let sent = 0;
   try {
     const state = await readNotesAndTrainers(env); // trainerMeta isn't used anywhere in this function
-    // Horse names (lowercased) with at least one trainer-less note — these
-    // need checking even when horse.trainer isn't a tracked trainer at all,
-    // since a trainer-less note is deliberately not pinned to any trainer
-    // (see /notes POST) and must still catch the horse regardless of who
-    // ends up training it.
-    const untrackedHorseNames = new Set(
-      state.notes.filter((n) => !n.trainer && n.horse).map((n) => stripHorseCountrySuffix(n.horse.trim().toLowerCase()))
-    );
-    if (!state.trainers.length && !untrackedHorseNames.size) {
-      const empty = { checked: 0, sent: 0 };
-      await recordEntryAlertsRun(env, source, empty, runLabel);
-      return empty; // nothing to match against
-    }
-    const trackedLastNames = new Set(state.trainers.map(lastNameKey));
+    // Every non-scratched horse on a card gets included now regardless of
+    // tracked-trainer status (user request 2026-11-02 — see the matching
+    // loop below), so there's no "nothing to match against" case left to
+    // bail out early on.
     const date = entryAlertDateForOffset(dayOffset);
     // The real Cron Trigger only ever uses dayOffset 0 or 1 (the 7am
     // same-day/day-before checks), so "today"/"tomorrow" covered every
@@ -7333,8 +7316,6 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
         for (const horse of race.horses || []) {
           checked++;
           if (horse.scratched) continue;
-          const trainerTracked = horse.trainer && trackedLastNames.has(lastNameKey(horse.trainer));
-          const hasUntrackedNote = untrackedHorseNames.has(stripHorseCountrySuffix((horse.name || "").trim().toLowerCase()));
           const recapsRaw = recapIndex[normalizeHorseNameForRecap(horse.name)] || [];
           const recaps = [];
           for (const r of recapsRaw) {
@@ -7346,18 +7327,13 @@ async function runEntryAlerts(env, source = "manual", { dayOffset = 0, runLabel 
             // iteration happens to be processing.
             recaps.push({ ...r, fullCardRecap: await readFullCardRecapForDate(env, r.track, r.date, fullCardRecapCache) });
           }
-          // A race recap is its own independent reason to include a horse —
-          // it doesn't require a tracked trainer or an existing note, since
-          // the whole point is surfacing "here's how this horse's last
-          // recorded race actually went" even for a horse nobody's
-          // otherwise tracking.
-          if (!trainerTracked && !hasUntrackedNote && !recaps.length) continue;
-          // Only worth including if there's actually something to show —
-          // notes OR recaps — not dedup-marked when skipped for this reason
-          // (see below), so a note/recap added later that same race day
-          // before the 8am window still gets caught at the next run.
+          // Every non-scratched horse gets listed regardless of whether it
+          // has a tracked trainer, a note, or a recap — user request
+          // 2026-11-02: card/post/name/trainer/jockey/odds is useful on its
+          // own, with notes/recaps layered on top when they genuinely
+          // exist. Used to skip a horse entirely here when nothing matched,
+          // which is the behavior change being reversed.
           const notes = notesForHorse(state.notes, horse.trainer, horse.name);
-          if (!notes.length && !recaps.length) continue;
           const key = raceNotifyKvKey(track, date, race.raceNumber, horse.name, runLabel);
           const already = await env.STABLE_KV.get(key);
           if (already) continue;
