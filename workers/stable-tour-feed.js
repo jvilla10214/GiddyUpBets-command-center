@@ -1184,6 +1184,13 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === "/notes/extract-quotes" && request.method === "POST") {
       const body = await request.json().catch(() => ({}));
       const trainers = await readTrainers(env);
+      // Every horse name that's ever appeared on a stored note — the same
+      // "known horse" lexicon nyraHorsesInArticle() already uses for the
+      // NYRA News extractor (see that function's own comment) — reused here
+      // so a manually pasted quote can get its horse guessed from the
+      // paragraph's own text, not just the article title. Repeats kept
+      // deliberately: nyraLexiconRe()'s one-word-name threshold counts them.
+      const knownHorseNames = (await readNotes(env)).map((n) => n.horse).filter(Boolean);
       let bodyText = (body.bodyText || "").trim();
       let pageTitle = (body.title || "").trim();
       const link = (body.link || "").trim();
@@ -1217,8 +1224,11 @@ async function handleRequest(request, env, ctx) {
       }
 
       if (!bodyText) return json({ error: "Missing bodyText or a fetchable link" }, 400);
-      const candidates = extractManualQuoteCandidates(bodyText, trainers);
+      const candidates = extractManualQuoteCandidates(bodyText, trainers, knownHorseNames);
       const paragraphs = bodyText.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+      // Title-based guess still offered as a whole-article fallback — used
+      // by the client only for a candidate that didn't get its own
+      // per-paragraph horseGuess from extractManualQuoteCandidates above.
       const horseGuess = pageTitle ? guessHorseFromTitleSafely(pageTitle, paragraphs, trainers) : null;
       return json({ candidates, horseGuess }, 200, { "Cache-Control": "no-store" });
     }
@@ -10095,8 +10105,18 @@ function autoTrackUnverifiedSection(state, section, sourceTag) {
 // expanded), colon-attribution with no verb, and quote-then-em-dash-name.
 // Still just generates editable candidate cards for a human to confirm/
 // discard — a looser regex here is low-risk, not a direct-to-storage write.
-function extractManualQuoteCandidates(bodyText, trackedTrainers) {
+function extractManualQuoteCandidates(bodyText, trackedTrainers, knownHorseNames = []) {
   const paragraphs = bodyText.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  // Same known-horse lexicon nyraHorsesInArticle() uses (see this
+  // function's caller) — lets a candidate's horse field get pre-filled from
+  // its OWN paragraph's text instead of leaving every single candidate
+  // blank (the only horse guess available before this was a single
+  // whole-article title guess, useless for a manual paste with no title at
+  // all, and useless once an article covers more than one horse). Only
+  // trusted when exactly one distinct known horse turns up in that
+  // paragraph — same "no guess beats a wrong guess" rule used everywhere
+  // else in this app's auto-extraction.
+  const lex = knownHorseNames.length ? nyraLexiconRe(knownHorseNames) : null;
   const NAME = "[A-Z][A-Za-z.’'-]+(?:\\s[A-Z][A-Za-z.’'-]+){0,2}";
   const VERB = "(?:said|noted|added|wrote|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
   const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*(${NAME})\\s+${VERB}\\b`, "g");
@@ -10123,12 +10143,21 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers) {
     for (const m of para.matchAll(colonRe)) found.push({ quote: m[2].trim(), rawName: m[1].trim() });
     for (const m of para.matchAll(dashFirstRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
     for (const m of para.matchAll(invertedRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
+    let horseGuess = null;
+    if (lex) {
+      const matches = new Set();
+      for (const m of nyraNorm(para).matchAll(lex.re)) {
+        const display = lex.byNorm.get(m[0]);
+        if (display) matches.add(display);
+      }
+      if (matches.size === 1) horseGuess = [...matches][0];
+    }
     for (const { quote, rawName } of found) {
       const dedupeKey = `${quote}|${rawName}`;
       if (seenSpans.has(dedupeKey)) continue;
       seenSpans.add(dedupeKey);
       const resolved = resolveTrackedTrainer(rawName, trackedTrainers);
-      candidates.push({ rawName, resolvedTrainer: resolved, quote });
+      candidates.push({ rawName, resolvedTrainer: resolved, quote, horseGuess });
     }
   }
   return candidates;

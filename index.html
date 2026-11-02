@@ -10255,10 +10255,14 @@
   });
   $("stableImportCancelBtn").addEventListener("click", closeStableImportArticleForm);
 
-  function renderStableImportCandidate(c, horseGuess, index){
+  function renderStableImportCandidate(c, fallbackHorseGuess, index){
     const safeQuote = escapeHtml(c.quote);
     const safeTrainer = escapeHtml(c.resolvedTrainer || c.rawName || "");
-    const safeHorse = escapeHtml(horseGuess || "");
+    // Per-candidate guess (from the worker scanning THIS quote's own
+    // paragraph against every known horse name) wins when it exists — the
+    // whole-article title guess is only a fallback for the (now rarer)
+    // case where that paragraph scan came up empty or ambiguous.
+    const safeHorse = escapeHtml(c.horseGuess || fallbackHorseGuess || "");
     return `
       <div class="stable-import-card" data-index="${index}">
         <div class="bias-form-row">
