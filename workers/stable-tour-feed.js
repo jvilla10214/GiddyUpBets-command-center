@@ -621,25 +621,34 @@ const DMTC_PP_STATS_URL_BY_TRACK = { delmar: "https://www.dmtc.com/handicapping/
 // Lock this to the dashboard's real origin once it has one; "*" is fine
 // while testing but defeats the point of CORS as an access control.
 const ALLOWED_ORIGIN = "*";
-const MAX_ARTICLES_PER_RUN = 8; // caps subrequests/runtime per poll
+// Raised across every per-run article cap in this file 2026-11-13 (user's
+// explicit call: these should catch EVERY quote, not a conservative slice)
+// — all of the original numbers were sized around the free-plan 50-
+// subrequest-per-invocation ceiling (see each job's own old comment: "well
+// within a Worker's subrequest budget" etc.), which stopped being the real
+// constraint once this account moved to Workers Paid 2026-10-09 (10,000
+// subrequests/invocation — see project_workers_paid_upgrade memory). A
+// twice-daily cron with a small per-run cap silently drops anything past
+// that cap with no drain cursor to catch up later (unlike SmartPony's own
+// job, which does have one) — confirmed real 2026-11-13: that's exactly
+// why TDN Notebook, BloodHorse, and TDN Main all ran "ok" every single
+// time but still produced almost nothing, long before the separate
+// Saratoga-tag bug was found. Still well inside the new subrequest ceiling
+// even at these much higher numbers (a few hundred fetches/run, tops).
+const MAX_ARTICLES_PER_RUN = 40; // was 8
 // DRF specifically gets a higher cap (job #19) since it now merges THREE
 // listing sources (the news sitemap, /news/all-news page 1, and the
 // Saratoga track hub page — see each URL constant's own comment),
-// round-robined one-from-each rather than concatenated. Raised from 24 to
-// 36 (= 12 full rounds of 3) when the Saratoga source was added — it alone
-// can have 70+ articles spanning the whole meet, easily the largest of the
-// three, so it needs real headroom to make progress across runs. Still
-// well within a Worker's subrequest budget (36 articles + 3 listing
-// fetches).
-const DRF_MAX_ARTICLES_PER_RUN = 36;
+// round-robined one-from-each rather than concatenated.
+const DRF_MAX_ARTICLES_PER_RUN = 60; // was 36
 // NYRA News (job #20) also gets its own higher cap, same reasoning as DRF
 // above — confirmed real gap: on a single busy stakes day (e.g. Travers
-// day) NYRA can publish 6+ press releases, easily blowing past the shared
-// 8-item cap between one 6-hour poll and the next and permanently skipping
-// real post-race recaps (including the Travers winner itself, confirmed
-// missing 2026-08-30) since nothing re-checks articles that fall off the
-// bottom of a fetch once a newer batch pushes them out of the top N.
-const NYRA_NEWS_MAX_ARTICLES_PER_RUN = 20;
+// day) NYRA can publish 6+ press releases, easily blowing past a small
+// per-run cap between one poll and the next and permanently skipping real
+// post-race recaps (including the Travers winner itself, confirmed missing
+// 2026-08-30) since nothing re-checks articles that fall off the bottom of
+// a fetch once a newer batch pushes them out of the top N.
+const NYRA_NEWS_MAX_ARTICLES_PER_RUN = 40; // was 20
 // A UA that identifies itself as a bot gets a flat 403 from this site's WAF
 // on individual article pages (confirmed directly: identical request,
 // bot-labeled UA -> 403, a real browser's UA -> 200) — the feed endpoint
@@ -7630,9 +7639,24 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
   // The actual "this is a real quote" signal — verified this is what tells
   // a quote-bearing preview apart from a pure workout-report article (which
   // has plenty of "trained by X" and zero of this).
+  // Widened 2026-11-13 (user's explicit call — every source should catch
+  // every quote, imperfect formatting included): the original pattern only
+  // matched quote-then-single-surname-then-literal-"said", no comma even
+  // allowed between the quote and the name, no curly quotes, no other
+  // verb, no name-first order, no colon style. Same patterns proven out
+  // for extractGenericQuoteSections()/the manual-paste feature, adapted
+  // here to still capture just the SURNAME (this function's own
+  // mentionsByTrainer map is keyed by last name only).
   const quotedLastNames = new Set();
+  const HRN_NAME = "[A-Z][A-Za-z.'’-]+(?:\\s[A-Z][A-Za-z.'’-]+){0,2}";
+  const HRN_VERB = "(?:said|noted|added|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
+  const hrnQuoteFirstRe = new RegExp(`[“"]([^”"]{8,400})[”"],?\\s+(${HRN_NAME})\\s+${HRN_VERB}\\b`, "g");
+  const hrnNameFirstRe = new RegExp(`\\b(${HRN_NAME})\\s+${HRN_VERB}[,:]?\\s*[“"]([^”"]{8,400})[”"]`, "g");
+  const hrnColonRe = new RegExp(`\\b(${HRN_NAME}):\\s*[“"]([^”"]{8,400})[”"]`, "g");
   for (const p of paras) {
-    for (const qm of p.plain.matchAll(/"[^"]{8,400}"\s+([A-Z][A-Za-z'’-]+)\s+said\b/g)) quotedLastNames.add(qm[1]);
+    for (const qm of p.plain.matchAll(hrnQuoteFirstRe)) quotedLastNames.add(qm[2].trim().split(/\s+/).pop());
+    for (const qm of p.plain.matchAll(hrnNameFirstRe)) quotedLastNames.add(qm[1].trim().split(/\s+/).pop());
+    for (const qm of p.plain.matchAll(hrnColonRe)) quotedLastNames.add(qm[1].trim().split(/\s+/).pop());
   }
   if (!quotedLastNames.size) return [];
 
@@ -9972,7 +9996,7 @@ const BLOODHORSE_FEED_URLS = [
   "https://www.bloodhorse.com/horse-racing/feeds/news/thoroughbred-breaking-news",
   "https://www.bloodhorse.com/horse-racing/feeds/news/todays-headlines",
 ];
-const BLOODHORSE_MAX_ARTICLES_PER_RUN = 15;
+const BLOODHORSE_MAX_ARTICLES_PER_RUN = 40; // was 15 — see MAX_ARTICLES_PER_RUN's own comment on why these all went up 2026-11-13
 
 // Title-level topic filter, checked before extractNyraTitleHorse() (and
 // before the article fetch, saving a wasted request) — added after
@@ -10010,8 +10034,31 @@ function bloodhorseSeenKvKey(articleId) {
 // first written under — genuinely generic given paragraphs/a title
 // horse guess/the tracked trainer list, so job #25 (TDN main feed) reuses
 // it as-is rather than duplicating the same regex pair a second time.
-function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainers, trackedJockeys = []) {
-  if (!titleHorseGuess) return [];
+function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainers, trackedJockeys = [], knownHorseNames = []) {
+  // Fallback for a headline that doesn't lead with the horse at all (a
+  // trainer-led or event-led title — "Aidan O'Brien Eyes Group 1 Record
+  // With Lambourn In Bahrain" never produces a usable extractNyraTitleHorse()
+  // guess) — added 2026-11-13, user's explicit call to stop silently
+  // skipping real quote-bearing articles just because their headline isn't
+  // horse-first. Scans the WHOLE body against every horse name that's ever
+  // appeared on a stored note (same lexicon nyraHorsesInArticle() and the
+  // manual-paste horse-guess both already use), trusted only when exactly
+  // one distinct known horse turns up — same "no guess beats a wrong guess"
+  // bar as every other fallback in this file.
+  let horseGuess = titleHorseGuess;
+  if (!horseGuess && knownHorseNames.length) {
+    const lex = nyraLexiconRe(knownHorseNames, 1);
+    const matches = new Set();
+    for (const para of paragraphs) {
+      for (const m of nyraNorm(para).matchAll(lex.re)) {
+        const display = lex.byNorm.get(m[0].toLowerCase());
+        if (display) matches.add(display);
+      }
+    }
+    if (matches.size === 1) horseGuess = [...matches][0];
+  }
+  if (!horseGuess) return [];
+  titleHorseGuess = horseGuess;
   // Body cross-check: the guessed phrase must actually appear somewhere in
   // the article's own paragraphs, verbatim, or it's discarded — added
   // after testing job #25 (TDN main feed) against a real random batch of
@@ -10055,9 +10102,22 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   // real article that had 18 clearly-quoted paragraphs); fixed to require
   // the name immediately after the quote's closing punctuation, verb last.
   // nameFirstRe covers the other real style, `Name said, "Quote."`.
+  // Widened 2026-11-13 (user's explicit call: catch every quote even with
+  // imperfect formatting) — same patterns already proven out for the
+  // manual-paste feature's extractManualQuoteCandidates(): more verbs
+  // (explained/continued/commented/stated/told X), a bare colon
+  // attribution with no verb at all ("Name: 'Quote'"), a trailing em-dash
+  // byline, and the inverted AP-style "Quote," said Name (verb before the
+  // name, which neither quoteFirstRe nor nameFirstRe below can match since
+  // both expect the verb immediately next to the name).
   const sections = {}; // "trainer:key" / "jockey:key" -> { role, name, parts: [] }
-  const quoteFirstRe = /[“"]([^”"]{8,600})[”"],?\s*([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)\b/g;
-  const nameFirstRe = /\b([A-Z][A-Za-z.’'-]+(?:\s[A-Z][A-Za-z.’'-]+){0,2})\s+(?:said|noted|added)[,:]?\s*[“"]([^”"]{8,600})[”"]/g;
+  const NAME_RUN = "[A-Z][A-Za-z.’'-]+(?:\\s[A-Z][A-Za-z.’'-]+){0,2}";
+  const VERB_RUN = "(?:said|noted|added|wrote|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
+  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*(${NAME_RUN})\\s+${VERB_RUN}\\b`, "g");
+  const nameFirstRe = new RegExp(`\\b(${NAME_RUN})\\s+${VERB_RUN}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  const colonAttributionRe = new RegExp(`\\b(${NAME_RUN}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  const dashBylineRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*(${NAME_RUN})\\b`, "g");
+  const invertedVerbFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s+(?:said|added|noted|explained|continued|commented|stated)\\s+(${NAME_RUN})\\b`, "g");
   // A sentence that opens with a capitalized pronoun directly before the
   // attribution verb ("She said, '...'") matches either regex exactly like
   // a real name would, and since 2026-10-11's auto-track-everyone-
@@ -10076,6 +10136,9 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
     const found = [];
     for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
+    for (const m of para.matchAll(colonAttributionRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
+    for (const m of para.matchAll(dashBylineRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
+    for (const m of para.matchAll(invertedVerbFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
     for (const { quote, name } of found) {
       if (COMMON_PRONOUN_RE.test(name)) continue;
       // Trainer checked first, same priority order as before this jockey
@@ -10343,8 +10406,14 @@ async function runBloodHorseImport(env) {
       try {
         if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(item.title)) continue;
         if (NON_RACE_SIGNAL_RE.test(item.title)) continue;
+        // No "if (!titleHorseGuess) continue" here anymore (removed
+        // 2026-11-13) — a trainer-led or event-led headline still gets its
+        // body fetched now, since extractGenericQuoteSections() can fall
+        // back to a known-horse lexicon scan of the body itself. Only a
+        // title that also fails the NON_RACE/retired-horse signal checks
+        // above AND the lexicon fallback inside that function ends up with
+        // nothing, same as before, just a wider net.
         const titleHorseGuess = extractNyraTitleHorse(item.title);
-        if (!titleHorseGuess) continue;
         const articleRes = await fetch(item.link, {
           headers: { "User-Agent": BROWSER_UA },
           cf: { cacheTtl: 3600, cacheEverything: true },
@@ -10358,7 +10427,7 @@ async function runBloodHorseImport(env) {
           .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
           .filter(Boolean);
         if (!paragraphs.length) continue;
-        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys, notes.map((n) => n.horse).filter(Boolean));
         for (const section of sections) {
           if (autoTrackUnverifiedSection(state, section, "bloodhorse-auto-unverified")) rosterChanged = true;
           for (const horseName of section.horseNames) {
@@ -10434,7 +10503,7 @@ async function runBloodHorseImport(env) {
 // WordPress permalink slug doesn't change once published, so it's just as
 // stable a per-article key as a numeric ID would be.
 const TDN_MAIN_FEED_URL = "https://www.thoroughbreddailynews.com/feed/";
-const TDN_MAIN_MAX_ARTICLES_PER_RUN = 15;
+const TDN_MAIN_MAX_ARTICLES_PER_RUN = 40; // was 15 — see MAX_ARTICLES_PER_RUN's own comment on why these all went up 2026-11-13
 
 function tdnMainSlugFromLink(link) {
   const m = /\/([a-z0-9-]+)\/?$/i.exec((link || "").split(/[?#]/)[0]);
@@ -10497,8 +10566,9 @@ async function runTdnMainImport(env) {
       try {
         if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(item.title)) continue;
         if (NON_RACE_SIGNAL_RE.test(item.title)) continue;
+        // No "if (!titleHorseGuess) continue" here anymore (removed
+        // 2026-11-13) — see BloodHorse's identical comment on why.
         const titleHorseGuess = extractNyraTitleHorse(item.title);
-        if (!titleHorseGuess) continue;
         const articleRes = await fetch(item.link, {
           headers: { "User-Agent": BROWSER_UA },
           cf: { cacheTtl: 3600, cacheEverything: true },
@@ -10511,7 +10581,7 @@ async function runTdnMainImport(env) {
           .map((pm) => decodeEntities(pm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim())
           .filter(Boolean);
         if (!paragraphs.length) continue;
-        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys);
+        const sections = extractGenericQuoteSections(paragraphs, titleHorseGuess, state.trainers, state.jockeys, notes.map((n) => n.horse).filter(Boolean));
         for (const section of sections) {
           if (autoTrackUnverifiedSection(state, section, "tdnmain-auto-unverified")) rosterChanged = true;
           for (const horseName of section.horseNames) {
@@ -10576,7 +10646,7 @@ async function runTdnMainImport(env) {
 // across three other sources, so there was no reason to write new
 // extraction logic just because the HTML tags differ.
 const SKYSPORTS_NEWS_LIST_URL = "https://www.skysports.com/racing/news";
-const SKYSPORTS_MAX_ARTICLES_PER_RUN = 15;
+const SKYSPORTS_MAX_ARTICLES_PER_RUN = 30; // was 15 — see MAX_ARTICLES_PER_RUN's own comment on why these all went up 2026-11-13 (kept lower than the US sources — see feedback_nyra_track_priority memory, UK/Intl tracks are opportunistic-only here)
 
 function skysportsArticleIdFromLink(link) {
   const m = /\/racing\/news\/(\d+)\//.exec(link || "");
@@ -10698,8 +10768,10 @@ async function runSkySportsImport(env) {
         if (!title) continue;
         if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(title)) continue;
         if (NON_RACE_SIGNAL_RE.test(title)) continue;
+        // No "if (!titleHorseGuess) continue" here anymore (removed
+        // 2026-11-13) — see BloodHorse's identical comment on why; the
+        // body's already fetched by this point anyway for this source.
         const titleHorseGuess = skysportsTitleHorseGuess(title, state.trainers, state.jockeys);
-        if (!titleHorseGuess) continue;
         const bodyHtml = extractSkySportsArticleBody(html);
         if (!bodyHtml) continue;
         const paragraphs = [...bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)]
@@ -10723,7 +10795,7 @@ async function runSkySportsImport(env) {
         // article at once rather than isolating just the retirement-
         // related paragraph, a real but much smaller risk than the total
         // extraction failure this fixes.
-        const sections = extractGenericQuoteSections([paragraphs.join(" ")], titleHorseGuess, state.trainers, state.jockeys);
+        const sections = extractGenericQuoteSections([paragraphs.join(" ")], titleHorseGuess, state.trainers, state.jockeys, notes.map((n) => n.horse).filter(Boolean));
         for (const section of sections) {
           if (autoTrackUnverifiedSection(state, section, "skysports-auto-unverified")) rosterChanged = true;
           for (const horseName of section.horseNames) {
