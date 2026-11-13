@@ -6444,7 +6444,30 @@ async function fetchSportingLifeResultsDay(track, date) {
 // client decides whether a detected name matches a trainer it's already
 // tracking; this endpoint doesn't know or care about that, and (unlike job
 // #2) never asks the client to track a NEW trainer it hasn't already added.
-const TDN_NOTEBOOK_FEED_URL = "https://www.thoroughbreddailynews.com/tag/saratoga-notebook/feed/";
+//
+// Switched off the "saratoga-notebook" tag 2026-11-13 — confirmed real:
+// that tag's own feed stopped posting the moment Saratoga's meet closed in
+// September (last real item 9/5/26), and TDN doesn't maintain an
+// equivalent per-track tag for other tracks — checked "belmont-notebook"
+// (1 stale item from the June Belmont Stakes week, not the current fall
+// meet), "aqueduct-notebook"/"keeneland-notebook"/etc. (0 items each) —
+// "Notebook" is a Saratoga-specific branded column, not a per-track
+// convention. User's explicit call: every source should cover every
+// track, not silently go dead once one specific meet ends. This parser's
+// own signals (a "trainer NAME"/"trained by NAME" phrase, horse names in
+// <strong>) aren't Saratoga-specific at all — they're just TDN's regular
+// house style — so pointing it at the same all-track main feed tdn-main
+// already uses lets it keep working regardless of which meet is live.
+// The two jobs do double-fetch the same articles now (different parsers,
+// genuinely different catch — this one handles bundled multi-trainer
+// blurbs tdn-main's single-title-horse-guess approach can't), accepted as
+// a minor cost next to the alternative of this job going fully dark for
+// 2+ months at a time between Saratoga meets.
+// (Same URL as TDN_MAIN_FEED_URL below — kept as a literal here rather than
+// referencing that constant, since this one is defined earlier in the file
+// and a const temporal-dead-zone reference to one declared later would
+// throw at module load.)
+const TDN_NOTEBOOK_FEED_URL = "https://www.thoroughbreddailynews.com/feed/";
 const TDN_PROXIMITY_WINDOW = 1; // paragraphs — see the tuning story above
 
 function extractTdnArticleBody(html) {
