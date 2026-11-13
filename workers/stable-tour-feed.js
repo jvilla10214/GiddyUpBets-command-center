@@ -7640,7 +7640,22 @@ function extractHrnEntriesTable(tableHtml) {
   return map;
 }
 
-function extractHrnSections(bodyHtml, entriesTableHtml) {
+function extractHrnSections(bodyHtml, entriesTableHtml, knownHorseNames = []) {
+  // Known-horse lexicon fallback for a paragraph's horseNames — confirmed
+  // real 2026-11-13: this function's ONLY horse-identification signal was
+  // an internal link to that horse's own HRN profile page, which simply
+  // doesn't exist for a horse HRN hasn't built a page for (confirmed
+  // directly: a real, verified, well-formed quote about Hong Kong's Ka
+  // Ying Rising — "He was really good," trainer David Hayes said — had
+  // zero HRN horse-page links anywhere in the article; every link found
+  // was an unrelated "famous horses" sidebar widget: American Pharoah,
+  // Secretariat, Zenyatta, none of them this article's actual subject).
+  // Scans each paragraph's plain text against every horse name that's
+  // ever appeared on a stored note, same lexicon approach used elsewhere
+  // in this file — added alongside the hyperlink signal, not instead of
+  // it, since the hyperlink is still a real, trustworthy signal when
+  // present.
+  const lex = knownHorseNames.length ? nyraLexiconRe(knownHorseNames, 1) : null;
   const paras = [];
   for (const m of bodyHtml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)) {
     const inner = m[1];
@@ -7650,6 +7665,12 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
     for (const sm of inner.matchAll(/<a href="https:\/\/www\.horseracingnation\.com\/horse\/[^"]+">(?:<strong>)?([^<]{2,50}?)(?:<\/strong>)?<\/a>/g)) {
       const name = decodeEntities(sm[1]).trim();
       if (name && !horseNames.includes(name)) horseNames.push(name);
+    }
+    if (lex) {
+      for (const lm of nyraNorm(plain).matchAll(lex.re)) {
+        const display = lex.byNorm.get(lm[0].toLowerCase());
+        if (display && !horseNames.includes(display)) horseNames.push(display);
+      }
     }
     paras.push({ plain, horseNames });
   }
@@ -7759,7 +7780,7 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
   });
 }
 
-async function fetchHrnNews() {
+async function fetchHrnNews(knownHorseNames = []) {
   const listRes = await fetch(HRN_NEWS_LIST_URL, {
     headers: { "User-Agent": BROWSER_UA },
     cf: { cacheTtl: 300, cacheEverything: true },
@@ -7791,7 +7812,7 @@ async function fetchHrnNews() {
     if (!articleRes.ok) continue;
     const html = await articleRes.text();
     const { prose, entriesTable } = extractHrnArticleBody(html);
-    const sections = extractHrnSections(prose, entriesTable);
+    const sections = extractHrnSections(prose, entriesTable, knownHorseNames);
     if (!sections.length) continue;
     const pubDateMatch = html.match(/<time[^>]*datetime="([^"]+)"/);
     articles.push({
@@ -11104,7 +11125,7 @@ async function runHrnNewsImport(env) {
     state.jockeyMeta = jockeyMetaRaw ? JSON.parse(jockeyMetaRaw) : {};
     let addedAny = false;
     let rosterChanged = false;
-    const data = await fetchHrnNews();
+    const data = await fetchHrnNews(notes.map((n) => n.horse).filter(Boolean));
     for (const article of data.articles || []) {
       for (const section of article.sections || []) {
         // Trainer checked first, jockey only as a fallback — see
