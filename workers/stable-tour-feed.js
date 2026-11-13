@@ -2234,6 +2234,24 @@ async function handleRequest(request, env, ctx) {
       await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
       return json({ cleared: listed.keys.length }, 200, { "Cache-Control": "no-store" });
     }
+    // Same reasoning as /debug-reset-skysports-seen above, for the other
+    // four sources widened 2026-11-13 (known-horse fallback + more quote
+    // formats) — every article those jobs already walked past under the
+    // OLD narrower extraction got permanently marked seen despite the new
+    // logic now being able to find a real quote in some of them. One combined
+    // route (not four separate ones) since all four needed clearing at the
+    // same time for the same reason; still safe to re-run individually by
+    // re-running just the jobs that still show a gap.
+    if (url.pathname === "/debug-reset-widened-sources-seen" && request.method === "GET") {
+      const prefixes = ["bloodhorse:seen:", "tdnmain:seen:", "tdnnb:seen:", "hrn:seen:"];
+      const cleared = {};
+      for (const prefix of prefixes) {
+        const listed = await env.STABLE_KV.list({ prefix });
+        await Promise.all(listed.keys.map((k) => env.STABLE_KV.delete(k.name)));
+        cleared[prefix] = listed.keys.length;
+      }
+      return json({ cleared }, 200, { "Cache-Control": "no-store" });
+    }
     if (url.pathname === "/debug-run-smartpony" && request.method === "GET") {
       const result = await runSmartPonyImport(env);
       await recordPipelineRun(env, "smartpony", { ok: true, summary: result });
