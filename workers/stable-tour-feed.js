@@ -7668,9 +7668,19 @@ function extractHrnSections(bodyHtml, entriesTableHtml) {
   const quotedLastNames = new Set();
   const HRN_NAME = "[A-Z][A-Za-z.'’-]+(?:\\s[A-Z][A-Za-z.'’-]+){0,2}";
   const HRN_VERB = "(?:said|noted|added|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
-  const hrnQuoteFirstRe = new RegExp(`[“"]([^”"]{8,400})[”"],?\\s+(${HRN_NAME})\\s+${HRN_VERB}\\b`, "g");
-  const hrnNameFirstRe = new RegExp(`\\b(${HRN_NAME})\\s+${HRN_VERB}[,:]?\\s*[“"]([^”"]{8,400})[”"]`, "g");
-  const hrnColonRe = new RegExp(`\\b(${HRN_NAME}):\\s*[“"]([^”"]{8,400})[”"]`, "g");
+  // Confirmed real 2026-11-13, the actual reason this job's checked count
+  // kept coming back 0 even after the widening above: HRN's own dominant
+  // house style is `"Quote," trainer NAME said` — a role noun sits BETWEEN
+  // the quote and the name ("trainer David Hayes said", not "David Hayes
+  // said"), which no pattern here (old or newly widened) accounted for, so
+  // the name capture's required leading capital letter never lined up and
+  // every single quote in a real, verified article (Ka Ying Rising/David
+  // Hayes, confirmed directly) silently matched nothing. Optional, not
+  // captured into the name itself.
+  const HRN_ROLE_PREFIX = "(?:(?:[Tt]rainer|[Jj]ockey|[Oo]wner|[Cc]o-trainer|[Aa]ssistant(?:\\s+trainer)?)\\s+)?";
+  const hrnQuoteFirstRe = new RegExp(`[“"]([^”"]{8,400})[”"],?\\s+${HRN_ROLE_PREFIX}(${HRN_NAME})\\s+${HRN_VERB}\\b`, "g");
+  const hrnNameFirstRe = new RegExp(`\\b${HRN_ROLE_PREFIX}(${HRN_NAME})\\s+${HRN_VERB}[,:]?\\s*[“"]([^”"]{8,400})[”"]`, "g");
+  const hrnColonRe = new RegExp(`\\b${HRN_ROLE_PREFIX}(${HRN_NAME}):\\s*[“"]([^”"]{8,400})[”"]`, "g");
   for (const p of paras) {
     for (const qm of p.plain.matchAll(hrnQuoteFirstRe)) quotedLastNames.add(qm[2].trim().split(/\s+/).pop());
     for (const qm of p.plain.matchAll(hrnNameFirstRe)) quotedLastNames.add(qm[1].trim().split(/\s+/).pop());
@@ -10131,11 +10141,18 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   const sections = {}; // "trainer:key" / "jockey:key" -> { role, name, parts: [] }
   const NAME_RUN = "[A-Z][A-Za-z.’'-]+(?:\\s[A-Z][A-Za-z.’'-]+){0,2}";
   const VERB_RUN = "(?:said|noted|added|wrote|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
-  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*(${NAME_RUN})\\s+${VERB_RUN}\\b`, "g");
-  const nameFirstRe = new RegExp(`\\b(${NAME_RUN})\\s+${VERB_RUN}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
-  const colonAttributionRe = new RegExp(`\\b(${NAME_RUN}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
-  const dashBylineRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*(${NAME_RUN})\\b`, "g");
-  const invertedVerbFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s+(?:said|added|noted|explained|continued|commented|stated)\\s+(${NAME_RUN})\\b`, "g");
+  // Optional role noun between the quote/verb and the name ("trainer NAME
+  // said", "said trainer NAME") — confirmed real 2026-11-13, the actual
+  // reason HRN's own extractor was matching zero quotes even after the
+  // verb/format widening above: this house style is common across sources,
+  // not HRN-specific, see extractHrnSections()'s identical comment for the
+  // real example that caught it.
+  const ROLE_PREFIX = "(?:(?:[Tt]rainer|[Jj]ockey|[Oo]wner|[Cc]o-trainer|[Aa]ssistant(?:\\s+trainer)?)\\s+)?";
+  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*${ROLE_PREFIX}(${NAME_RUN})\\s+${VERB_RUN}\\b`, "g");
+  const nameFirstRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME_RUN})\\s+${VERB_RUN}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  const colonAttributionRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME_RUN}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  const dashBylineRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*${ROLE_PREFIX}(${NAME_RUN})\\b`, "g");
+  const invertedVerbFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s+(?:said|added|noted|explained|continued|commented|stated)\\s+${ROLE_PREFIX}(${NAME_RUN})\\b`, "g");
   // A sentence that opens with a capitalized pronoun directly before the
   // attribution verb ("She said, '...'") matches either regex exactly like
   // a real name would, and since 2026-10-11's auto-track-everyone-
@@ -10278,21 +10295,27 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers, knownHorseNames
   const lex = knownHorseNames.length ? nyraLexiconRe(knownHorseNames, 1) : null;
   const NAME = "[A-Z][A-Za-z.’'-]+(?:\\s[A-Z][A-Za-z.’'-]+){0,2}";
   const VERB = "(?:said|noted|added|wrote|explained|continued|commented|stated|told\\s+\\w[\\w .]*)";
-  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*(${NAME})\\s+${VERB}\\b`, "g");
-  const nameFirstRe = new RegExp(`\\b(${NAME})\\s+${VERB}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  // Optional role noun between the quote/verb and the name ("trainer NAME
+  // said", "said trainer NAME") — confirmed real 2026-11-13 (see
+  // extractHrnSections()'s identical comment for the real example that
+  // caught this): common enough across real articles that a pasted one can
+  // easily hit it too. Not captured into the name itself.
+  const ROLE_PREFIX = "(?:(?:[Tt]rainer|[Jj]ockey|[Oo]wner|[Cc]o-trainer|[Aa]ssistant(?:\\s+trainer)?)\\s+)?";
+  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*${ROLE_PREFIX}(${NAME})\\s+${VERB}\\b`, "g");
+  const nameFirstRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME})\\s+${VERB}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
   // "Name: "Quote"" — no verb at all, the plain interview-transcript/
   // notebook style this app's own Kentucky HBPA/NYRA Broadcast pipelines
   // already produce (see e.g. the Brad Cox Q&A notes) and that a human
   // pasting a similar transcript runs into constantly.
-  const colonRe = new RegExp(`\\b(${NAME}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
+  const colonRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
   // "Quote" — Name — a trailing em/en-dash byline, common in pull-quotes
   // and some wire-style copy.
-  const dashFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*(${NAME})\\b`, "g");
+  const dashFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*${ROLE_PREFIX}(${NAME})\\b`, "g");
   // "Quote," said Name — the inverted AP-style order (verb BEFORE the name,
   // itself right after the quote) that plain name-first/quote-first
   // attribution misses entirely since those both expect the verb right
   // next to the name, not between the quote and the name.
-  const invertedRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s+(?:said|added|noted|explained|continued|commented|stated)\\s+(${NAME})\\b`, "g");
+  const invertedRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s+(?:said|added|noted|explained|continued|commented|stated)\\s+${ROLE_PREFIX}(${NAME})\\b`, "g");
   const candidates = [];
   const seenSpans = new Set(); // dedupe a quote matched by more than one pattern (rare but possible on ambiguous punctuation)
   for (const para of paragraphs) {
