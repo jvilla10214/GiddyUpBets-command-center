@@ -47,6 +47,20 @@ STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 PROCESSED_VIDEO_IDS_PATH = os.path.join(STATE_DIR, "processed_video_ids.json")
 DROPPED_QUOTES_PATH = os.path.join(STATE_DIR, "dropped_quotes.json")
 
+# Guards against a local manual run (e.g. a backfill via `nohup python3
+# run.py`) racing the scheduled/workflow_dispatch GitHub Actions job — both
+# land on this same self-hosted Mac, and the workflow's own `concurrency:`
+# group only serializes GitHub Actions runs against each other, not a bare
+# local invocation. Confirmed real 2026-11-20: a manual catch-up run and a
+# workflow_dispatch run both independently discovered the same "new"
+# broadcasts (neither had committed processed_video_ids.json yet) and wrote
+# ~115 duplicate Maggie-paddock/interview notes between them before anyone
+# noticed. LOCK_STALE_SECONDS is comfortably past this workflow's own
+# `timeout-minutes: 240` so a crashed run's stale lock doesn't block every
+# future run forever.
+LOCK_PATH = os.path.join(STATE_DIR, ".run.lock")
+LOCK_STALE_SECONDS = 5 * 60 * 60
+
 TMP_DIR = os.path.join(os.path.dirname(__file__), "tmp")
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 

@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import traceback
 
 import requests
@@ -29,6 +30,48 @@ PIPELINE_JOB_NAME = "nyra-broadcast-quotes"
 
 def log(msg):
     print(msg, flush=True)
+
+
+def acquire_lock():
+    """Refuses to start a second run while one is already in progress — see
+    config.LOCK_PATH's own comment for why this exists (a local manual run
+    and a GitHub Actions run wrote duplicate notes for the same broadcasts
+    2026-11-20 because nothing but this lock can see across both). Returns
+    True if the lock was acquired (caller must release_lock() when done),
+    False if another run holds it."""
+    os.makedirs(config.STATE_DIR, exist_ok=True)
+    if os.path.exists(config.LOCK_PATH):
+        age = time.time() - os.path.getmtime(config.LOCK_PATH)
+        if age < config.LOCK_STALE_SECONDS:
+            try:
+                holder = open(config.LOCK_PATH).read().strip()
+            except OSError:
+                holder = "unknown"
+            log(f"Another run is already in progress (lock held by: {holder}, "
+                f"{round(age / 60)} min old) — exiting without processing anything.")
+            return False
+        log(f"Found a stale lock ({round(age / 3600, 1)}h old, past the "
+            f"{config.LOCK_STALE_SECONDS // 3600}h staleness window) — "
+            "assuming a crashed run and taking over.")
+        os.remove(config.LOCK_PATH)
+    try:
+        # O_EXCL makes the create+check atomic — closes the tiny window a
+        # plain exists-then-write would leave between two runs starting at
+        # almost the same instant.
+        fd = os.open(config.LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        log("Another run just acquired the lock first — exiting without processing anything.")
+        return False
+    with os.fdopen(fd, "w") as f:
+        f.write(f"pid={os.getpid()} started={datetime.datetime.now(datetime.timezone.utc).isoformat()}")
+    return True
+
+
+def release_lock():
+    try:
+        os.remove(config.LOCK_PATH)
+    except FileNotFoundError:
+        pass
 
 
 def report_pipeline_status(ok, summary=None, error=None):
@@ -201,60 +244,69 @@ def main():
         log("ANTHROPIC_API_KEY not set — aborting.")
         sys.exit(1)
 
-    videos, first_run = discover.get_new_broadcasts()
-
-    if first_run:
-        log("First run: seeded state with the current streams listing, nothing transcribed. "
-            "Future runs will only pick up genuinely new broadcasts.")
-        report_pipeline_status(True, summary="first run: seeded state")
+    if not acquire_lock():
+        # Not an error — this is the expected outcome when a scheduled run,
+        # a workflow_dispatch, and/or a local manual run overlap. Exiting 0
+        # keeps GitHub Actions green; report_pipeline_status() isn't called
+        # since the other run already covers (or will cover) this check-in.
         return
+    try:
+        videos, first_run = discover.get_new_broadcasts()
 
-    if not videos:
-        log("No new broadcasts since last run.")
-        report_pipeline_status(True, summary="no new broadcasts")
-        return
+        if first_run:
+            log("First run: seeded state with the current streams listing, nothing transcribed. "
+                "Future runs will only pick up genuinely new broadcasts.")
+            report_pipeline_status(True, summary="first run: seeded state")
+            return
 
-    log(f"{len(videos)} new broadcast(s) to process:")
-    dropped_quotes = load_dropped_quotes()
-    all_summaries = []
-    for v in videos:
-        log(f"- {v['title']}")
-        all_summaries.append(process_broadcast(v, dropped_quotes))
-    save_dropped_quotes(dropped_quotes)
+        if not videos:
+            log("No new broadcasts since last run.")
+            report_pipeline_status(True, summary="no new broadcasts")
+            return
 
-    os.makedirs(config.LOG_DIR, exist_ok=True)
-    log_path = os.path.join(config.LOG_DIR, "last_run.json")
-    with open(log_path, "w") as f:
-        json.dump(all_summaries, f, indent=2)
-    log(f"\nWrote run summary to {log_path}")
+        log(f"{len(videos)} new broadcast(s) to process:")
+        dropped_quotes = load_dropped_quotes()
+        all_summaries = []
+        for v in videos:
+            log(f"- {v['title']}")
+            all_summaries.append(process_broadcast(v, dropped_quotes))
+        save_dropped_quotes(dropped_quotes)
 
-    # A run only counts as a real failure for the dashboard warning when
-    # EVERY broadcast in it errored out (the bot-wall pattern — see
-    # report_pipeline_status's own comment) — one broadcast failing while
-    # others succeed means the infrastructure is fine, nothing to warn
-    # about.
-    errored = [s for s in all_summaries if s.get("status") == "error"]
-    if errored and len(errored) == len(all_summaries):
-        raw_error = errored[0].get("error", "unknown error")
-        # The raw error is a Python traceback with a full yt-dlp command
-        # embedded — accurate for debugging but unreadable on the dashboard.
-        # When it's clearly the bot wall, say that plainly instead; anything
-        # else still shows the raw text so a genuinely new failure mode
-        # isn't hidden behind a wrong label.
-        if transcribe.YOUTUBE_BOT_WALL_RE.search(raw_error):
-            clean_error = "YouTube blocked the download — check the runner / cookies."
+        os.makedirs(config.LOG_DIR, exist_ok=True)
+        log_path = os.path.join(config.LOG_DIR, "last_run.json")
+        with open(log_path, "w") as f:
+            json.dump(all_summaries, f, indent=2)
+        log(f"\nWrote run summary to {log_path}")
+
+        # A run only counts as a real failure for the dashboard warning when
+        # EVERY broadcast in it errored out (the bot-wall pattern — see
+        # report_pipeline_status's own comment) — one broadcast failing while
+        # others succeed means the infrastructure is fine, nothing to warn
+        # about.
+        errored = [s for s in all_summaries if s.get("status") == "error"]
+        if errored and len(errored) == len(all_summaries):
+            raw_error = errored[0].get("error", "unknown error")
+            # The raw error is a Python traceback with a full yt-dlp command
+            # embedded — accurate for debugging but unreadable on the dashboard.
+            # When it's clearly the bot wall, say that plainly instead; anything
+            # else still shows the raw text so a genuinely new failure mode
+            # isn't hidden behind a wrong label.
+            if transcribe.YOUTUBE_BOT_WALL_RE.search(raw_error):
+                clean_error = "YouTube blocked the download — check the runner / cookies."
+            else:
+                clean_error = raw_error[:500]
+            report_pipeline_status(False, error=clean_error)
+            # report_pipeline_status() only posts a warning to the Worker — it
+            # doesn't affect this process's own exit code. Without this, a run
+            # where every single broadcast failed (e.g. YouTube's bot wall)
+            # still exits 0, so GitHub Actions marks it green. Confirmed real:
+            # every run since 2026-10-20 showed "success" despite transcribing
+            # nothing, which is exactly what let that outage run unnoticed.
+            sys.exit(1)
         else:
-            clean_error = raw_error[:500]
-        report_pipeline_status(False, error=clean_error)
-        # report_pipeline_status() only posts a warning to the Worker — it
-        # doesn't affect this process's own exit code. Without this, a run
-        # where every single broadcast failed (e.g. YouTube's bot wall)
-        # still exits 0, so GitHub Actions marks it green. Confirmed real:
-        # every run since 2026-10-20 showed "success" despite transcribing
-        # nothing, which is exactly what let that outage run unnoticed.
-        sys.exit(1)
-    else:
-        report_pipeline_status(True, summary={"processed": len(all_summaries), "errored": len(errored)})
+            report_pipeline_status(True, summary={"processed": len(all_summaries), "errored": len(errored)})
+    finally:
+        release_lock()
 
 
 if __name__ == "__main__":
