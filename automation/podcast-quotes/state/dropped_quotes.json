@@ -2686,5 +2686,47 @@
     "error": null,
     "foundAt": "2026-11-17T19:50:29.106735Z",
     "reviewed": false
+  },
+  {
+    "key": "5c8dfa2e-fc22-4701-8365-c1eebdb13c32|00:38:16",
+    "reason": "no_clear_horse",
+    "episode": "ATR TwinSpires Wknd Prvw-Part 2: James Scully, Marcus Hersh, David Aragona, Hammer, Craig Dado, Rich Eng",
+    "episodeDate": "Fri, 20 Nov 2026 17:20:33 GMT",
+    "trainer": "David Aragona",
+    "horse": "unclear",
+    "quote": "she who got involved in a really tough pace scenario on debut... I thought she was going to be a dangerous horse from the front end.",
+    "question": "",
+    "timestamp": "00:38:16",
+    "error": null,
+    "foundAt": "2026-11-20T19:05:26.316638Z",
+    "reviewed": false
+  },
+  {
+    "key": "5c8dfa2e-fc22-4701-8365-c1eebdb13c32|00:39:06",
+    "reason": "no_clear_horse",
+    "episode": "ATR TwinSpires Wknd Prvw-Part 2: James Scully, Marcus Hersh, David Aragona, Hammer, Craig Dado, Rich Eng",
+    "episodeDate": "Fri, 20 Nov 2026 17:20:33 GMT",
+    "trainer": "David Aragona",
+    "horse": "unclear",
+    "quote": "this is a nicely bred filly. Good magic out of the Hardspun... and purchase for $85,000 is available for $50,000. So maybe it's kind of a winnable spot placement. And there is that gate blast, the 48-2 on the training track... So there's a little bit of speed on display in here.\" / later: \"for a barn like Arriaga, I don't love an $85,000 purchase debuting for 50. You typically think of him doing well with cheaper purchases in races like this. So, I don't know. That turned me off a little bit.",
+    "question": "",
+    "timestamp": "00:39:06",
+    "error": null,
+    "foundAt": "2026-11-20T19:05:26.316695Z",
+    "reviewed": false
+  },
+  {
+    "key": "5c8dfa2e-fc22-4701-8365-c1eebdb13c32|00:55:10",
+    "reason": "no_clear_horse",
+    "episode": "ATR TwinSpires Wknd Prvw-Part 2: James Scully, Marcus Hersh, David Aragona, Hammer, Craig Dado, Rich Eng",
+    "episodeDate": "Fri, 20 Nov 2026 17:20:33 GMT",
+    "trainer": "David Aragona",
+    "horse": "unclear",
+    "quote": "I am not really that against ground support. I think that she's just a horse that some people might view and say, oh she really improved turning back to sprints But to me that not the right way to look at her... she really come to life in her last couple of starts. I don't think it's the distance. I just think she's doing well right now. So she's the horse to beat.",
+    "question": "",
+    "timestamp": "00:55:10",
+    "error": null,
+    "foundAt": "2026-11-20T19:05:26.316732Z",
+    "reviewed": false
   }
 ]
