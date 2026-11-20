@@ -10169,7 +10169,16 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   // not HRN-specific, see extractHrnSections()'s identical comment for the
   // real example that caught it.
   const ROLE_PREFIX = "(?:(?:[Tt]rainer|[Jj]ockey|[Oo]wner|[Cc]o-trainer|[Aa]ssistant(?:\\s+trainer)?)\\s+)?";
-  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*${ROLE_PREFIX}(${NAME_RUN})\\s+${VERB_RUN}\\b`, "g");
+  // Trailing optional continuation quote — confirmed real 2026-11-13 (user
+  // report: manual-paste "cuts off whenever the quote ends and says 'Morley
+  // said'"): a very common convention splits one person's quote across TWO
+  // quoted segments with the attribution sitting in between — `"First
+  // part," Morley said. "Second part."` — the second segment is the SAME
+  // quote continuing, not a new one. Without this, quoteFirstRe only ever
+  // captured the first segment and silently dropped everything after
+  // "Morley said." Optional (0 or 1) so a quote with no continuation still
+  // matches exactly as before.
+  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*${ROLE_PREFIX}(${NAME_RUN})\\s+${VERB_RUN}\\b[.:]?\\s*(?:[“"]([^”"]{0,600})[”"])?`, "g");
   const nameFirstRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME_RUN})\\s+${VERB_RUN}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
   const colonAttributionRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME_RUN}):\\s*[“"]([^”"]{8,600})[”"]`, "g");
   const dashBylineRe = new RegExp(`[“"]([^”"]{8,600})[”"]\\s*[—–]\\s*${ROLE_PREFIX}(${NAME_RUN})\\b`, "g");
@@ -10190,7 +10199,7 @@ function extractGenericQuoteSections(paragraphs, titleHorseGuess, trackedTrainer
   for (const para of paragraphs) {
     if (NYRA_RETIRED_HORSE_SIGNAL_RE.test(para)) continue;
     const found = [];
-    for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
+    for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim() + (m[3] ? " " + m[3].trim() : ""), name: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
     for (const m of para.matchAll(colonAttributionRe)) found.push({ quote: m[2].trim(), name: m[1].trim() });
     for (const m of para.matchAll(dashBylineRe)) found.push({ quote: m[1].trim(), name: m[2].trim() });
@@ -10322,7 +10331,16 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers, knownHorseNames
   // caught this): common enough across real articles that a pasted one can
   // easily hit it too. Not captured into the name itself.
   const ROLE_PREFIX = "(?:(?:[Tt]rainer|[Jj]ockey|[Oo]wner|[Cc]o-trainer|[Aa]ssistant(?:\\s+trainer)?)\\s+)?";
-  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*${ROLE_PREFIX}(${NAME})\\s+${VERB}\\b`, "g");
+  // Trailing optional continuation quote — confirmed real 2026-11-13 (user
+  // report: "it cuts off whenever the quote ends and says 'Morley said'"):
+  // a very common convention splits one person's quote across TWO quoted
+  // segments with the attribution in between — `"First part," Morley
+  // said. "Second part."` — the second segment is the SAME quote
+  // continuing, not a new one. Without this, quoteFirstRe only ever
+  // captured the first segment and silently dropped everything after
+  // "Morley said." Optional (0 or 1) so a quote with no continuation
+  // still matches exactly as before.
+  const quoteFirstRe = new RegExp(`[“"]([^”"]{8,600})[”"],?\\s*${ROLE_PREFIX}(${NAME})\\s+${VERB}\\b[.:]?\\s*(?:[“"]([^”"]{0,600})[”"])?`, "g");
   const nameFirstRe = new RegExp(`\\b${ROLE_PREFIX}(${NAME})\\s+${VERB}[,:]?\\s*[“"]([^”"]{8,600})[”"]`, "g");
   // "Name: "Quote"" — no verb at all, the plain interview-transcript/
   // notebook style this app's own Kentucky HBPA/NYRA Broadcast pipelines
@@ -10341,7 +10359,7 @@ function extractManualQuoteCandidates(bodyText, trackedTrainers, knownHorseNames
   const seenSpans = new Set(); // dedupe a quote matched by more than one pattern (rare but possible on ambiguous punctuation)
   for (const para of paragraphs) {
     const found = [];
-    for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
+    for (const m of para.matchAll(quoteFirstRe)) found.push({ quote: m[1].trim() + (m[3] ? " " + m[3].trim() : ""), rawName: m[2].trim() });
     for (const m of para.matchAll(nameFirstRe)) found.push({ quote: m[2].trim(), rawName: m[1].trim() });
     for (const m of para.matchAll(colonRe)) found.push({ quote: m[2].trim(), rawName: m[1].trim() });
     for (const m of para.matchAll(dashFirstRe)) found.push({ quote: m[1].trim(), rawName: m[2].trim() });
